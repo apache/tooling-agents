@@ -46,7 +46,7 @@ These are already available and we're assessing how well they fit our needs:
 
 ## ASVS Background
 
-We're using [ASVS v5.0.0](https://owasp.org/ASVS/) as our reference standard, organized into categories like:
+We're using [ASVS v5.0.0](https://github.com/OWASP/ASVS/blob/v5.0.0/5.0/OWASP_Application_Security_Verification_Standard_5.0.0_en.pdf) as our reference standard, organized into categories like:
 
 | Category | Focus Area |
 |----------|------------|
