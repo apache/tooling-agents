@@ -17,9 +17,9 @@ This page explains how to contribute code and documentation to Tooling Agents.
 
 ## Finding something to work on
 
-The easiest way to find something to work on is to look at our [issue tracker](https://github.com/apache/tooling-trusted-releases/issues) on GitHub.
+The easiest way to find something to work on is to look at our [issue tracker](https://github.com/apache/tooling-agents/issues) on GitHub.
 
-If you have an idea or suggestion that is not already reported in the issue tracker, please [create a new issue](https://github.com/apache/tooling-trusted-releases/issues/new) to discuss it with other developers before you start working on it. This helps to ensure that your contribution will be accepted, and that you do not duplicate work that is already in progress. For small changes such as fixing typographical errors or improving documentation clarity, you do not need to create an issue first.
+If you have an idea or suggestion that is not already reported in the issue tracker, please [create a new issue](https://github.com/apache/tooling-agents/issues/new) to discuss it with other developers before you start working on it. This helps to ensure that your contribution will be accepted, and that you do not duplicate work that is already in progress. For small changes such as fixing typographical errors or improving documentation clarity, you do not need to create an issue first.
 
 ## Pull request workflow
 
