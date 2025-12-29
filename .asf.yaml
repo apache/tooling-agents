@@ -1,0 +1,28 @@
+github:
+  description: "Apache Tooling Agents"
+  homepage: https://tooling.apache.org/
+  del_branch_on_merge: true
+  features:
+    issues: true
+    projects: true
+  enabled_merge_buttons:
+    squash:  true
+    squash_commit_message: DEFAULT
+    merge:   false
+    rebase:  true
+  custom_subjects:
+    new_pr: "[PR] {title} ({repository})"
+    close_pr: "Re: [PR] {title} ({repository})"
+    comment_pr: "Re: [PR] {title} ({repository})"
+    merge_pr: "Re: [PR] {title} ({repository})"
+    new_issue: "[I] {title} ({repository})"
+    comment_issue: "Re: [I] {title} ({repository})"
+    close_issue: "Re: [I] {title} ({repository})"
+    catchall: "[GH] {title} ({repository})"
+  protected_branches:
+    main: {}
+
+notifications:
+  commits:      commits@tooling.apache.org
+  issues:       dev@tooling.apache.org
+  pullrequests: dev@tooling.apache.org
