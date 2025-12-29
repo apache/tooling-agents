@@ -11,7 +11,7 @@ We're using this repository to discuss ideas, gather community input, and protot
 
 This repository is a space for the Apache community to explore how AI agents might help with automated security auditing and code review. We're interested in questions like:
 
-- How can agents help ASF projects achieve [OWASP ASVS](https://owasp.org/ASVS/) compliance?
+- How can agents help ASF projects achieve [OWASP ASVS](https://owasp.org/www-project-application-security-verification-standard/) compliance?
 - What existing tools work well, and where are the gaps?
 - What should we build versus adopt?
 
@@ -121,7 +121,7 @@ This project is licensed under the [Apache License 2.0](LICENSE).
 ## Related Work
 
 - [Alpha-Omega Project](https://alpha-omega.dev): Improving OSS security
-- [OWASP ASVS](https://owasp.org/ASVS/): The security standard we're targeting
+- [OWASP ASVS](https://owasp.org/www-project-application-security-verification-standard/): The security standard we're targeting
 - [OpenSSF Scorecard](https://securityscorecards.dev): Automated security health checks
 - [VEX](https://github.com/vex-generation-toolset): Automated CVE detection
 - [AI Alliance](https://thealliance.ai): Open AI innovation community
