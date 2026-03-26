@@ -1,0 +1,1 @@
+You will be given a github repo in the form of owner/repo, and a token. I would like you to pull down all the files in the repo and then store them in the data store so we have them all. Use the relative file path as part of the key for each file.

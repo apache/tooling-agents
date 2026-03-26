@@ -64,7 +64,13 @@ See [`docs/ASVS/`](docs/ASVS/) for our compliance tracking, research notes, and 
 ```
 ├── src/           # Prototypes and experimental implementations
 ├── docs/          # Research, proposals, and planning
-│   └── ASVS/      # ASVS compliance tracking and analysis
+│   ├── ASVS/      # ASVS compliance tracking and analysis
+│   └── gofannon/  # Gofannon platform guide: setup, agent lifecycle, data store
+├── repos/         # Per-repository agent work and runbooks
+│   └── tooling-trusted-releases/
+│       └── ASVS/
+│           ├── agents/   # Agent code and prompts (9 agents)
+│           └── reports/  # Audit output organized by commit hash
 ├── util/          # Utility scripts for evaluation
 └── examples/      # Sample configurations and workflows
 ```

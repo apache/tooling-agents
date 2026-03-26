@@ -1,87 +1,58 @@
 # Security Audit Tooling
 
-This page provides an overview of the goals for security audit tooling in ATR: 
+This page provides an overview of the goals, tooling, and current state of security audit automation for ATR.
 
 - [Motivation](#motivation)
-- [Available toolsets](#available-toolsets)
-- [Needs for ATR](#needs-for-atr)
+- [Current state](#current-state)
 - [Approaches](#approaches)
 - [Phases](#phases)
 
 ## Motivation
 
-Apache Trusted Releases (ATR) is a release management tool for verifying and distributing Apache releases securely. As such there is a need for all code, configuration, and workflows in ATR to comply with high standards for security. The Tooling team have adopted the [Application Security Verification
-Standard (ASVS) v5.0.0](https://raw.githubusercontent.com/OWASP/ASVS/v5.0.0/5.0/OWASP_Application_Security_Verification_Standard_5.0.0_en.pdf) from the [Open Worldwide Application Security Project (OWASP)](https://owasp.org) as our standard.
+Apache Trusted Releases (ATR) is a release management tool for verifying and distributing Apache releases securely. As such there is a need for all code, configuration, and workflows in ATR to comply with high standards for security. The Tooling team have adopted the [Application Security Verification Standard (ASVS) v5.0.0](https://raw.githubusercontent.com/OWASP/ASVS/v5.0.0/5.0/OWASP_Application_Security_Verification_Standard_5.0.0_en.pdf) from the [Open Worldwide Application Security Project (OWASP)](https://owasp.org) as our standard.
 
 The ASVS defines three levels of security verification, with L1 comprising the highest priority and most critical requirements, L2 including defenses against less common threats, and L3 rounding out the highest level of compliance. Requirements in L1 are about 20% of the spec, in L2 about 50%, and in L3 about 30%. For the beta release of ATR in early 2026 the target is to fulfill all requirements in L1 and the bulk of L2, noting that some of the requirements will need infrastructure changes, so compliance with those is out of Tooling's control.
 
-To accelerate this goal the Tooling team is planning an internal pilot of automated code auditing, to work through the requirements while maintaining momentum on ATR feature development. We are assessing existing third-party tools and considering their viability along with what to build in-house to satisfy the security requirements for ATR.
+To accelerate this goal the Tooling team is running an internal pilot of automated code auditing, to work through the requirements while maintaining momentum on ATR feature development.
 
-## Available toolsets
+## Current state
 
-### GitHub organization security settings
+### What has been built
 
-- [Managing security settings for your organization](https://docs.github.com/en/organizations/keeping-your-organization-secure/managing-security-settings-for-your-organization)
-- [Dependabot](https://github.com/orgs/apache/security/metrics/dependabot): already in use
-- [Code scanning](https://github.com/orgs/apache/security/alerts/code-scanning): already in use
-- [Secret scanning](https://github.com/orgs/apache/security/alerts/secret-scanning): already in use
+A complete ASVS security audit pipeline using Gofannon, consisting of 9 agents that automate the end-to-end process of analyzing ATR source code against individual ASVS requirements. The pipeline uses Claude Sonnet for high-throughput parallel work (relevance filtering, code inventory, formatting, extraction, consolidation) and Claude Opus for deep security analysis where reasoning quality matters most.
 
-### OpenSSF Scorecard
+The pipeline agents, their code, prompts, and operational runbook are in [`repos/tooling-trusted-releases/ASVS/`](../../repos/tooling-trusted-releases/ASVS/).
 
-[Scorecard](https://securityscorecards.dev) is a security checklist tool which provides two approaches:
-- [CLI](https://github.com/ossf/scorecard?tab=readme-ov-file#scorecard-command-line-interface)
-- [GitHub Action](https://github.com/marketplace/actions/ossf-scorecard-action)
+The core pipeline flow:
 
-This tool does simple overall reporting, with a weighted score along with justification for component scores. Each component of the review and its mitigation steps is detailed in the page for [Checks](https://github.com/ossf/scorecard/blob/main/docs/checks.md).
+1. **Data setup** — ASVS requirements ingested from the v5.0.0 spec into CouchDB. Source code from ATR and its dependencies (asfquart, asfpy) downloaded into the same store, along with relevant `infrastructure-p6` configs, open Issues, and `audit_guidance` documentation.
+2. **Per-requirement audit** — for each ASVS requirement, an audit agent reads the codebase, filters for relevant files , builds a code inventory, runs deep analysis, and produces a structured markdown report.
+3. **Orchestration** — an orchestrator loops over comma-separated sections, runs the audit for each, and pushes individual reports to GitHub.
+4. **Consolidation** — a consolidation agent reads all individual reports from one or more ASVS level directories, extracts and deduplicates findings, and produces a consolidated report with an issues file.
 
-Example output from the CLI [here (default summary)](scorecard-atr.md) and [with details here](scorecard-atr-details.md).
+### What has been run
 
-### OpenAI Aardvark
+Audit runs completed against ATR at a few snapshots, latest is commit `da901ba`:
 
-In private beta, ASF has applied to join the [beta program](https://openai.com/index/introducing-aardvark/).
+- **L1 run**: 70 ASVS requirements covering the highest-priority security controls
+- **L2 run**: 183 ASVS requirements covering the broader L2 defenses
 
-### Alpha-Omega VEX
+Individual reports are pushed to GitHub organized by commit hash and ASVS level. Consolidated reports and issues files are generated at the parent level. See [`repos/tooling-trusted-releases/ASVS/reports/`](../../repos/tooling-trusted-releases/ASVS/reports/) for report structure.
 
-[VEX](https://github.com/vex-generation-toolset) is an agent-driven audit tool in pilot phase with Apache Solr, providing root cause analysis, call graphs, and reporting for anything identified as related to a given CVE. Looks potentially adaptable as a quick path toward ASVS L1 compliance with changes to prompts in the code.
+### Results and ground truth
 
-### AI Alliance Gofannon
+ATR has [137 filed GitHub issues](https://github.com/apache/tooling-trusted-releases/issues?q=is%3Aissue%20label%3AASVS) from this security review. The pipeline's consolidated reports identify findings across all severity levels with deduplication tracking which ASVS sections and levels flagged each issue. So far about [thirty issues](https://github.com/apache/tooling-trusted-releases/issues?q=is%3Aissue%20label%3AASVS%20label%3Allm) were directly fed back into this audit system with linter-style `audit_guidance` inline comments as well as overall guidance in separate files to filter out false positive results.
 
-[Gofannon](https://github.com/The-AI-Alliance/gofannon) is a generated agent and application builder useful for prototyping and application development. It allows users to prompt application requirements and agents in a simple workflow, deploys API endpoints for agents, and deploys a hosted running application along with the front-end code for the user to export as needed.
+### Key technical decisions
 
-## Needs for ATR
-
-- Immediate need for streamlining of ASVS L1 compliance
-  - [Categories of L1 criteria](https://github.com/apache/tooling-trusted-releases/issues/334)
-    1. Evaluate ASVS v5.0.0 compliance: server side execution [#397](https://github.com/apache/tooling-trusted-releases/issues/397)
-      - 1.2.4, 1.2.5, 1.3.2, 5.2.2, 5.3.1, 5.3.2, 15.2.1
-    2. Evaluate ASVS v5.0.0 compliance: cross site scripting [#398](https://github.com/apache/tooling-trusted-releases/issues/398)
-      - 1.2.1, 1.2.2, 1.2.3, 1.3.1, 3.2.1, 3.2.2, 4.1.1
-    3. Evaluate ASVS v5.0.0 compliance: weak cryptography [#399](https://github.com/apache/tooling-trusted-releases/issues/399)
-      - 3.4.1, 4.4.1, 11.3.1, 11.3.2, 11.4.1, 12.1.1, 12.2.1, 12.2.2
-    4. Evaluate ASVS v5.0.0 compliance: external access [#400](https://github.com/apache/tooling-trusted-releases/issues/400)
-      - 3.4.2, 3.5.1, 3.5.2, 3.5.3, 10.4.1, 14.2.1
-    5. Evaluate ASVS v5.0.0 compliance: universal spoofing [#401](https://github.com/apache/tooling-trusted-releases/issues/401)
-      - 7.3.2, 9.1.1, 9.1.2, 10.4.2, 10.4.5
-    6. Evaluate ASVS v5.0.0 compliance: internal access [#402](https://github.com/apache/tooling-trusted-releases/issues/402)
-      - 2.2.1, 2.2.2, 2.3.1, 8.2.1, 8.3.1, 10.4.4
-    7. Evaluate ASVS v5.0.0 compliance: credential stealing [#403](https://github.com/apache/tooling-trusted-releases/issues/403)
-      - 3.3.1, 7.2.2, 7.2.3, 7.2.4, 7.4.2, 9.1.3, 9.2.1, 10.4.3, 14.3.1
-    8. Evaluate ASVS v5.0.0 compliance: basic access [#404](https://github.com/apache/tooling-trusted-releases/issues/404)
-      - 8.2.2, 13.4.1, 15.3.1
-    9. Evaluate ASVS v5.0.0 compliance: brute force identification [#405](https://github.com/apache/tooling-trusted-releases/issues/405)
-      - 6.2.1, 6.2.4, 6.3.1, 6.3.2, 6.4.1
-    10. Evaluate ASVS v5.0.0 compliance: credential integrity [#406](https://github.com/apache/tooling-trusted-releases/issues/406)
-      - 6.2.2, 6.2.3, 6.2.5, 6.2.6, 6.2.7, 6.2.8, 6.4.2, 7.4.1
-    11. Evaluate ASVS v5.0.0 compliance: denial of service [#407](https://github.com/apache/tooling-trusted-releases/issues/407)
-      - 1.5.1, 5.2.1
-    12. Evaluate ASVS v5.0.0 compliance: documentation [#408](https://github.com/apache/tooling-trusted-releases/issues/408)
-      - 2.1.1, 6.1.1, 8.1.1, 15.1.1
-- Short-term need for ASVS L2 compliance
-- Long-term need for automated repo and commit scanning
+- **Opus tuning**: `reasoning_effort=medium`, `max_tokens=64000` — reduced from `high`/`128000` after analysis showed failures correlated with batch count (each call at high reasoning took 20-30 min, increasing Bedrock disconnect probability)
+- **Context loading**: local data store reads for code, config, audit_guidance, and open Issues
+- **Inventory capping**: always limited to 15% of safe Opus context limit to prevent excessive batch counts
+- **Retry logic**: 3 retries on Opus (15s/30s/45s backoff), 2 retries on all Sonnet calls
 
 ## Approaches
 
-- ASVS-oriented automated auditing as standalone tool
+- ASVS-oriented automated auditing as standalone tool — **implemented** (see [pipeline runbook](../../repos/tooling-trusted-releases/ASVS/))
 - Page on ATR for audit suites including ASVS compliance
 - GitHub Action (audit on demand/commit, reporting, etc.) for ASF projects
 
@@ -89,23 +60,24 @@ In private beta, ASF has applied to join the [beta program](https://openai.com/i
 
 ### Research
 
-- Inital requirements and assessment for ASVS compliance
-  - Underway
-  - Remaining: further tool evaluations and decisions on approaches
-- Tool evaluation
-  - Assessment of gaps and viability for ATR
+- Initial requirements and assessment for ASVS compliance
+- Tool evaluation (Scorecard, VEX, Gofannon)
+- Identified gaps: no existing tool covers deep ASVS-per-requirement code analysis
 
-### Design and prototyping
+### Initial build
 
-### Integration and build
+- Built 9-agent pipeline on Gofannon with CouchDB persistence
+- Tuned Opus analysis parameters for Bedrock reliability
+- Multi-level consolidation with deduplication and level tracking
+- ✅ L1 run (~70 sections) against ATR codebase
+- ✅ L2 run (~183 sections) against ATR codebase
+- ✅ Consolidated report and issues file generation
 
-- Integration and extension of viable tooling
-- Build of new tooling
+### Next steps
 
-### Pilot
-
-- First with ATR codebase
-- Selected project codebases
-
-### General availability
-
+- Pipeline piloted with other ASF projects
+- Interactive triage
+  - Marking issues with triage decision
+  - Auto-filed Issues to GitHub
+  - Automatic PR generation
+- CI/CD integration for commit and PR security reviews
