@@ -81,7 +81,7 @@ Community feedback is encouraged! Whether you're an ASF committer, contributor, 
 
 ### Join the Conversation
 
-1. **Introduce yourself on the mailing list**: Say hello at 📧 [dev@tooling.apache.org](mailto:dev@tooling.apache.org
+1. **Introduce yourself on the mailing list**: Say hello at 📧 [dev@tooling.apache.org](mailto:dev@tooling.apache.org)
    *(Subscribe by sending an email with empty subject and body to [dev-subscribe@tooling.apache.org](mailto:dev-subscribe@tooling.apache.org) and replying to the automated response, per the [ASF mailing list how-to](https://apache.org/foundation/mailinglists.html))*
 
 2. **Share ideas or file issues**: Use [GitHub Issues](https://github.com/apache/tooling-agents/issues) to ask questions, suggest approaches, or start a discussion

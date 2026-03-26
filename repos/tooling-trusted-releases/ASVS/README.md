@@ -61,14 +61,9 @@ For each ASVS requirement (e.g., `7.2.1`), an individual audit report is pushed 
            └──────────────────────────────────────┘
 ```
 
-### Supporting agents
+### Agents
 
-| Agent | Purpose |
-|-------|---------|
-| `download_github_repo_to_data_store` | Downloads source code from GitHub repos into Gofannon data store |
-| `download_github_subdir_to_data_store` | Downloads a subdirectory (e.g., audit guidance configs) |
-| `ingest_asvs_requirements` | Fetches ASVS v5.0.0 JSON and ingests chapters, sections, requirements, and indexes |
-| `add_markdown_file_to_github_directory` | Creates or updates a markdown file in a GitHub repo (handles existing SHA for overwrites) |
+See [`agents/`](agents/) for the complete list of 9 pipeline agents with their roles and pipeline steps.
 
 ## Prerequisites
 
@@ -103,7 +98,7 @@ Agent code and prompts are in the [`agents/`](agents/) directory. For each agent
 
 ## Agents
 
-### `ingest_asvs_requirements`
+### `ingest_asvs_standard`
 
 Fetches ASVS v5.0.0 from `https://cdn.asvs.ee/standards/v5.0.0.json` and ingests all chapters, sections, and requirements into the `asvs` namespace of the data store. Also creates index records for efficient lookup.
 
@@ -122,7 +117,7 @@ Fetches ASVS v5.0.0 from `https://cdn.asvs.ee/standards/v5.0.0.json` and ingests
 - The agent uses `set_many` so it's safe to re-run — it overwrites existing records.
 - After ingestion, verify with: `curl -s -u admin:password "http://localhost:5984/agent_data_store/_find" -H "Content-Type: application/json" -d '{"selector":{"namespace":"asvs","key":{"$regex":"^asvs:requirements:"}},"fields":["key"],"limit":1}' | python3 -c "import sys,json; print(len(json.load(sys.stdin)['docs']), 'requirements')"`
 
-### `download_github_repo_to_data_store`
+### `download_github_repo_to_datastore`
 
 Downloads all files from a GitHub repository into the data store, organized into a namespace derived from the repo path.
 
@@ -141,7 +136,7 @@ apache/infrastructure-asfquart
 apache/infrastructure-asfpy
 ```
 
-### `download_github_subdir_to_data_store`
+### `fetch_audit_guidance`
 
 Downloads a subdirectory from a GitHub repo. Used for loading audit guidance documents and configuration files.
 
@@ -236,7 +231,7 @@ directories: security/ASVS/reports/{commit}/L1, security/ASVS/reports/{commit}/L
 
 ### Step 1: Ingest ASVS requirements
 
-Run the `ingest_asvs_requirements` agent (no input needed). Verify:
+Run the `ingest_asvs_standard` agent (no input needed). Verify:
 
 ```bash
 curl -s -u admin:password "http://localhost:5984/agent_data_store/_find" \
@@ -252,7 +247,7 @@ for d in sorted(docs, key=lambda x: int(x['key'].split(':')[-1])):
 
 ### Step 2: Download source code
 
-Run `download_github_repo_to_data_store` three times, once per repository:
+Run `download_github_repo_to_datastore` three times, once per repository:
 
 ```
 apache/tooling-trusted-releases
@@ -495,7 +490,7 @@ Opus calls running 10+ minutes can be disconnected by Bedrock. The audit agent r
 The audit agent failed to load ASVS requirement context from the data store. Causes:
 
 - **CouchDB unreachable** — check CouchDB health: `curl http://localhost:5984/`
-- **ASVS data not ingested** — run the `ingest_asvs_requirements` agent
+- **ASVS data not ingested** — run the `ingest_asvs_standard` agent
 - **Sections not in CDN JSON** (10.5, 10.6, 10.7) — these require manual ingestion; see below
 
 ### Missing ASVS sections (10.5, 10.6)
