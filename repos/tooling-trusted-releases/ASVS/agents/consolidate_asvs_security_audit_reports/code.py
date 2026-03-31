@@ -190,7 +190,7 @@ For each finding, capture:
 - asvs_level: the ASVS level this report covers (provided below)
 - affected_files: list of objects with "file" and "line" keys
 - recommended_remediation: the recommended fix
-- related_findings: any cross-references to other findings mentioned
+- recommended_remediation: the recommended fix
 - positive_controls: list of any positive security controls or good practices noted
 
 Also extract:
@@ -342,23 +342,88 @@ Return ONLY valid JSON in this format:
         print("\n=== PHASE 3: Domain-grouped consolidation (Sonnet, up to 3 concurrent) ===")
 
         DOMAIN_GROUPS = {
-            "input_encoding": ["1.2.1", "1.2.2", "1.2.3", "1.2.4", "1.2.5",
-                                "1.3.1", "1.3.2", "1.5.1"],
-            "business_logic": ["2.1.1", "2.2.1", "2.2.2", "2.3.1"],
-            "session_csrf": ["3.2.1", "3.2.2", "3.3.1", "3.4.1", "3.4.2",
-                              "3.5.1", "3.5.2", "3.5.3"],
-            "content_type": ["4.1.1", "4.4.1"],
-            "file_path": ["5.2.1", "5.2.2", "5.3.1", "5.3.2"],
-            "auth_rate_limit": ["6.1.1", "6.2.1", "6.2.2", "6.2.3", "6.2.4",
-                                 "6.2.5", "6.2.6", "6.2.7", "6.2.8",
-                                 "6.3.1", "6.3.2", "6.4.1", "6.4.2"],
-            "session_token": ["7.2.1", "7.2.2", "7.2.3", "7.2.4", "7.4.1", "7.4.2"],
-            "authorization": ["8.1.1", "8.2.1", "8.2.2", "8.3.1"],
-            "jwt_token": ["9.1.1", "9.1.2", "9.1.3", "9.2.1"],
-            "oauth": ["10.4.1", "10.4.2", "10.4.3", "10.4.4", "10.4.5"],
-            "crypto_tls": ["11.3.1", "11.3.2", "11.4.1", "12.1.1", "12.2.1", "12.2.2"],
-            "api_scm_client": ["13.4.1", "14.2.1", "14.3.1"],
-            "dependencies": ["15.1.1", "15.2.1", "15.3.1"],
+            "input_encoding": [
+                "1.1.1", "1.1.2",
+                "1.2.1", "1.2.2", "1.2.3", "1.2.4", "1.2.5",
+                "1.3.1", "1.3.2",
+                "1.4.1", "1.4.2", "1.4.3",
+                "1.5.1",
+            ],
+            "business_logic": [
+                "2.1.1", "2.2.1", "2.2.2", "2.3.1",
+                "2.4.1",
+            ],
+            "session_csrf": [
+                "3.2.1", "3.2.2", "3.3.1", "3.4.1", "3.4.2",
+                "3.5.1", "3.5.2", "3.5.3",
+                "3.7.1", "3.7.2",
+            ],
+            "content_type": [
+                "4.1.1", "4.2.1", "4.3.1", "4.3.2", "4.4.1",
+            ],
+            "file_path": [
+                "5.1.1", "5.2.1", "5.2.2", "5.3.1", "5.3.2",
+                "5.4.1", "5.4.2", "5.4.3",
+            ],
+            "auth_rate_limit": [
+                "6.1.1", "6.2.1", "6.2.2", "6.2.3", "6.2.4",
+                "6.2.5", "6.2.6", "6.2.7", "6.2.8",
+                "6.3.1", "6.3.2", "6.4.1", "6.4.2",
+                "6.5.1", "6.5.2", "6.5.3", "6.5.4", "6.5.5",
+                "6.6.1", "6.6.2", "6.6.3",
+                "6.8.1", "6.8.2", "6.8.3", "6.8.4",
+            ],
+            "session_token": [
+                "7.1.1", "7.1.2", "7.1.3",
+                "7.2.1", "7.2.2", "7.2.3", "7.2.4",
+                "7.3.1", "7.3.2",
+                "7.4.1", "7.4.2",
+                "7.5.1", "7.5.2",
+                "7.6.1", "7.6.2",
+            ],
+            "authorization": [
+                "8.1.1", "8.2.1", "8.2.2", "8.3.1",
+                "8.4.1",
+            ],
+            "jwt_token": [
+                "9.1.1", "9.1.2", "9.1.3", "9.2.1",
+            ],
+            "oauth": [
+                "10.1.1", "10.1.2", "10.2.1", "10.2.2",
+                "10.3.1", "10.3.2", "10.3.3", "10.3.4",
+                "10.4.1", "10.4.2", "10.4.3", "10.4.4", "10.4.5",
+                "10.5.1", "10.5.2", "10.5.3", "10.5.4", "10.5.5",
+                "10.6.1", "10.6.2",
+                "10.7.1", "10.7.2", "10.7.3",
+            ],
+            "crypto_tls": [
+                "11.1.1", "11.1.2", "11.2.1", "11.2.2", "11.2.3",
+                "11.3.1", "11.3.2", "11.4.1",
+                "11.5.1", "11.6.1",
+                "12.1.1", "12.2.1", "12.2.2",
+                "12.3.1", "12.3.2", "12.3.3", "12.3.4",
+            ],
+            "api_scm_client": [
+                "13.1.1", "13.2.1", "13.2.2", "13.2.3", "13.2.4", "13.2.5",
+                "13.3.1", "13.3.2",
+                "13.4.1",
+                "14.1.1", "14.1.2",
+                "14.2.1", "14.3.1",
+            ],
+            "dependencies": [
+                "15.1.1", "15.2.1", "15.3.1",
+            ],
+            "audit_logging": [
+                "16.1.1",
+                "16.2.1", "16.2.2", "16.2.3", "16.2.4", "16.2.5",
+                "16.3.1", "16.3.2", "16.3.3", "16.3.4",
+                "16.4.1", "16.4.2", "16.4.3",
+                "16.5.1", "16.5.2", "16.5.3",
+            ],
+            "webrtc": [
+                "17.1.1", "17.2.1", "17.2.2", "17.2.3", "17.2.4",
+                "17.3.1", "17.3.2",
+            ],
         }
 
         # Extend domain groups for L2/L3 sections not in L1 map
@@ -410,10 +475,10 @@ Return ONLY valid JSON in this format:
 
 Your job is to:
 1. **Identify TRUE duplicates**: The EXACT same vulnerability in the EXACT same code location, reported by multiple ASVS sections OR across levels. Merge these into ONE finding and note ALL source reports and levels.
-2. **Identify RELATED findings**: Same vulnerability class but DIFFERENT code locations or DIFFERENT fixes needed. Keep these as SEPARATE findings with cross-references.
-3. **Preserve EVERY unique finding**. If in doubt, keep findings SEPARATE.
-4. **Track ASVS levels**: Each finding must list which ASVS level(s) flagged it. A finding from L2 that is NOT in L1 should be tagged as L2-only.
-5. **Use the ASVS requirement descriptions** provided to understand what each section tests for.
+2. **Preserve EVERY unique finding**. If in doubt, keep findings SEPARATE.
+3. **Track ASVS levels**: Each finding must list which ASVS level(s) flagged it. A finding from L2 that is NOT in L1 should be tagged as L2-only.
+4. **Use the ASVS requirement descriptions** provided to understand what each section tests for.
+5. **Do NOT add cross-references between findings.** Cross-references will be computed deterministically after consolidation.
 
 **Deduplication test**: If a developer could fix one WITHOUT fixing the other, they are SEPARATE findings.
 
@@ -431,7 +496,6 @@ Return valid JSON with this structure:
       "asvs_levels": ["L1", "L2"],
       "affected_files": [{"file": "path", "line": "N"}],
       "source_reports": ["L1:filename.md", "L2:filename.md", ...],
-      "related_findings": ["DOMAIN-N", ...],
       "recommended_remediation": "specific fix with code examples where possible",
       "merged_from": ["original finding IDs that were deduplicated into this one"]
     }
@@ -509,8 +573,8 @@ Return valid JSON with this structure:
                                 provider=FAST_PROVIDER,
                                 model=FAST_MODEL,
                                 messages=sub_messages,
-                                parameters=FAST_PARAMS,
-                                timeout=300,
+                                parameters={**FAST_PARAMS, "max_tokens": 64000},
+                                timeout=600,
                             )
                             json_match = re.search(r'\{[\s\S]*\}', result)
                             if json_match:
@@ -541,8 +605,8 @@ Return valid JSON with this structure:
                         provider=FAST_PROVIDER,
                         model=FAST_MODEL,
                         messages=messages,
-                        parameters=FAST_PARAMS,
-                        timeout=300,
+                        parameters={**FAST_PARAMS, "max_tokens": 64000},
+                        timeout=600,
                     )
                     json_match = re.search(r'\{[\s\S]*\}', result)
                     if json_match:
@@ -591,7 +655,6 @@ Return valid JSON with this structure:
                             "asvs_levels": [level],
                             "affected_files": finding.get("affected_files", []),
                             "source_reports": [report_key],
-                            "related_findings": finding.get("related_findings", []),
                             "recommended_remediation": finding.get("recommended_remediation", ""),
                             "merged_from": [],
                         })
@@ -609,7 +672,221 @@ Return valid JSON with this structure:
             len(d.get("consolidated_findings", []))
             for d in domain_consolidated.values()
         )
-        print(f"\nTotal consolidated findings: {total_consolidated} (from {total_extracted} extracted)")
+        print(f"\nTotal consolidated findings (pre-cross-domain): {total_consolidated} (from {total_extracted} extracted)")
+
+        # ============================================================
+        # PHASE 3.5: Cross-Domain Deduplication
+        # ============================================================
+        print("\n=== PHASE 3.5: Cross-domain deduplication ===")
+
+        # Collect all findings into a flat list with domain tracking
+        xd_all = []
+        for domain, data in domain_consolidated.items():
+            for fi, finding in enumerate(data.get("consolidated_findings", [])):
+                finding["_xd_domain"] = domain
+                finding["_xd_idx"] = fi
+                xd_all.append(finding)
+
+        # Extract primary affected file for each finding
+        def primary_file(finding):
+            af = finding.get("affected_files", [])
+            if not af:
+                return ""
+            first = af[0]
+            if isinstance(first, dict):
+                return first.get("file", "").split(":")[0].split(" (")[0].strip().strip("`")
+            return str(first).split(":")[0].split(" (")[0].strip().strip("`")
+
+        # Normalize title for comparison
+        def norm_title(t):
+            t = t.lower().strip()
+            # Remove common prefix/suffix variations
+            for noise in ["completely ", "critical: ", "high: ", "medium: ", "low: "]:
+                t = t.replace(noise, "")
+            # Remove punctuation
+            t = re.sub(r'[^a-z0-9 ]', '', t)
+            # Collapse whitespace
+            t = re.sub(r'\s+', ' ', t).strip()
+            return t
+
+        # Group by primary file
+        file_groups = {}
+        for finding in xd_all:
+            pf = primary_file(finding)
+            if pf:
+                file_groups.setdefault(pf, []).append(finding)
+
+        # Pass 1: Deterministic dedup — same file + similar title = merge
+        xd_merge_count = 0
+        xd_removed = set()  # (domain, idx) tuples of findings absorbed into another
+
+        def merge_into(primary, duplicate):
+            """Merge duplicate's metadata into primary finding."""
+            # Combine source reports
+            existing_sources = set(primary.get("source_reports", []))
+            for sr in duplicate.get("source_reports", []):
+                if sr not in existing_sources:
+                    primary.setdefault("source_reports", []).append(sr)
+                    existing_sources.add(sr)
+            # Combine ASVS sections
+            existing_sections = set(primary.get("asvs_sections", []))
+            for sec in duplicate.get("asvs_sections", []):
+                if sec not in existing_sections:
+                    primary.setdefault("asvs_sections", []).append(sec)
+                    existing_sections.add(sec)
+            # Combine ASVS levels
+            existing_levels = set(primary.get("asvs_levels", []))
+            for lv in duplicate.get("asvs_levels", []):
+                if lv not in existing_levels:
+                    primary.setdefault("asvs_levels", []).append(lv)
+                    existing_levels.add(lv)
+            # Track what was merged
+            dup_id = duplicate.get("temp_id", "unknown")
+            primary.setdefault("merged_from", []).append(dup_id)
+            # Keep longer description
+            if len(duplicate.get("description", "")) > len(primary.get("description", "")):
+                primary["description"] = duplicate["description"]
+            # Keep more detailed remediation
+            if len(duplicate.get("recommended_remediation", "")) > len(primary.get("recommended_remediation", "")):
+                primary["recommended_remediation"] = duplicate["recommended_remediation"]
+
+        for pf, group in file_groups.items():
+            if len(group) < 2:
+                continue
+            # Within each file group, cluster by normalized title
+            title_clusters = {}
+            for finding in group:
+                nt = norm_title(finding.get("title", ""))
+                title_clusters.setdefault(nt, []).append(finding)
+
+            for nt, cluster in title_clusters.items():
+                if len(cluster) < 2:
+                    continue
+                # Pick the finding with the most source reports as primary
+                cluster.sort(key=lambda f: len(f.get("source_reports", [])), reverse=True)
+                primary = cluster[0]
+                for duplicate in cluster[1:]:
+                    dup_key = (duplicate["_xd_domain"], duplicate["_xd_idx"])
+                    if dup_key in xd_removed:
+                        continue
+                    merge_into(primary, duplicate)
+                    xd_removed.add(dup_key)
+                    xd_merge_count += 1
+                    print(f"  Merged: '{duplicate.get('title', '')[:60]}' from {duplicate['_xd_domain']} into {primary['_xd_domain']}")
+
+        # Pass 2: LLM-assisted dedup for same-file groups with remaining duplicates
+        # Only run on groups where 3+ findings share a file after Pass 1
+        xd_llm_groups = {}
+        for pf, group in file_groups.items():
+            remaining = [f for f in group if (f["_xd_domain"], f["_xd_idx"]) not in xd_removed]
+            if len(remaining) >= 3:
+                xd_llm_groups[pf] = remaining
+
+        if xd_llm_groups:
+            print(f"\n  LLM-assisted dedup: {len(xd_llm_groups)} file groups with 3+ remaining findings")
+
+            XD_DEDUP_PROMPT = """You are deduplicating security findings that affect the SAME file but came from DIFFERENT ASVS domain groups.
+
+Two findings are TRUE DUPLICATES if:
+- They describe the EXACT SAME bug in the EXACT SAME code location
+- A developer fixing one would automatically fix the other
+- The only difference is which ASVS section flagged them
+
+Two findings are NOT duplicates if:
+- They describe different bugs even in the same file
+- They require different fixes
+- They affect different functions/lines
+
+For each group of findings below, return a JSON object:
+{
+  "merges": [
+    {"keep": "TEMP-ID-to-keep", "absorb": ["TEMP-ID-1", "TEMP-ID-2"], "reason": "same bug: description"}
+  ]
+}
+
+If no duplicates exist in a group, return: {"merges": []}
+Return ONLY valid JSON."""
+
+            for pf, group in xd_llm_groups.items():
+                group_data = []
+                for f in group:
+                    group_data.append({
+                        "temp_id": f"{f['_xd_domain']}:{f.get('temp_id', '?')}",
+                        "domain": f["_xd_domain"],
+                        "title": f.get("title", ""),
+                        "severity": f.get("severity", ""),
+                        "description": f.get("description", "")[:500],
+                        "asvs_sections": f.get("asvs_sections", []),
+                        "affected_files": f.get("affected_files", [])[:3],
+                        "source_reports_count": len(f.get("source_reports", [])),
+                    })
+
+                user_msg = f"File: {pf}\n\nFindings ({len(group_data)}):\n{json.dumps(group_data, indent=2, default=str)}"
+                messages = [{"role": "user", "content": f"{XD_DEDUP_PROMPT}\n\n{user_msg}"}]
+
+                msg_tokens = count_message_tokens(messages, FAST_PROVIDER, FAST_MODEL)
+                if msg_tokens > int(FAST_CONTEXT_WINDOW * 0.60):
+                    print(f"    {pf}: {len(group)} findings, too large for LLM dedup — skipping")
+                    continue
+
+                try:
+                    result, _ = await call_llm(
+                        provider=FAST_PROVIDER,
+                        model=FAST_MODEL,
+                        messages=messages,
+                        parameters=FAST_PARAMS,
+                        timeout=120,
+                    )
+                    json_match = re.search(r'\{[\s\S]*\}', result)
+                    if json_match:
+                        dedup_result = json.loads(json_match.group())
+                        merges = dedup_result.get("merges", [])
+                        if merges:
+                            # Build lookup: "domain:temp_id" -> finding
+                            lookup = {}
+                            for f in group:
+                                key = f"{f['_xd_domain']}:{f.get('temp_id', '?')}"
+                                lookup[key] = f
+
+                            for merge in merges:
+                                keep_key = merge.get("keep", "")
+                                absorb_keys = merge.get("absorb", [])
+                                reason = merge.get("reason", "")
+                                keep_finding = lookup.get(keep_key)
+                                if not keep_finding:
+                                    continue
+                                for abs_key in absorb_keys:
+                                    abs_finding = lookup.get(abs_key)
+                                    if not abs_finding:
+                                        continue
+                                    abs_dup_key = (abs_finding["_xd_domain"], abs_finding["_xd_idx"])
+                                    if abs_dup_key in xd_removed:
+                                        continue
+                                    merge_into(keep_finding, abs_finding)
+                                    xd_removed.add(abs_dup_key)
+                                    xd_merge_count += 1
+                                    print(f"    LLM merged: {abs_key} into {keep_key} ({reason[:60]})")
+                except Exception as e:
+                    print(f"    {pf}: LLM dedup failed ({type(e).__name__}), skipping")
+
+        # Remove absorbed findings from domain_consolidated
+        if xd_removed:
+            for domain, data in domain_consolidated.items():
+                original = data.get("consolidated_findings", [])
+                filtered = [f for fi, f in enumerate(original) if (domain, fi) not in xd_removed]
+                data["consolidated_findings"] = filtered
+
+            # Clean up tracking fields
+            for domain, data in domain_consolidated.items():
+                for f in data.get("consolidated_findings", []):
+                    f.pop("_xd_domain", None)
+                    f.pop("_xd_idx", None)
+
+        total_after_xd = sum(
+            len(d.get("consolidated_findings", []))
+            for d in domain_consolidated.values()
+        )
+        print(f"\nCross-domain dedup: {xd_merge_count} merges, {total_consolidated} → {total_after_xd} findings")
 
         # ============================================================
         # PHASE 4: Final Merge and Report Generation (Batched by severity)
@@ -618,7 +895,6 @@ Return valid JSON with this structure:
 
         severity_order = {"Critical": 0, "High": 1, "Medium": 2, "Low": 3, "Informational": 4}
         all_findings = []
-        domain_id_map = {}
 
         for domain, data in domain_consolidated.items():
             for finding in data.get("consolidated_findings", []):
@@ -637,18 +913,83 @@ Return valid JSON with this structure:
 
         for i, finding in enumerate(all_findings, 1):
             global_id = f"FINDING-{i:03d}"
-            old_id = finding.get("temp_id", "")
-            domain = finding["_domain"]
-            domain_id_map[f"{domain}:{old_id}"] = global_id
             finding["global_id"] = global_id
 
+        # Build cross-references deterministically — no LLM judgment
+        print("Building deterministic cross-references...")
+
+        def extract_primary_file(finding):
+            af = finding.get("affected_files", [])
+            if not af:
+                return ""
+            first = af[0]
+            if isinstance(first, dict):
+                raw = first.get("file", "")
+            else:
+                raw = str(first)
+            return re.sub(r'[:\s(].*', '', raw).strip().strip("`")
+
+        def extract_function_names(finding):
+            """Extract function/method names from affected_files entries."""
+            names = set()
+            for af in finding.get("affected_files", []):
+                raw = af.get("file", "") if isinstance(af, dict) else str(af)
+                # Match function references like "func()" or "Class.method()"
+                for m in re.finditer(r'(?:^|[:\s])([a-zA-Z_]\w*(?:\.\w+)*)\s*\(', raw):
+                    names.add(m.group(1))
+            return names
+
+        # Index findings by primary file, CWE, and function names
+        by_file = {}
+        by_cwe = {}
+        by_func = {}
         for finding in all_findings:
-            domain = finding["_domain"]
-            new_related = []
-            for ref in finding.get("related_findings", []):
-                mapped = domain_id_map.get(f"{domain}:{ref}", ref)
-                new_related.append(mapped)
-            finding["related_findings"] = new_related
+            gid = finding["global_id"]
+            pf = extract_primary_file(finding)
+            if pf:
+                by_file.setdefault(pf, set()).add(gid)
+            cwe = finding.get("cwe", "")
+            if cwe and cwe != "null":
+                by_cwe.setdefault(cwe, set()).add(gid)
+            for fn in extract_function_names(finding):
+                by_func.setdefault(fn, set()).add(gid)
+
+        # Assign cross-references using hard rules
+        xref_count = 0
+        for finding in all_findings:
+            gid = finding["global_id"]
+            related = set()
+
+            # Rule 1: same primary file
+            pf = extract_primary_file(finding)
+            if pf and pf in by_file:
+                related |= by_file[pf]
+
+            # Rule 2: same CWE
+            cwe = finding.get("cwe", "")
+            if cwe and cwe != "null" and cwe in by_cwe:
+                related |= by_cwe[cwe]
+
+            # Rule 3: same function name
+            for fn in extract_function_names(finding):
+                if fn in by_func:
+                    related |= by_func[fn]
+
+            # Remove self-reference
+            related.discard(gid)
+
+            # Cap at 10 most relevant (same-file first, then same-CWE, then same-func)
+            if len(related) > 10:
+                # Prioritize same-file references
+                same_file = by_file.get(pf, set()) - {gid} if pf else set()
+                others = related - same_file
+                related = same_file | set(list(others)[:10 - len(same_file)])
+
+            finding["related_findings"] = sorted(related) if related else []
+            if related:
+                xref_count += 1
+
+        print(f"  {xref_count} findings have cross-references")
 
         # Collect ASVS statuses
         all_asvs_statuses = {}

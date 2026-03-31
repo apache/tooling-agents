@@ -13,6 +13,7 @@ Each subdirectory contains one Gofannon agent used in the ASVS security audit pi
 | [`run_asvs_security_audit`](run_asvs_security_audit/) | Core audit agent — 6-step analysis pipeline per ASVS requirement | Audit |
 | [`add_markdown_file_to_github_directory`](add_markdown_file_to_github_directory/) | Create or update a markdown file in a GitHub repo | Utility |
 | [`consolidate_asvs_security_audit_reports`](consolidate_asvs_security_audit_reports/) | Multi-directory consolidation with level tracking and deduplication | Post-processing |
+| [`file_asvs_triage_issues`](file_asvs_triage_issues/) | File GitHub Issues from raw issues and triage notes | Post-processing |
 
 ## File structure
 
