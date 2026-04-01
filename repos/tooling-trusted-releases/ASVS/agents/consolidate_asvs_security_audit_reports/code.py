@@ -955,35 +955,51 @@ Return ONLY valid JSON."""
                 by_func.setdefault(fn, set()).add(gid)
 
         # Assign cross-references using hard rules
+        # Same file ALONE is too broad (atr/api/__init__.py has 20 findings).
+        # Require same-file AND (same-CWE or same-function), or same-CWE alone, or same-function alone.
         xref_count = 0
         for finding in all_findings:
             gid = finding["global_id"]
             related = set()
 
-            # Rule 1: same primary file
             pf = extract_primary_file(finding)
-            if pf and pf in by_file:
-                related |= by_file[pf]
-
-            # Rule 2: same CWE
             cwe = finding.get("cwe", "")
-            if cwe and cwe != "null" and cwe in by_cwe:
+            if cwe == "null":
+                cwe = ""
+            funcs = extract_function_names(finding)
+
+            # Rule 1: same CWE (regardless of file)
+            if cwe and cwe in by_cwe:
                 related |= by_cwe[cwe]
 
-            # Rule 3: same function name
-            for fn in extract_function_names(finding):
+            # Rule 2: same function name (regardless of file)
+            for fn in funcs:
                 if fn in by_func:
                     related |= by_func[fn]
+
+            # Rule 3: same primary file AND (same CWE or same function)
+            if pf and pf in by_file:
+                same_file_ids = by_file[pf]
+                for other_id in same_file_ids:
+                    if other_id == gid:
+                        continue
+                    other = next((f for f in all_findings if f["global_id"] == other_id), None)
+                    if not other:
+                        continue
+                    other_cwe = other.get("cwe", "")
+                    if other_cwe == "null":
+                        other_cwe = ""
+                    other_funcs = extract_function_names(other)
+                    # Must share CWE or function, not just file
+                    if (cwe and other_cwe and cwe == other_cwe) or (funcs & other_funcs):
+                        related.add(other_id)
 
             # Remove self-reference
             related.discard(gid)
 
-            # Cap at 10 most relevant (same-file first, then same-CWE, then same-func)
+            # Cap at 10
             if len(related) > 10:
-                # Prioritize same-file references
-                same_file = by_file.get(pf, set()) - {gid} if pf else set()
-                others = related - same_file
-                related = same_file | set(list(others)[:10 - len(same_file)])
+                related = set(sorted(related)[:10])
 
             finding["related_findings"] = sorted(related) if related else []
             if related:
@@ -1152,7 +1168,7 @@ Findings data:
 
 Output ONLY Markdown. Include ALL {len(sub_batch)} findings with full detail."""
 
-                for attempt in range(2):
+                for attempt in range(3):
                     try:
                         sub_result, _ = await call_llm(
                             provider=FAST_PROVIDER,
@@ -1161,16 +1177,23 @@ Output ONLY Markdown. Include ALL {len(sub_batch)} findings with full detail."""
                             parameters={**FAST_PARAMS, "max_tokens": 64000},
                             timeout=900,
                         )
-                        findings_md_parts.append(sub_result)
                         sub_count = len(re.findall(r'#### FINDING-\d{3}', sub_result))
                         print(f"    Batch {sb_idx+1}: {sub_count}/{len(sub_batch)} sections generated")
-                        break
-                    except Exception as e:
-                        if attempt == 0:
-                            print(f"    Batch {sb_idx+1} attempt 1 failed ({type(e).__name__}), retrying...", flush=True)
+                        if sub_count >= len(sub_batch):
+                            findings_md_parts.append(sub_result)
+                            break
+                        elif attempt < 2:
+                            print(f"    Missing {len(sub_batch) - sub_count} sections, retrying...", flush=True)
                             await asyncio.sleep(5)
                         else:
-                            print(f"    Batch {sb_idx+1} FAILED after 2 attempts: {e}")
+                            print(f"    Accepting {sub_count}/{len(sub_batch)} after 3 attempts")
+                            findings_md_parts.append(sub_result)
+                    except Exception as e:
+                        if attempt < 2:
+                            print(f"    Batch {sb_idx+1} attempt {attempt+1} failed ({type(e).__name__}), retrying...", flush=True)
+                            await asyncio.sleep(5)
+                        else:
+                            print(f"    Batch {sb_idx+1} FAILED after 3 attempts: {e}")
 
         # ----------------------------------------------------------
         # Part 3: Tail sections (Sonnet)
@@ -1205,10 +1228,9 @@ Table with columns: ASVS Section | Section Title | Level | Status (✅ Pass / �
 Table grouping findings by attack surface with finding IDs organized by severity.
 Columns: Attack Surface | ASVS Levels | Critical | High | Medium | Low | Info
 
-## 7. Level Coverage Analysis
-Table showing: Level | Sections Audited | Findings Found | Unique Findings (not found in other levels)
+Do NOT generate a Level Coverage section — it will be added separately.
 
-End with: `*End of Consolidated Security Audit Report*`
+End with nothing — more content will be appended after this.
 
 Output ONLY Markdown."""
 
@@ -1238,6 +1260,25 @@ Output ONLY Markdown."""
         consolidated_md += "\n\n---\n\n"
         consolidated_md += tail_result
 
+        # Generate Section 7 deterministically (not via LLM — avoids hallucinated numbers)
+        print("Generating Section 7 (Level Coverage) deterministically...")
+        section7_lines = ["\n\n## 7. Level Coverage Analysis\n"]
+        section7_lines.append("| Level | Sections Audited | Findings Found | Unique to Level |")
+        section7_lines.append("|-------|-----------------|----------------|-----------------|")
+        for lv in sorted(set(dir_levels.values())):
+            lv_sections = sum(1 for rk in all_extracted if report_levels.get(rk) == lv)
+            lv_findings = [f for f in all_findings if lv in f.get("asvs_levels", [])]
+            lv_only = [f for f in lv_findings if f.get("asvs_levels") == [lv]]
+            section7_lines.append(f"| {lv} | {lv_sections} | {len(lv_findings)} | {len(lv_only)} |")
+
+        # Both levels
+        both = [f for f in all_findings if len(f.get("asvs_levels", [])) > 1]
+        section7_lines.append(f"| Both | — | {len(both)} | — |")
+        section7_lines.append(f"\n**Total consolidated findings: {len(all_findings)}**")
+        section7_lines.append(f"\n*End of Consolidated Security Audit Report*")
+
+        consolidated_md += "\n".join(section7_lines)
+
         print(f"Consolidated report generated: {len(consolidated_md)} chars")
 
         # ============================================================
@@ -1245,8 +1286,30 @@ Output ONLY Markdown."""
         # ============================================================
         ISSUES_BATCH_SIZE = 75
 
-        actionable_findings = [f for f in all_findings if f.get("severity") != "Informational"]
-        total_batches = (len(actionable_findings) + ISSUES_BATCH_SIZE - 1) // ISSUES_BATCH_SIZE
+        # Filter out Informational findings for issues generation
+        # Robust check: severity field may contain emoji prefix from earlier formatting
+        informational_ids = set()
+        actionable_findings = []
+        for f in all_findings:
+            sev = f.get("severity", "").strip()
+            if "informational" in sev.lower():
+                informational_ids.add(f.get("global_id", ""))
+            else:
+                actionable_findings.append(f)
+
+        # Strip Informational finding IDs from related_findings in issues data
+        # so Sonnet doesn't reference or generate issues for them
+        issues_findings_data = []
+        for f in actionable_findings:
+            f_copy = dict(f)
+            if f_copy.get("related_findings"):
+                f_copy["related_findings"] = [
+                    r for r in f_copy["related_findings"]
+                    if r not in informational_ids
+                ]
+            issues_findings_data.append(f_copy)
+
+        total_batches = (len(issues_findings_data) + ISSUES_BATCH_SIZE - 1) // ISSUES_BATCH_SIZE
 
         print(f"\nGenerating {issues_filename} (Sonnet, {total_batches} batches)...")
         print(f"Actionable findings for issues: {len(actionable_findings)}")
@@ -1288,8 +1351,8 @@ Output ONLY Markdown."""
         issues_params = {**FAST_PARAMS}
         issues_params["max_tokens"] = 64000
 
-        for batch_idx in range(0, len(actionable_findings), ISSUES_BATCH_SIZE):
-            batch = actionable_findings[batch_idx:batch_idx + ISSUES_BATCH_SIZE]
+        for batch_idx in range(0, len(issues_findings_data), ISSUES_BATCH_SIZE):
+            batch = issues_findings_data[batch_idx:batch_idx + ISSUES_BATCH_SIZE]
             batch_num = (batch_idx // ISSUES_BATCH_SIZE) + 1
             is_first_batch = batch_idx == 0
 
@@ -1399,8 +1462,19 @@ Affected files: {files}
         # ============================================================
         print("\n=== Quality Checks ===")
 
+        # Check for duplicate FINDING IDs in the report
+        all_finding_ids = re.findall(r'#### (FINDING-\d{3}):', consolidated_md)
+        id_counts = {}
+        for fid in all_finding_ids:
+            id_counts[fid] = id_counts.get(fid, 0) + 1
+        duplicate_ids = {fid: cnt for fid, cnt in id_counts.items() if cnt > 1}
+        if duplicate_ids:
+            print(f"WARNING: Duplicate FINDING IDs detected: {duplicate_ids}")
+        else:
+            print(f"FINDING ID uniqueness: OK ({len(all_finding_ids)} unique IDs)")
+
         finding_ids_in_report = set(re.findall(r'FINDING-\d{3}', consolidated_md))
-        print(f"FINDING IDs in consolidated report: {len(finding_ids_in_report)} (expected: {len(all_findings)})")
+        print(f"FINDING IDs mentioned in consolidated report: {len(finding_ids_in_report)}")
 
         finding_sections_in_report = set(re.findall(r'#### FINDING-(\d{3})', consolidated_md))
         print(f"FINDING sections with full detail: {len(finding_sections_in_report)} (expected: {len(all_findings)})")
@@ -1408,8 +1482,17 @@ Affected files: {files}
             missing_sections = set(f"{i:03d}" for i in range(1, len(all_findings) + 1)) - finding_sections_in_report
             print(f"  Missing sections for: {', '.join(f'FINDING-{m}' for m in sorted(missing_sections)[:10])}{'...' if len(missing_sections) > 10 else ''}")
 
-        issue_ids_in_issues = set(re.findall(r'FINDING-\d{3}', issues_md))
-        print(f"FINDING IDs in issues: {len(issue_ids_in_issues)} (expected: {len(actionable_findings)})")
+        # Count actual issue entries (headers), not just FINDING ID mentions
+        issue_headers_in_issues = set(re.findall(r'## Issue: (FINDING-\d{3})', issues_md))
+        issue_ids_mentioned = set(re.findall(r'FINDING-\d{3}', issues_md))
+        print(f"Issue entries in issues file: {len(issue_headers_in_issues)} (expected: {len(actionable_findings)})")
+        if len(issue_headers_in_issues) != len(actionable_findings):
+            extra = issue_headers_in_issues - set(f.get("global_id", "") for f in actionable_findings)
+            missing = set(f.get("global_id", "") for f in actionable_findings) - issue_headers_in_issues
+            if extra:
+                print(f"  Extra issues (should not exist): {sorted(extra)[:10]}")
+            if missing:
+                print(f"  Missing issues: {sorted(missing)[:10]}")
 
         # Per-level finding counts
         print(f"\n--- Level Analysis ---")
