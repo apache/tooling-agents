@@ -1146,7 +1146,7 @@ Output ONLY Markdown. End with a `---` separator."""
             parameters={**HEAVY_PARAMS, "max_tokens": 32000},
             timeout=900,
         )
-        exec_result = sanitize_md_html(exec_result)  # ← SANITIZE
+        exec_result = sanitize_md_html(exec_result)
         print(f"  Executive summary: {len(exec_result)} chars")
 
         # ----------------------------------------------------------
@@ -1211,7 +1211,7 @@ Output ONLY Markdown. Include ALL {len(sub_batch)} findings with full detail."""
                             parameters={**FAST_PARAMS, "max_tokens": 64000},
                             timeout=900,
                         )
-                        sub_result = sanitize_md_html(sub_result)  # ← SANITIZE
+                        sub_result = sanitize_md_html(sub_result)
                         sub_count = len(re.findall(r'#### FINDING-\d{3}', sub_result))
                         print(f"    Batch {sb_idx+1}: {sub_count}/{len(sub_batch)} sections generated")
                         if sub_count >= len(sub_batch):
@@ -1278,7 +1278,7 @@ Output ONLY Markdown."""
                     parameters={**FAST_PARAMS, "max_tokens": 64000},
                     timeout=900,
                 )
-                tail_result = sanitize_md_html(tail_result)  # ← SANITIZE
+                tail_result = sanitize_md_html(tail_result)
                 print(f"  Tail sections: {len(tail_result)} chars")
                 break
             except Exception as e:
@@ -1428,7 +1428,7 @@ Generate issues for ALL {len(batch)} findings above. Output ONLY Markdown."""
                         parameters=issues_params,
                         timeout=900,
                     )
-                    issues_parts.append(sanitize_md_html(issues_content))  # ← SANITIZE
+                    issues_parts.append(sanitize_md_html(issues_content))
                     batch_issue_count = len(re.findall(r'## Issue: FINDING-\d{3}', issues_content))
                     print(f"    Batch {batch_num} complete: {len(issues_content)} chars, {batch_issue_count} issues")
                     batch_succeeded = True
