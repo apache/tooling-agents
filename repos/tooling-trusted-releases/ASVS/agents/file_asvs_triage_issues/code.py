@@ -369,25 +369,11 @@ async def run(input_dict, tools):
             labels = list(finding['labels'])
             assignees = []
 
-            # ── Detect assignee ──
-            solo_m = re.match(r'^@?([a-zA-Z][\w-]{0,38})$', comm.strip())
-            if solo_m and solo_m.group(1).lower() not in non_username_words and solo_m.group(1).lower() not in skip_label_kw:
-                assignees.append(solo_m.group(1))
-
-            if not assignees:
-                at_m = re.match(r'^@([a-zA-Z][\w-]{0,38})\b', comm.strip())
-                if at_m:
-                    assignees.append(at_m.group(1))
-
-            if not assignees and comm:
-                dash_m = re.match(r'^([a-zA-Z][\w-]{0,38})\s*[-\u2013\u2014]\s+', comm.strip())
-                if dash_m and dash_m.group(1).lower() not in non_username_words:
-                    assignees.append(dash_m.group(1))
-
-            if not assignees:
-                assign_m = re.search(r'assign(?:ed)?\s+(?:to\s+)?@?([a-zA-Z][\w-]{0,38})', comm, re.IGNORECASE)
-                if assign_m:
-                    assignees.append(assign_m.group(1))
+            # ── Detect assignee: only explicit @username mentions ──
+            for at_m in re.finditer(r'@([a-zA-Z][\w-]{0,38})', comm):
+                username = at_m.group(1)
+                if username.lower() not in non_username_words:
+                    assignees.append(username)
 
             # ── Extra labels from commentary keywords ──
             if 'documentation' in comm_lower:
