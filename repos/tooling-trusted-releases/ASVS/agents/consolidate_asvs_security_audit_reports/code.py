@@ -12,6 +12,43 @@ async def run(input_dict, tools):
 
         audit_date = date.today().strftime("%b %d, %Y")
 
+        # =============================================================
+        # Markdown HTML sanitizer — escape stray HTML tags that LLMs
+        # sometimes emit, which break rendering (e.g. <strong> makes
+        # everything bold, <pre> switches to preformatted mode).
+        # Applied to every LLM result before assembly into .md files.
+        # Preserves fenced code blocks and inline code spans.
+        # =============================================================
+        def sanitize_md_html(text):
+            """Escape HTML tags outside fenced code blocks and inline
+            code spans so they render as literal text in markdown."""
+            if not text:
+                return text
+
+            # Split on fenced code blocks — leave them untouched
+            parts = re.split(r'(```[\s\S]*?```)', text)
+            out = []
+            for part in parts:
+                if part.startswith('```'):
+                    out.append(part)
+                    continue
+
+                # Stash inline code spans
+                stash = []
+                def _stash(m):
+                    stash.append(m.group(0))
+                    return f'\x00IC{len(stash)-1}\x00'
+                s = re.sub(r'`[^`\n]+`', _stash, part)
+
+                # Escape any HTML tag: <anything> or </anything>
+                s = re.sub(r'<(/?\w[^>]*)>', r'&lt;\1&gt;', s)
+
+                # Restore inline code spans
+                for j, code in enumerate(stash):
+                    s = s.replace(f'\x00IC{j}\x00', code)
+                out.append(s)
+            return ''.join(out)
+
         # Parse inputs — tolerant of "label: value" or raw values
         input_text = input_dict.get("inputText", "")
         print(f"DEBUG raw input: {repr(input_text[:500])}", flush=True)
@@ -189,7 +226,6 @@ For each finding, capture:
 - asvs_section: the ASVS section being audited (e.g., "8.2.2")
 - asvs_level: the ASVS level this report covers (provided below)
 - affected_files: list of objects with "file" and "line" keys
-- recommended_remediation: the recommended fix
 - recommended_remediation: the recommended fix
 - positive_controls: list of any positive security controls or good practices noted
 
@@ -427,7 +463,6 @@ Return ONLY valid JSON in this format:
         }
 
         # Extend domain groups for L2/L3 sections not in L1 map
-        # Any section not in the map goes to "misc" or gets matched by chapter
         section_to_domain = {}
         for domain, sections in DOMAIN_GROUPS.items():
             for section in sections:
@@ -955,8 +990,6 @@ Return ONLY valid JSON."""
                 by_func.setdefault(fn, set()).add(gid)
 
         # Assign cross-references using hard rules
-        # Same file ALONE is too broad (atr/api/__init__.py has 20 findings).
-        # Require same-file AND (same-CWE or same-function), or same-CWE alone, or same-function alone.
         xref_count = 0
         for finding in all_findings:
             gid = finding["global_id"]
@@ -1113,6 +1146,7 @@ Output ONLY Markdown. End with a `---` separator."""
             parameters={**HEAVY_PARAMS, "max_tokens": 32000},
             timeout=900,
         )
+        exec_result = sanitize_md_html(exec_result)  # ← SANITIZE
         print(f"  Executive summary: {len(exec_result)} chars")
 
         # ----------------------------------------------------------
@@ -1177,6 +1211,7 @@ Output ONLY Markdown. Include ALL {len(sub_batch)} findings with full detail."""
                             parameters={**FAST_PARAMS, "max_tokens": 64000},
                             timeout=900,
                         )
+                        sub_result = sanitize_md_html(sub_result)  # ← SANITIZE
                         sub_count = len(re.findall(r'#### FINDING-\d{3}', sub_result))
                         print(f"    Batch {sb_idx+1}: {sub_count}/{len(sub_batch)} sections generated")
                         if sub_count >= len(sub_batch):
@@ -1243,6 +1278,7 @@ Output ONLY Markdown."""
                     parameters={**FAST_PARAMS, "max_tokens": 64000},
                     timeout=900,
                 )
+                tail_result = sanitize_md_html(tail_result)  # ← SANITIZE
                 print(f"  Tail sections: {len(tail_result)} chars")
                 break
             except Exception as e:
@@ -1392,7 +1428,7 @@ Generate issues for ALL {len(batch)} findings above. Output ONLY Markdown."""
                         parameters=issues_params,
                         timeout=900,
                     )
-                    issues_parts.append(issues_content)
+                    issues_parts.append(sanitize_md_html(issues_content))  # ← SANITIZE
                     batch_issue_count = len(re.findall(r'## Issue: FINDING-\d{3}', issues_content))
                     print(f"    Batch {batch_num} complete: {len(issues_content)} chars, {batch_issue_count} issues")
                     batch_succeeded = True
@@ -1409,15 +1445,16 @@ Generate issues for ALL {len(batch)} findings above. Output ONLY Markdown."""
                 fallback_parts = []
                 for f in batch:
                     fid = f.get("global_id", "UNKNOWN")
-                    title = f.get("title", "Unknown finding")
+                    # ← SANITIZE fields from earlier LLM extraction
+                    title = sanitize_md_html(f.get("title", "Unknown finding"))
                     severity = f.get("severity", "Medium")
-                    desc = f.get("description", "See consolidated report for details.")
+                    desc = sanitize_md_html(f.get("description", "See consolidated report for details."))
                     levels = ", ".join(f.get("asvs_levels", ["Unknown"]))
                     level_labels = " ".join(f"asvs-level:{lv}" for lv in f.get("asvs_levels", []))
                     files = ", ".join(
                         af.get("file", "unknown") for af in f.get("affected_files", [])
                     ) or "See consolidated report"
-                    remediation = f.get("recommended_remediation", "See consolidated report.")
+                    remediation = sanitize_md_html(f.get("recommended_remediation", "See consolidated report."))
                     sources = ", ".join(f.get("source_reports", []))
                     related = ", ".join(f.get("related_findings", []))
                     asvs_secs = ", ".join(f.get("asvs_sections", []))
