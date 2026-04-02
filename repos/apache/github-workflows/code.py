@@ -671,7 +671,7 @@ async def run(input_dict, tools):
             lines.append("|------------|----------|--------|---------|")
             for w in sorted(ci_wfs, key=lambda x: (x["repo"], x.get("file", ""))):
                 eco_str = ", ".join(w.get("ecosystems", [])) or "—"
-                summary = safe_str(w.get("summary"))[:80]
+                summary = safe_str(w.get("summary"))
                 lines.append(f"| {w['repo']} | `{w.get('file', '?')}` | {sanitize_md(eco_str)} | {sanitize_md(summary)} |")
             lines.append(f"\n</details>\n")
 
@@ -683,7 +683,7 @@ async def run(input_dict, tools):
             lines.append("|------------|----------|--------|---------|")
             for w in sorted(doc_wfs, key=lambda x: (x["repo"], x.get("file", ""))):
                 eco_str = ", ".join(w.get("ecosystems", [])) or "—"
-                summary = safe_str(w.get("summary"))[:80]
+                summary = safe_str(w.get("summary"))
                 lines.append(f"| {w['repo']} | `{w.get('file', '?')}` | {sanitize_md(eco_str)} | {sanitize_md(summary)} |")
             lines.append(f"\n</details>\n")
 
