@@ -572,7 +572,10 @@ async def run(input_dict, tools):
                 entry = {"repo": repo, **w}
                 entry["ecosystems"] = ecosystems_raw
                 by_category[cat].append(entry)
-                publishing_repos.add(repo)
+
+                # Only count as "publishing" for supply-chain purposes if release or snapshot
+                if cat in ("release_artifact", "snapshot_artifact"):
+                    publishing_repos.add(repo)
 
                 for eco in ecosystems_raw:
                     if eco and eco != "github_actions_artifacts":
@@ -595,7 +598,7 @@ async def run(input_dict, tools):
         lines.append(f"| Repositories scanned | {stats['repos_scanned']} |")
         lines.append(f"| Repositories with workflows | {stats['repos_with_workflows']} |")
         lines.append(f"| Total workflow files | {stats['total_workflows']} |")
-        lines.append(f"| **Repos with any publishing** | **{len(publishing_repos)}** |")
+        lines.append(f"| **Repos publishing to registries** | **{len(publishing_repos)}** |")
         lines.append(f"| Release artifact workflows | {len(release_wfs)} |")
         lines.append(f"| Snapshot / nightly workflows | {len(snapshot_wfs)} |")
         lines.append(f"| CI infrastructure image workflows | {len(ci_wfs)} |")
@@ -813,7 +816,11 @@ async def run(input_dict, tools):
             lines.append("*No release or snapshot publishing workflows detected.*\n")
 
         # --- Non-publishing repos ---
-        non_publishing = sorted([r for r in all_results.keys() if r not in publishing_repos])
+        # Repos that have doc/CI workflows are covered above; only list truly non-publishing repos
+        repos_with_any_output = set(publishing_repos)
+        for w in ci_wfs + doc_wfs:
+            repos_with_any_output.add(w.get("repo", ""))
+        non_publishing = sorted([r for r in all_results.keys() if r not in repos_with_any_output])
         if non_publishing:
             lines.append("## Repositories with Workflows (No Publishing Detected)\n")
             lines.append(f"{len(non_publishing)} repositories had workflow files but no publishing of any kind.\n")

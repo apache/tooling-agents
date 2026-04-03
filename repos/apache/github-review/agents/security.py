@@ -1,0 +1,771 @@
+from agent_factory.remote_mcp_client import RemoteMCPClient
+from services.llm_service import call_llm
+import httpx
+
+async def run(input_dict, tools):
+    mcpc = { url : RemoteMCPClient(remote_url = url) for url in tools.keys() }
+    http_client = httpx.AsyncClient()
+    try:
+        owner = input_dict.get("owner", "apache")
+        github_pat = input_dict.get("github_pat", "").strip()
+        clear_cache_raw = input_dict.get("clear_cache", "false")
+        clear_cache = str(clear_cache_raw).lower().strip() in ("true", "1", "yes")
+
+        if not github_pat:
+            return {"outputText": "Error: `github_pat` is required."}
+
+        GITHUB_API = "https://api.github.com"
+        gh_headers = {"Accept": "application/vnd.github.v3+json", "Authorization": f"token {github_pat}"}
+
+        workflow_ns = data_store.use_namespace(f"ci-workflows:{owner}")
+        security_ns = data_store.use_namespace(f"ci-security:{owner}")
+
+        if clear_cache:
+            print("Clearing security cache...", flush=True)
+            for key in security_ns.list_keys():
+                security_ns.delete(key)
+            print("Cache cleared.", flush=True)
+
+        all_wf_keys = workflow_ns.list_keys()
+        if not all_wf_keys:
+            return {"outputText": "Error: no cached workflows found in `ci-workflows:" + owner + "`. "
+                    "Run the Publishing Analyzer agent first."}
+
+        repos = {}
+        for key in all_wf_keys:
+            if "/" in key:
+                repo, wf_name = key.split("/", 1)
+                repos.setdefault(repo, []).append(wf_name)
+
+        print(f"Found {len(all_wf_keys)} cached workflows across {len(repos)} repos\n", flush=True)
+
+        async def github_get(url, max_retries=3):
+            for attempt in range(max_retries):
+                try:
+                    resp = await http_client.get(url, headers=gh_headers, timeout=15.0)
+                    if resp.status_code == 429 or (resp.status_code == 403 and
+                            resp.headers.get("X-RateLimit-Remaining", "1") == "0"):
+                        await asyncio.sleep(30)
+                        continue
+                    return resp
+                except Exception:
+                    if attempt < max_retries - 1:
+                        await asyncio.sleep(2)
+            return None
+
+        TRUSTED_ORGS = {
+            "actions", "github", "docker", "google-github-actions", "aws-actions",
+            "azure", "hashicorp", "gradle", "ruby", "codecov", "peaceiris",
+            "pypa", "peter-evans", "softprops", "JamesIves", "crazy-max",
+            "dorny", "EnricoMi", "pnpm", "apache",
+        }
+
+        PR_TRIGGERS = {"pull_request", "pull_request_target", "issue_comment"}
+
+        # --- Pattern matching helpers ---
+
+        def is_sha_pinned(ref):
+            if not ref:
+                return False
+            return len(ref) == 40 and all(c in "0123456789abcdef" for c in ref.lower())
+
+        def extract_action_refs(content):
+            refs = []
+            for line in content.split("\n"):
+                stripped = line.strip()
+                if "uses:" in stripped:
+                    idx = stripped.index("uses:")
+                    action_ref = stripped[idx + 5:].strip().strip("'\"")
+                    if "#" in action_ref:
+                        action_ref = action_ref[:action_ref.index("#")].strip()
+                    if action_ref and not action_ref.startswith("$"):
+                        refs.append(action_ref)
+            return refs
+
+        def parse_action_ref(ref):
+            if ref.startswith("./"):
+                return {"type": "local", "path": ref, "raw": ref}
+            if "@" in ref:
+                action_path, version = ref.rsplit("@", 1)
+                parts = action_path.split("/")
+                org = parts[0] if parts else ""
+                name = "/".join(parts[:2]) if len(parts) >= 2 else action_path
+                return {"type": "remote", "org": org, "name": name, "full": action_path,
+                        "version": version, "pinned": is_sha_pinned(version), "raw": ref}
+            return {"type": "unknown", "raw": ref}
+
+        def extract_triggers(content):
+            triggers = set()
+            in_on = False
+            for line in content.split("\n"):
+                stripped = line.strip()
+                if stripped.startswith("on:"):
+                    in_on = True
+                    rest = stripped[3:].strip()
+                    if rest.startswith("["):
+                        for t in rest.strip("[]").split(","):
+                            triggers.add(t.strip())
+                        in_on = False
+                    elif rest and not rest.startswith("#"):
+                        triggers.add(rest.rstrip(":"))
+                    continue
+                if in_on:
+                    if stripped and not stripped.startswith("#"):
+                        if not line.startswith(" ") and not line.startswith("\t"):
+                            in_on = False
+                            continue
+                        if ":" in stripped:
+                            trigger_name = stripped.split(":")[0].strip()
+                            if trigger_name and not trigger_name.startswith("-"):
+                                triggers.add(trigger_name)
+            return triggers
+
+        def extract_permissions(content):
+            perms = {}
+            in_perms = False
+            indent = 0
+            for line in content.split("\n"):
+                stripped = line.strip()
+                if stripped.startswith("permissions:"):
+                    rest = stripped[12:].strip()
+                    if rest and rest != "{}" and not rest.startswith("#"):
+                        perms["_level"] = rest
+                        return perms
+                    in_perms = True
+                    indent = len(line) - len(line.lstrip())
+                    continue
+                if in_perms:
+                    if not stripped or stripped.startswith("#"):
+                        continue
+                    cur_indent = len(line) - len(line.lstrip())
+                    if cur_indent <= indent and stripped:
+                        break
+                    if ":" in stripped:
+                        key, val = stripped.split(":", 1)
+                        perms[key.strip()] = val.strip()
+            return perms
+
+        def find_injection_in_run_blocks(content, context_label=""):
+            """Find ${{ }} interpolation in run: blocks. Returns list of (severity, detail)."""
+            findings = []
+            in_run = False
+            run_indent = 0
+            current_step = ""
+
+            for line in content.split("\n"):
+                stripped = line.strip()
+
+                if stripped.startswith("- name:"):
+                    current_step = stripped[7:].strip().strip("'\"")
+
+                if stripped.startswith("run:"):
+                    in_run = True
+                    run_indent = len(line) - len(line.lstrip())
+                    run_content = stripped[4:].strip()
+                    if run_content.startswith("|") or run_content.startswith(">"):
+                        continue
+                    if "${{" in run_content:
+                        findings.extend(_classify_interpolation(run_content, current_step, context_label))
+                    in_run = False
+                    continue
+
+                if in_run:
+                    cur_indent = len(line) - len(line.lstrip())
+                    if stripped and cur_indent <= run_indent:
+                        in_run = False
+                    elif "${{" in line:
+                        findings.extend(_classify_interpolation(line, current_step, context_label))
+
+            return findings
+
+        def _classify_interpolation(line, step_name, context_label=""):
+            findings = []
+            prefix = f" in {context_label}" if context_label else ""
+            step_info = f" at step '{step_name}'" if step_name else ""
+
+            import re as _re
+            exprs = _re.findall(r'\$\{\{([^}]+)\}\}', line)
+
+            for expr in exprs:
+                expr = expr.strip()
+                expr_lower = expr.lower()
+
+                untrusted_patterns = [
+                    "event.pull_request.title", "event.pull_request.body",
+                    "event.pull_request.head.ref", "event.pull_request.head.label",
+                    "event.issue.title", "event.issue.body",
+                    "event.comment.body", "event.review.body",
+                    "event.discussion.title", "event.discussion.body",
+                ]
+                if any(p in expr_lower for p in untrusted_patterns):
+                    findings.append(("CRITICAL",
+                        f"Direct interpolation of untrusted input `${{{{ {expr} }}}}` in run block"
+                        f"{step_info}{prefix}. Exploitable by external contributors."))
+                    continue
+
+                if "secrets." in expr_lower:
+                    findings.append(("LOW",
+                        f"Secret `${{{{ {expr} }}}}` directly interpolated in run block"
+                        f"{step_info}{prefix}. Trusted value but risks log leakage."))
+                    continue
+
+                if "event.inputs." in expr_lower or "inputs." in expr_lower:
+                    findings.append(("LOW",
+                        f"Workflow input `${{{{ {expr} }}}}` directly interpolated in run block"
+                        f"{step_info}{prefix}. Trusted committer input but should use env: block."))
+                    continue
+
+                github_controlled = [
+                    "github.actor", "github.sha", "github.ref", "github.repository",
+                    "github.run_id", "github.run_number", "github.workspace",
+                    "github.ref_name", "github.head_ref", "github.base_ref",
+                    "runner.", "matrix.", "steps.", "needs.", "env.",
+                ]
+                if any(p in expr_lower for p in github_controlled):
+                    continue
+
+            return findings
+
+        def check_prt_checkout(content):
+            triggers = extract_triggers(content)
+            if "pull_request_target" not in triggers:
+                return None
+            has_checkout = False
+            checks_head = False
+            for line in content.split("\n"):
+                stripped = line.strip()
+                if "actions/checkout" in stripped:
+                    has_checkout = True
+                if has_checkout and ("pull_request.head.sha" in stripped or
+                                     "pull_request.head.ref" in stripped or
+                                     "github.event.pull_request.head" in stripped):
+                    checks_head = True
+                    break
+            if has_checkout and checks_head:
+                return ("CRITICAL", "pull_request_target trigger with checkout of PR head code. "
+                        "Untrusted PR code executes with base repo secrets and write permissions.")
+            elif has_checkout:
+                return ("LOW", "pull_request_target trigger with checkout action present. "
+                        "Verify the checkout uses the base ref, not PR head.")
+            return None
+
+        def check_self_hosted(content, triggers):
+            has_self_hosted = "self-hosted" in content
+            has_pr_trigger = bool(triggers & PR_TRIGGERS)
+            if has_self_hosted and has_pr_trigger:
+                return ("HIGH", "Self-hosted runner with PR trigger. External contributors can "
+                        "execute arbitrary code on self-hosted infrastructure.")
+            elif has_self_hosted:
+                return ("INFO", "Uses self-hosted runners. Ensure runners are ephemeral.")
+            return None
+
+        def check_permissions(content):
+            perms = extract_permissions(content)
+            findings = []
+            level = perms.get("_level", "")
+            if level in ("write-all", "read-all|write-all"):
+                findings.append(("HIGH", "Workflow uses `permissions: write-all`. "
+                                 "Follow least-privilege principle."))
+            write_perms = [k for k, v in perms.items() if v == "write" and k != "_level"]
+            if len(write_perms) > 3:
+                findings.append(("LOW", f"Requests write access to {len(write_perms)} scopes: "
+                                 f"{', '.join(write_perms)}."))
+            return findings
+
+        def check_cache_poisoning(content, triggers):
+            has_pr = bool(triggers & {"pull_request", "pull_request_target"})
+            has_cache = "actions/cache" in content
+            if has_cache and has_pr:
+                for line in content.split("\n"):
+                    if "key:" in line and ("pull_request" in line or "head_ref" in line):
+                        return ("HIGH", "Cache key derived from PR-controlled value. "
+                                "A malicious PR could poison the cache.")
+                return ("INFO", "Uses actions/cache with PR trigger. Verify cache keys "
+                        "are not PR-controlled.")
+            return None
+
+        def deduplicate_findings(findings):
+            """Collapse repeated same-check same-file findings into summaries."""
+            deduped = []
+            # Group by (check, file, severity)
+            groups = {}
+            for f in findings:
+                key = (f["check"], f["file"], f["severity"])
+                groups.setdefault(key, []).append(f)
+
+            for (check, file, severity), items in groups.items():
+                if len(items) == 1:
+                    deduped.append(items[0])
+                elif check in ("run_block_injection", "composite_action_injection"):
+                    # Summarize: extract unique expressions
+                    import re as _re
+                    exprs = set()
+                    for item in items:
+                        found = _re.findall(r'`\$\{\{ ([^}]+) \}\}`', item["detail"])
+                        exprs.update(found)
+                    expr_list = sorted(exprs)[:5]
+                    expr_str = ", ".join(f"`{e}`" for e in expr_list)
+                    more = f" +{len(exprs) - 5} more" if len(exprs) > 5 else ""
+                    deduped.append({
+                        "check": check,
+                        "file": file,
+                        "severity": severity,
+                        "detail": (f"{len(items)} instances of direct interpolation in run blocks. "
+                                   f"Expressions: {expr_str}{more}."),
+                        "count": len(items),
+                    })
+                elif check == "composite_action_unpinned":
+                    # Summarize unpinned refs inside one composite action
+                    refs = [item["detail"].split("`")[1] if "`" in item["detail"] else "?" for item in items]
+                    unique_refs = sorted(set(refs))
+                    deduped.append({
+                        "check": check,
+                        "file": file,
+                        "severity": severity,
+                        "detail": (f"{len(items)} unpinned action refs in composite action: "
+                                   f"{', '.join(f'`{r}`' for r in unique_refs[:5])}"
+                                   + (f" +{len(unique_refs)-5} more" if len(unique_refs) > 5 else "")),
+                        "count": len(items),
+                    })
+                else:
+                    # For other checks, keep first and note count
+                    entry = dict(items[0])
+                    if len(items) > 1:
+                        entry["detail"] = f"({len(items)}x) {entry['detail']}"
+                        entry["count"] = len(items)
+                    deduped.append(entry)
+
+            return deduped
+
+
+        # ===== Main scan loop =====
+        all_findings = {}
+        repos_scanned = 0
+
+        for repo_name, wf_names in sorted(repos.items()):
+            repos_scanned += 1
+
+            if repos_scanned % 10 == 1:
+                print(f"[{repos_scanned}/{len(repos)}] Scanning {repo_name}...", flush=True)
+
+            cached = security_ns.get(f"findings:{repo_name}")
+            if cached is not None and not clear_cache:
+                if cached:
+                    all_findings[repo_name] = cached
+                continue
+
+            repo_findings = []
+            all_action_refs = []
+            repo_triggers = set()
+
+            # --- Analyze each cached workflow ---
+            for wf_name in wf_names:
+                # Skip composite action files — analyzed separately in Check 9
+                if ".github/actions/" in wf_name:
+                    continue
+
+                content = workflow_ns.get(f"{repo_name}/{wf_name}")
+                if not content or not isinstance(content, str):
+                    continue
+
+                triggers = extract_triggers(content)
+                repo_triggers.update(triggers)
+                action_refs = extract_action_refs(content)
+                all_action_refs.extend([(wf_name, ref) for ref in action_refs])
+
+                # Check 1: pull_request_target + checkout
+                prt = check_prt_checkout(content)
+                if prt:
+                    repo_findings.append({"check": "prt_checkout", "severity": prt[0],
+                                          "file": wf_name, "detail": prt[1]})
+
+                # Check 2: Self-hosted runners
+                sh = check_self_hosted(content, triggers)
+                if sh:
+                    repo_findings.append({"check": "self_hosted_runner", "severity": sh[0],
+                                          "file": wf_name, "detail": sh[1]})
+
+                # Check 3: Permissions
+                for sev, detail in check_permissions(content):
+                    repo_findings.append({"check": "broad_permissions", "severity": sev,
+                                          "file": wf_name, "detail": detail})
+
+                # Check 4: Cache poisoning
+                cp = check_cache_poisoning(content, triggers)
+                if cp:
+                    repo_findings.append({"check": "cache_poisoning", "severity": cp[0],
+                                          "file": wf_name, "detail": cp[1]})
+
+                # Check 5: Injection in workflow run blocks
+                injections = find_injection_in_run_blocks(content, context_label=f"workflow {wf_name}")
+                for sev, detail in injections:
+                    repo_findings.append({"check": "run_block_injection", "severity": sev,
+                                          "file": wf_name, "detail": detail})
+
+            # Check 6: Unpinned actions (repo-wide summary)
+            unpinned = []
+            third_party = []
+            for wf_name, ref in all_action_refs:
+                parsed = parse_action_ref(ref)
+                if parsed["type"] == "local":
+                    continue
+                if parsed["type"] == "remote":
+                    if not parsed["pinned"]:
+                        unpinned.append({"file": wf_name, "action": parsed["raw"],
+                                         "org": parsed["org"], "name": parsed["name"]})
+                    if parsed["org"] not in TRUSTED_ORGS:
+                        third_party.append({"file": wf_name, "action": parsed["raw"],
+                                            "org": parsed["org"], "name": parsed["name"]})
+
+            if unpinned:
+                by_action = {}
+                for u in unpinned:
+                    by_action.setdefault(u["name"], []).append(u["file"])
+                top = sorted(by_action.items(), key=lambda x: -len(x[1]))[:5]
+                detail_parts = [f"`{name}` ({len(files)})" for name, files in top]
+                repo_findings.append({
+                    "check": "unpinned_actions", "severity": "MEDIUM",
+                    "file": "(repo-wide)",
+                    "detail": (f"{len(unpinned)} unpinned action refs (mutable tags). "
+                               f"Top: {', '.join(detail_parts)}."),
+                    "count": len(unpinned), "total_refs": len(all_action_refs),
+                })
+
+            if third_party:
+                unique = sorted(set(t["name"] for t in third_party))
+                repo_findings.append({
+                    "check": "third_party_actions", "severity": "INFO",
+                    "file": "(repo-wide)",
+                    "detail": (f"{len(unique)} third-party actions: "
+                               f"{', '.join(unique[:10])}"
+                               + (f" +{len(unique)-10} more" if len(unique) > 10 else "")),
+                    "count": len(unique),
+                })
+
+            # --- Fetch extra files from GitHub ---
+
+            # Check 7: CODEOWNERS
+            resp = await github_get(f"{GITHUB_API}/repos/{owner}/{repo_name}/contents/.github/CODEOWNERS")
+            if resp and resp.status_code == 200:
+                try:
+                    co_url = resp.json().get("download_url")
+                    if co_url:
+                        co_resp = await http_client.get(co_url, follow_redirects=True, timeout=10.0)
+                        if co_resp.status_code == 200:
+                            co_content = co_resp.text
+                            has_github_rule = any(".github" in line and not line.strip().startswith("#")
+                                                  for line in co_content.split("\n"))
+                            if not has_github_rule:
+                                repo_findings.append({
+                                    "check": "codeowners_gap", "severity": "LOW",
+                                    "file": "CODEOWNERS",
+                                    "detail": "CODEOWNERS exists but has no rule covering `.github/`. "
+                                              "Workflow changes can bypass security-focused review.",
+                                })
+                except Exception:
+                    pass
+            elif resp and resp.status_code == 404:
+                repo_findings.append({
+                    "check": "missing_codeowners", "severity": "LOW",
+                    "file": "(missing)",
+                    "detail": "No CODEOWNERS file. Workflow changes have no mandatory review.",
+                })
+
+            # Check 8: Dependabot / Renovate
+            has_deps = False
+            for path in [".github/dependabot.yml", ".github/dependabot.yaml",
+                         "renovate.json", ".github/renovate.json", ".renovaterc.json"]:
+                resp = await github_get(f"{GITHUB_API}/repos/{owner}/{repo_name}/contents/{path}")
+                if resp and resp.status_code == 200:
+                    has_deps = True
+                    break
+
+            if not has_deps:
+                repo_findings.append({
+                    "check": "missing_dependency_updates", "severity": "INFO",
+                    "file": "(missing)",
+                    "detail": "No dependabot.yml or renovate.json found.",
+                })
+
+            # Check 9: Composite actions via recursive Git Trees API
+            # One API call gets the entire tree, handles any nesting depth
+            composite_findings = []
+            composite_analyzed = 0
+            composite_total = 0
+
+            resp = await github_get(
+                f"{GITHUB_API}/repos/{owner}/{repo_name}/git/trees/HEAD?recursive=1")
+            if resp and resp.status_code == 200:
+                try:
+                    tree = resp.json().get("tree", [])
+                    action_files = [
+                        item["path"] for item in tree
+                        if item.get("path", "").startswith(".github/actions/")
+                        and item.get("path", "").endswith(("/action.yml", "/action.yaml"))
+                        and item.get("type") == "blob"
+                    ]
+                    composite_total = len(action_files)
+
+                    for action_path in action_files:
+                        # Extract action name: .github/actions/build/rust/action.yml -> build/rust
+                        action_name = action_path.replace(".github/actions/", "").rsplit("/", 1)[0]
+
+                        # Fetch the action.yml content
+                        aresp = await github_get(
+                            f"{GITHUB_API}/repos/{owner}/{repo_name}/contents/{action_path}")
+                        if not aresp or aresp.status_code != 200:
+                            continue
+
+                        try:
+                            dl_url = aresp.json().get("download_url")
+                            if not dl_url:
+                                continue
+                            dl_resp = await http_client.get(dl_url, follow_redirects=True, timeout=10.0)
+                            if dl_resp.status_code != 200:
+                                continue
+                            action_content = dl_resp.text
+                        except Exception:
+                            continue
+
+                        composite_analyzed += 1
+                        short_path = f".github/actions/{action_name}/action.yml"
+
+                        # Store for other agents
+                        workflow_ns.set(f"{repo_name}/{short_path}", action_content)
+
+                        # Run injection checks
+                        context = f"composite action .github/actions/{action_name}"
+                        injections = find_injection_in_run_blocks(action_content, context_label=context)
+                        for sev, detail in injections:
+                            composite_findings.append({
+                                "check": "composite_action_injection",
+                                "severity": sev,
+                                "file": short_path,
+                                "detail": detail,
+                            })
+
+                        # Check unpinned actions inside composite
+                        ca_refs = extract_action_refs(action_content)
+                        for ref in ca_refs:
+                            parsed = parse_action_ref(ref)
+                            if parsed["type"] == "remote" and not parsed["pinned"]:
+                                composite_findings.append({
+                                    "check": "composite_action_unpinned",
+                                    "severity": "MEDIUM",
+                                    "file": short_path,
+                                    "detail": (f"Composite action uses unpinned action `{parsed['raw']}`. "
+                                               "Supply chain risk."),
+                                })
+
+                        # Check inputs.* directly in run blocks (hidden injection)
+                        has_input_injection = False
+                        in_run = False
+                        run_indent = 0
+                        for cline in action_content.split("\n"):
+                            cs = cline.strip()
+                            if cs.startswith("run:"):
+                                in_run = True
+                                run_indent = len(cline) - len(cline.lstrip())
+                                rest = cs[4:].strip()
+                                if rest.startswith("|") or rest.startswith(">"):
+                                    continue
+                                if "inputs." in rest and "${{" in rest:
+                                    has_input_injection = True
+                                    break
+                            elif in_run:
+                                ci = len(cline) - len(cline.lstrip())
+                                if cs and ci <= run_indent:
+                                    in_run = False
+                                elif "inputs." in cline and "${{" in cline:
+                                    has_input_injection = True
+                                    break
+
+                        if has_input_injection:
+                            composite_findings.append({
+                                "check": "composite_action_input_injection",
+                                "severity": "HIGH",
+                                "file": short_path,
+                                "detail": (f"Composite action `{action_name}` directly interpolates "
+                                           "`inputs.*` in run block. Callers may pass untrusted values — "
+                                           "the injection is hidden from workflow-level analysis."),
+                            })
+
+                except Exception as e:
+                    print(f"  Error scanning composite actions for {repo_name}: {str(e)[:100]}", flush=True)
+
+            # Deduplicate composite findings per file before adding
+            composite_findings = deduplicate_findings(composite_findings)
+            repo_findings.extend(composite_findings)
+
+            if composite_total > 0:
+                repo_findings.append({
+                    "check": "composite_actions_scanned", "severity": "INFO",
+                    "file": ".github/actions/",
+                    "detail": (f"{composite_analyzed}/{composite_total} composite actions analyzed. "
+                               f"{len(composite_findings)} finding(s)."),
+                })
+
+            # Deduplicate all findings for this repo
+            repo_findings = deduplicate_findings(repo_findings)
+
+            # Store
+            security_ns.set(f"findings:{repo_name}", repo_findings)
+            if repo_findings:
+                all_findings[repo_name] = repo_findings
+
+            await asyncio.sleep(0.1)
+
+        print(f"\n{'=' * 60}", flush=True)
+        print(f"Security scan complete! {repos_scanned} repos", flush=True)
+        total_findings = sum(len(f) for f in all_findings.values())
+        print(f"Total findings: {total_findings} across {len(all_findings)} repos", flush=True)
+        print(f"{'=' * 60}\n", flush=True)
+
+        # ===== Build report =====
+        report_title = f"CI Security Scan: {owner}"
+
+        severity_counts = {}
+        check_counts = {}
+        for repo, findings in all_findings.items():
+            for f in findings:
+                sev = f.get("severity", "INFO")
+                severity_counts[sev] = severity_counts.get(sev, 0) + 1
+                chk = f.get("check", "unknown")
+                check_counts[chk] = check_counts.get(chk, 0) + 1
+
+        lines = []
+        lines.append(f"Analyzed **{repos_scanned}** repositories using cached workflow YAML "
+                     f"from the Publishing Analyzer.\n")
+
+        lines.append("## Executive Summary\n")
+        lines.append("| Severity | Count |")
+        lines.append("|----------|-------|")
+        for sev in ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"]:
+            count = severity_counts.get(sev, 0)
+            if count > 0:
+                lines.append(f"| **{sev}** | **{count}** |")
+        lines.append("")
+
+        check_descriptions = {
+            "prt_checkout": "pull_request_target + checkout of untrusted PR code",
+            "self_hosted_runner": "Self-hosted runners exposed to PR triggers",
+            "broad_permissions": "Overly broad GITHUB_TOKEN permissions",
+            "cache_poisoning": "Potential cache poisoning via PR-controlled keys",
+            "run_block_injection": "Direct ${{ }} interpolation in workflow run blocks",
+            "unpinned_actions": "Mutable tag refs (not SHA-pinned)",
+            "third_party_actions": "Actions from unverified third-party sources",
+            "codeowners_gap": "CODEOWNERS missing .github/ coverage",
+            "missing_codeowners": "No CODEOWNERS file",
+            "missing_dependency_updates": "No dependabot/renovate configuration",
+            "composite_actions_scanned": "Composite actions analyzed",
+            "composite_action_injection": "Injection in composite action run block",
+            "composite_action_unpinned": "Unpinned action ref inside composite action",
+            "composite_action_input_injection": "Composite action passes inputs.* directly to run block",
+        }
+
+        lines.append("## Findings by Check Type\n")
+        lines.append("| Check | Count | Description |")
+        lines.append("|-------|-------|-------------|")
+        for chk, count in sorted(check_counts.items(), key=lambda x: -x[1]):
+            desc = check_descriptions.get(chk, chk)
+            lines.append(f"| {chk} | {count} | {desc} |")
+        lines.append("")
+
+        by_severity = {"CRITICAL": [], "HIGH": [], "MEDIUM": [], "LOW": [], "INFO": []}
+        for repo, findings in all_findings.items():
+            for f in findings:
+                sev = f.get("severity", "INFO")
+                if sev in by_severity:
+                    by_severity[sev].append((repo, f))
+
+        if by_severity["CRITICAL"]:
+            lines.append("## CRITICAL Findings\n")
+            lines.append("Untrusted external input directly interpolated in shell execution contexts.\n")
+            for repo, f in sorted(by_severity["CRITICAL"], key=lambda x: (x[0], x[1].get("file", ""))):
+                lines.append(f"- **{owner}/{repo}** (`{f['file']}`): [{f['check']}] {f['detail']}")
+            lines.append("")
+
+        if by_severity["HIGH"]:
+            lines.append("## HIGH Findings\n")
+            for repo, f in sorted(by_severity["HIGH"], key=lambda x: (x[0], x[1].get("file", ""))):
+                lines.append(f"- **{owner}/{repo}** (`{f['file']}`): [{f['check']}] {f['detail']}")
+            lines.append("")
+
+        if by_severity["MEDIUM"]:
+            lines.append("## MEDIUM Findings\n")
+            lines.append(f"<details>\n<summary>Show {len(by_severity['MEDIUM'])} medium findings</summary>\n")
+            for repo, f in sorted(by_severity["MEDIUM"], key=lambda x: (x[0], x[1].get("file", ""))):
+                lines.append(f"- **{owner}/{repo}** (`{f['file']}`): [{f['check']}] {f['detail']}")
+            lines.append(f"\n</details>\n")
+
+        if by_severity["LOW"]:
+            lines.append("## LOW Findings\n")
+            lines.append(f"<details>\n<summary>Show {len(by_severity['LOW'])} low findings</summary>\n")
+            for repo, f in sorted(by_severity["LOW"], key=lambda x: (x[0], x[1].get("file", ""))):
+                lines.append(f"- **{owner}/{repo}** (`{f['file']}`): [{f['check']}] {f['detail']}")
+            lines.append(f"\n</details>\n")
+
+        if by_severity["INFO"]:
+            lines.append("## INFO Findings\n")
+            lines.append(f"<details>\n<summary>Show {len(by_severity['INFO'])} info findings</summary>\n")
+            for repo, f in sorted(by_severity["INFO"], key=lambda x: (x[0], x[1].get("file", ""))):
+                lines.append(f"- **{owner}/{repo}** (`{f['file']}`): [{f['check']}] {f['detail']}")
+            lines.append(f"\n</details>\n")
+
+        lines.append("## Detailed Results by Repository\n")
+        for repo in sorted(all_findings.keys()):
+            findings = all_findings[repo]
+            if not findings:
+                continue
+            sev_summary = {}
+            for f in findings:
+                sev_summary[f["severity"]] = sev_summary.get(f["severity"], 0) + 1
+            sev_str = ", ".join(f"{s}: {c}" for s, c in sorted(sev_summary.items()))
+
+            lines.append(f"### {owner}/{repo}\n")
+            lines.append(f"**{len(findings)}** findings | {sev_str}\n")
+
+            sev_order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "INFO": 4}
+            for f in sorted(findings, key=lambda x: sev_order.get(x["severity"], 99)):
+                lines.append(f"- **[{f['severity']}]** `{f['file']}` — [{f['check']}] {f['detail']}")
+            lines.append("")
+
+        lines.append("---\n")
+        lines.append(f"*Findings cached in `ci-security:{owner}`. "
+                     f"Set `clear_cache` to `true` to re-scan.*")
+
+        report_body = "\n".join(lines)
+
+        def to_anchor(text):
+            anchor = text.lower().strip()
+            anchor = re.sub(r'[^\w\s-]', '', anchor)
+            anchor = re.sub(r'\s+', '-', anchor)
+            anchor = re.sub(r'-+', '-', anchor)
+            return anchor.strip('-')
+
+        toc_lines = [f"# {report_title}\n", "## Contents\n"]
+        toc_lines.append(f"- [Executive Summary](#{to_anchor('Executive Summary')})")
+        toc_lines.append(f"- [Findings by Check Type](#{to_anchor('Findings by Check Type')})")
+        for sev in ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"]:
+            if by_severity.get(sev):
+                toc_lines.append(f"- [{sev} Findings](#{to_anchor(f'{sev} Findings')}) ({len(by_severity[sev])})")
+        toc_lines.append(f"- [Detailed Results](#{to_anchor('Detailed Results by Repository')})")
+        for repo in sorted(all_findings.keys()):
+            toc_lines.append(f"  - [{owner}/{repo}](#{to_anchor(f'{owner}/{repo}')})")
+
+        toc = "\n".join(toc_lines)
+        full_report = toc + "\n\n---\n\n" + report_body
+
+        security_ns.set("latest_report", full_report)
+        security_ns.set("latest_stats", {
+            "repos_scanned": repos_scanned,
+            "repos_with_findings": len(all_findings),
+            "total_findings": total_findings,
+            "severity_counts": severity_counts,
+            "check_counts": check_counts,
+        })
+
+        return {"outputText": full_report}
+
+    finally:
+        await http_client.aclose()
