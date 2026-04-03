@@ -25,11 +25,9 @@ async def run(input_dict, tools):
         print(f"Security report: {len(sec_report or '')} chars", flush=True)
 
         # --- Parse per-repo ecosystems from publishing report text ---
-        # Matches lines like: ### apache/iggy\n**4** ... | Ecosystems: **crates_io, docker_hub** | ...
         repo_ecosystems = {}
-        repo_categories = {}  # repo -> {release: N, snapshot: N}
+        repo_categories = {}
         if pub_report:
-            # Match detailed results headers
             header_pattern = re.compile(
                 r'### ' + re.escape(f'{owner}/') + r'(\S+)\s*\n+'
                 r'\*\*(\d+)\*\* release/snapshot workflows \| Ecosystems: \*\*([^*]+)\*\*'
@@ -53,8 +51,7 @@ async def run(input_dict, tools):
         all_sec_keys = security_ns.list_keys()
         finding_keys = [k for k in all_sec_keys if k.startswith("findings:")]
 
-        repo_security = {}  # repo -> {severities, total, worst, top_checks}
-        SEV_ORDER = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "INFO": 4}
+        repo_security = {}
 
         for k in finding_keys:
             repo = k.replace("findings:", "")
@@ -68,7 +65,6 @@ async def run(input_dict, tools):
                 sev = f.get("severity", "INFO")
                 sev_counts[sev] = sev_counts.get(sev, 0) + 1
                 chk = f.get("check", "unknown")
-                # Skip info-level noise for top checks
                 if sev != "INFO":
                     check_counts[chk] = check_counts.get(chk, 0) + 1
 
@@ -78,7 +74,6 @@ async def run(input_dict, tools):
                     worst = s
                     break
 
-            # Top 3 non-INFO checks by count
             top_checks = sorted(check_counts.items(), key=lambda x: -x[1])[:3]
 
             repo_security[repo] = {
@@ -91,7 +86,6 @@ async def run(input_dict, tools):
         print(f"Security data for {len(repo_security)} repos", flush=True)
 
         # --- Parse trusted publishing opportunities ---
-        # Which repos have TP opportunities (using long-lived tokens where OIDC is available)
         tp_repos = set()
         tp_opportunities = pub_stats.get("trusted_publishing_opportunities", [])
         if isinstance(tp_opportunities, list):
@@ -100,7 +94,6 @@ async def run(input_dict, tools):
                     tp_repos.add(opp.get("repo", ""))
                 elif isinstance(opp, str):
                     tp_repos.add(opp)
-        # Also try parsing from report text for reliability
         if pub_report:
             tp_section = False
             for line in pub_report.split("\n"):
@@ -118,14 +111,6 @@ async def run(input_dict, tools):
 
         print(f"Trusted publishing opportunity repos: {len(tp_repos)}", flush=True)
 
-        # --- Identify repos already using OIDC ---
-        oidc_repos = set()
-        if pub_report:
-            for line in pub_report.split("\n"):
-                if "OIDC" in line and ("trusted publishing" in line.lower() or "id-token" in line.lower()):
-                    # Find which repo section we're in
-                    pass  # Complex to parse; skip for now
-
         # --- Build combined risk table ---
         publishing_repos = set(pub_stats.get("publishing_repos", []))
         all_repos = publishing_repos | set(repo_security.keys())
@@ -142,7 +127,6 @@ async def run(input_dict, tools):
             publishes = repo in publishing_repos
             has_tp_opportunity = repo in tp_repos
 
-            # Risk score for sorting: publishing breadth * security severity
             eco_score = len(ecosystems) if ecosystems else (1 if publishes else 0)
             sev_score = {"CRITICAL": 100, "HIGH": 50, "MEDIUM": 10, "LOW": 3, "INFO": 1, "—": 0}.get(worst, 0)
             risk_score = eco_score * sev_score + total
@@ -165,6 +149,8 @@ async def run(input_dict, tools):
         # --- Classify into tiers ---
         critical_repos = [r for r in repo_rows if r["worst"] == "CRITICAL"]
         high_repos = [r for r in repo_rows if r["worst"] == "HIGH"]
+        high_publishing = [r for r in high_repos if r["publishes"]]
+        high_nonpublishing = [r for r in high_repos if not r["publishes"]]
         medium_repos = [r for r in repo_rows if r["worst"] == "MEDIUM" and r["publishes"]]
         low_repos = [r for r in repo_rows if r["worst"] in ("LOW", "INFO", "—") and r["publishes"]]
 
@@ -203,6 +189,11 @@ async def run(input_dict, tools):
                 return ""
             return ", ".join(f"{chk} ({n})" for chk, n in top_checks)
 
+        def plural(n, singular, plural_form=None):
+            if plural_form is None:
+                plural_form = singular + "s"
+            return singular if n == 1 else plural_form
+
         lines = []
         lines.append(f"# Apache GitHub Review: Combined Risk Assessment\n")
         lines.append(f"Cross-referencing CI publishing analysis with security scan results "
@@ -229,24 +220,27 @@ async def run(input_dict, tools):
         lines.append(f"| Repos publishing to registries | {len(publishing_repos)} |")
         lines.append(f"| Total security findings | {sec_stats.get('total_findings', '?')} |")
         sev = sec_stats.get("severity_counts", {})
-        lines.append(f"| CRITICAL findings | {sev.get('CRITICAL', 0)} |")
-        lines.append(f"| HIGH findings | {sev.get('HIGH', 0)} |")
-        lines.append(f"| Repos needing trusted publishing migration | {len(tp_repos)} |")
+        if sev.get("CRITICAL", 0):
+            lines.append(f"| CRITICAL findings | {sev.get('CRITICAL', 0)} |")
+        if sev.get("HIGH", 0):
+            lines.append(f"| HIGH findings | {sev.get('HIGH', 0)} |")
+        if tp_repos:
+            lines.append(f"| Repos needing trusted publishing migration | {len(tp_repos)} |")
         eco = pub_stats.get("ecosystem_counts", {})
-        # Filter out documentation/CI targets for the publishing risk summary
-        doc_targets = {"codecov", "github_pages", "surge_sh", "s3", "gcr"}
+        doc_targets = {"codecov", "github_pages", "surge_sh", "s3", "gcr", "ghcr"}
         release_eco = {k: v for k, v in eco.items() if k not in doc_targets}
         top_eco = sorted(release_eco.items(), key=lambda x: -x[1])[:5]
-        eco_summary = ", ".join(f"{e} ({c})" for e, c in top_eco)
+        eco_summary = ", ".join(f"{e} ({c})" for e, c in top_eco) if top_eco else "none"
         lines.append(f"| Top ecosystems | {eco_summary} |")
         lines.append("")
 
-        # --- CRITICAL + HIGH tier ---
-        if critical_repos or high_repos:
+        # --- CRITICAL + HIGH publishing tier ---
+        immediate = critical_repos + high_publishing
+        if immediate:
             lines.append("## Immediate Attention Required\n")
             lines.append("Repos with CRITICAL or HIGH security findings that also publish packages.\n")
 
-            for r in critical_repos + high_repos:
+            for r in immediate:
                 repo = r["repo"]
                 lines.append(f"### {owner}/{repo}\n")
 
@@ -278,7 +272,27 @@ async def run(input_dict, tools):
 
                 details.append(f"**Details:** {repo_pub_link(repo)} · {repo_sec_link(repo)}")
 
-                # Join with double-space + newline for markdown line breaks
+                lines.append("  \n".join(details))
+                lines.append("")
+
+        # --- HIGH non-publishing repos ---
+        if high_nonpublishing:
+            lines.append("## Non-Publishing Repos with HIGH Findings\n")
+            lines.append("These repos do not publish packages but have HIGH-severity security findings "
+                         "in their CI workflows.\n")
+
+            for r in high_nonpublishing:
+                repo = r["repo"]
+                lines.append(f"### {owner}/{repo}\n")
+
+                details = []
+                details.append(f"**Security:** {r['total']} findings — {sev_summary(r['sev_counts'])}")
+
+                if r["top_checks"]:
+                    details.append(f"**Top issues:** {check_summary(r['top_checks'])}")
+
+                details.append(f"**Details:** {repo_sec_link(repo)}")
+
                 lines.append("  \n".join(details))
                 lines.append("")
 
@@ -291,7 +305,7 @@ async def run(input_dict, tools):
 
             for r in medium_repos:
                 repo = r["repo"]
-                eco = eco_str(r["ecosystems"]) if r["ecosystems"] else "npm"
+                eco = eco_str(r["ecosystems"]) if r["ecosystems"] else "—"
                 top = r["top_checks"][0][0] if r["top_checks"] else "unpinned_actions"
                 tp = "migrate" if r["has_tp"] else "—"
                 links = f"{repo_pub_link(repo)} · {repo_sec_link(repo)}"
@@ -301,10 +315,11 @@ async def run(input_dict, tools):
 
         # --- LOW tier summary ---
         if low_repos:
+            n_low = len(low_repos)
             lines.append("## Low Risk: Publishing Repos\n")
-            lines.append(f"{len(low_repos)} repos publish packages with only LOW/INFO-level security findings "
-                         f"(missing CODEOWNERS, no dependabot config).\n")
-            lines.append(f"<details>\n<summary>Show {len(low_repos)} repos</summary>\n")
+            lines.append(f"{n_low} {plural(n_low, 'repo')} {plural(n_low, 'publishes', 'publish')} packages with only LOW/INFO-level "
+                         f"security findings (missing CODEOWNERS, no dependabot config).\n")
+            lines.append(f"<details>\n<summary>Show {n_low} {plural(n_low, 'repo')}</summary>\n")
             for r in low_repos:
                 repo = r["repo"]
                 eco = eco_str(r["ecosystems"]) if r["ecosystems"] else "—"
@@ -312,38 +327,46 @@ async def run(input_dict, tools):
                              f"({repo_pub_link(repo)} · {repo_sec_link(repo)})")
             lines.append(f"\n</details>\n")
 
-        # --- Trusted Publishing summary ---
-        lines.append("## Trusted Publishing Opportunities\n")
-        lines.append(f"**{len(tp_repos)}** repos use long-lived tokens to publish to ecosystems that support "
-                     f"OIDC trusted publishing. Migrating eliminates stored secrets.\n")
-        lines.append(f"Full details: [{PUB} → Trusted Publishing]"
-                     f"({PUB}#trusted-publishing-migration-opportunities)\n")
+        # --- Trusted Publishing summary (skip if none) ---
+        if tp_repos:
+            n_tp = len(tp_repos)
+            lines.append("## Trusted Publishing Opportunities\n")
+            lines.append(f"**{n_tp}** {plural(n_tp, 'repo')} {plural(n_tp, 'uses', 'use')} long-lived tokens to publish to ecosystems "
+                         f"that support OIDC trusted publishing. Migrating eliminates stored secrets.\n")
+            lines.append(f"Full details: [{PUB} → Trusted Publishing]"
+                         f"({PUB}#trusted-publishing-migration-opportunities)\n")
 
-        # Group by ecosystem from pub_report
-        tp_ecosystems = {}
-        if pub_report:
-            current_eco = None
-            for line in pub_report.split("\n"):
-                if line.startswith("### ") and "Trusted Publishing" not in line:
-                    # Check if this is an ecosystem header inside TP section
-                    eco_name = line[4:].strip()
-                    if eco_name in ("crates.io", "npm", "NuGet", "PyPI", "RubyGems"):
-                        current_eco = eco_name
+            tp_ecosystems = {}
+            if pub_report:
+                current_eco = None
+                for line in pub_report.split("\n"):
+                    if line.startswith("### ") and "Trusted Publishing" not in line:
+                        eco_name = line[4:].strip()
+                        if eco_name in ("crates.io", "npm", "NuGet", "PyPI", "RubyGems"):
+                            current_eco = eco_name
+                            continue
+                    if current_eco and line.startswith("## "):
+                        current_eco = None
                         continue
-                if current_eco and line.startswith("## "):
-                    current_eco = None
-                    continue
-                if current_eco and "| " in line and "`" in line:
-                    parts = [p.strip() for p in line.split("|")]
-                    if len(parts) > 2 and parts[1] and parts[1] != "Repository":
-                        tp_ecosystems.setdefault(current_eco, []).append(parts[1])
+                    if current_eco and "| " in line and "`" in line:
+                        parts = [p.strip() for p in line.split("|")]
+                        if len(parts) > 2 and parts[1] and parts[1] != "Repository":
+                            tp_ecosystems.setdefault(current_eco, []).append(parts[1])
 
-        for eco, repos in sorted(tp_ecosystems.items()):
-            unique = sorted(set(repos))
-            lines.append(f"- **{eco}**: {', '.join(unique)}")
-        lines.append("")
+            for eco, repos in sorted(tp_ecosystems.items()):
+                unique = sorted(set(repos))
+                lines.append(f"- **{eco}**: {', '.join(unique)}")
+            lines.append("")
 
-        # --- Key recommendations ---
+        # --- Summary when nothing in the intersection ---
+        if not publishing_repos:
+            lines.append("## Summary\n")
+            lines.append(f"None of the {pub_stats.get('repos_scanned', '?')} scanned repos publish packages to "
+                         f"registries. Security findings are limited to general CI hygiene "
+                         f"(unpinned actions, missing CODEOWNERS). See the "
+                         f"[security report]({SEC}) for details.\n")
+
+        # --- Key recommendations (only include items with nonzero counts) ---
         lines.append("## Key Recommendations\n")
 
         rec_num = 1
@@ -352,43 +375,50 @@ async def run(input_dict, tools):
             crit_names = ", ".join("`" + r["repo"] + "`" for r in critical_repos)
             verb = "has" if len(critical_repos) == 1 else "have"
             lines.append(f"{rec_num}. **Fix CRITICAL findings immediately.** "
-                         f"{crit_names} {verb} "
-                         f"exploitable vulnerabilities in publishing workflows.")
+                         f"{crit_names} {verb} exploitable CI vulnerabilities "
+                         f"([details]({SEC})).")
             rec_num += 1
 
-        lines.append(f"{rec_num}. **Migrate to trusted publishing.** "
-                     f"{len(tp_repos)} repos can eliminate long-lived secrets by adopting OIDC. "
-                     f"Start with repos publishing to PyPI and npm — "
-                     f"[migration guide]({PUB}#trusted-publishing-migration-opportunities).")
-        rec_num += 1
+        if tp_repos:
+            n_tp = len(tp_repos)
+            lines.append(f"{rec_num}. **Migrate to trusted publishing.** "
+                         f"{n_tp} {plural(n_tp, 'repo')} can eliminate long-lived secrets by adopting OIDC. "
+                         f"Start with repos publishing to PyPI and npm — "
+                         f"[migration guide]({PUB}#trusted-publishing-migration-opportunities).")
+            rec_num += 1
 
         if high_repos:
-            # Count all repos that have any HIGH findings (not just worst=HIGH)
             repos_with_high = [r for r in repo_rows
                                if r["sev_counts"].get("HIGH", 0) > 0]
+            n_high = len(repos_with_high)
             lines.append(f"{rec_num}. **Review composite action injection patterns.** "
-                         f"{len(repos_with_high)} repos have HIGH findings from `inputs.*` directly interpolated "
+                         f"{n_high} {plural(n_high, 'repo')} {plural(n_high, 'has', 'have')} "
+                         f"HIGH findings from `inputs.*` directly interpolated "
                          f"in composite action run blocks. While these are called from trusted contexts today, "
                          f"they create hidden injection surfaces.")
             rec_num += 1
 
-        lines.append(f"{rec_num}. **Pin actions to SHA hashes.** "
-                     f"All {sec_stats.get('repos_with_findings', '?')} repos use mutable tag refs. "
-                     f"See the [unpinned actions findings]({SEC}#medium-findings) for per-repo counts.")
-        rec_num += 1
+        repos_with_findings = sec_stats.get("repos_with_findings", 0)
+        if repos_with_findings:
+            n_repos = repos_with_findings
+            lines.append(f"{rec_num}. **Pin actions to SHA hashes.** "
+                         f"{'The scanned repo uses' if n_repos == 1 else f'All {n_repos} repos use'} "
+                         f"mutable tag refs. "
+                         f"See the [unpinned actions findings]({SEC}#medium-findings) for per-repo counts.")
+            rec_num += 1
 
-        # Count repos with missing_codeowners or codeowners_gap findings
-        no_codeowners = 0
-        for repo, sec in repo_security.items():
-            for chk, cnt in sec.get("top_checks", []):
-                pass  # top_checks doesn't have all checks
-        # Count from check_counts in sec_stats
         codeowners_missing = sec_stats.get("check_counts", {}).get("missing_codeowners", 0)
         codeowners_gap = sec_stats.get("check_counts", {}).get("codeowners_gap", 0)
-        lines.append(f"{rec_num}. **Add CODEOWNERS with `.github/` coverage.** "
-                     f"{codeowners_missing} repos have no CODEOWNERS file and "
-                     f"{codeowners_gap} have CODEOWNERS without `.github/` rules. "
-                     f"Workflow changes can bypass security review.")
+        if codeowners_missing or codeowners_gap:
+            parts = []
+            if codeowners_missing:
+                parts.append(f"{codeowners_missing} {plural(codeowners_missing, 'repo')} "
+                             f"{plural(codeowners_missing, 'has', 'have')} no CODEOWNERS file")
+            if codeowners_gap:
+                parts.append(f"{codeowners_gap} {plural(codeowners_gap, 'has', 'have')} CODEOWNERS "
+                             f"without `.github/` rules")
+            lines.append(f"{rec_num}. **Add CODEOWNERS with `.github/` coverage.** "
+                         f"{' and '.join(parts)}. Workflow changes can bypass security review.")
         lines.append("")
 
         lines.append("---\n")
