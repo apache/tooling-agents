@@ -487,111 +487,120 @@ async def run(input_dict, tools):
                     "detail": "No dependabot.yml or renovate.json found.",
                 })
 
-            # Check 9: Composite actions via recursive Git Trees API
-            # One API call gets the entire tree, handles any nesting depth
+            # Check 9: Composite actions — read from prefetch cache or fall back to GitHub
             composite_findings = []
             composite_analyzed = 0
             composite_total = 0
 
-            resp = await github_get(
-                f"{GITHUB_API}/repos/{owner}/{repo_name}/git/trees/HEAD?recursive=1")
-            if resp and resp.status_code == 200:
-                try:
-                    tree = resp.json().get("tree", [])
-                    action_files = [
-                        item["path"] for item in tree
-                        if item.get("path", "").startswith(".github/actions/")
-                        and item.get("path", "").endswith(("/action.yml", "/action.yaml"))
-                        and item.get("type") == "blob"
-                    ]
-                    composite_total = len(action_files)
+            # Collect (action_name, short_path, action_content) tuples
+            composite_items = []
 
-                    for action_path in action_files:
-                        # Extract action name: .github/actions/build/rust/action.yml -> build/rust
-                        action_name = action_path.replace(".github/actions/", "").rsplit("/", 1)[0]
-
-                        # Fetch the action.yml content
-                        aresp = await github_get(
-                            f"{GITHUB_API}/repos/{owner}/{repo_name}/contents/{action_path}")
-                        if not aresp or aresp.status_code != 200:
-                            continue
-
-                        try:
-                            dl_url = aresp.json().get("download_url")
-                            if not dl_url:
+            composites_meta = workflow_ns.get(f"__composites__:{repo_name}")
+            if composites_meta and composites_meta.get("complete"):
+                # Read from prefetch cache
+                cached_actions = composites_meta.get("actions", [])
+                for short_path in cached_actions:
+                    action_content = workflow_ns.get(f"{repo_name}/{short_path}")
+                    if action_content:
+                        action_name = short_path.replace(".github/actions/", "").rsplit("/", 1)[0]
+                        composite_items.append((action_name, short_path, action_content))
+            else:
+                # Fall back to GitHub API
+                resp = await github_get(
+                    f"{GITHUB_API}/repos/{owner}/{repo_name}/git/trees/HEAD?recursive=1")
+                if resp and resp.status_code == 200:
+                    try:
+                        tree = resp.json().get("tree", [])
+                        action_files = [
+                            item["path"] for item in tree
+                            if item.get("path", "").startswith(".github/actions/")
+                            and item.get("path", "").endswith(("/action.yml", "/action.yaml"))
+                            and item.get("type") == "blob"
+                        ]
+                        for action_path in action_files:
+                            action_name = action_path.replace(".github/actions/", "").rsplit("/", 1)[0]
+                            aresp = await github_get(
+                                f"{GITHUB_API}/repos/{owner}/{repo_name}/contents/{action_path}")
+                            if not aresp or aresp.status_code != 200:
                                 continue
-                            dl_resp = await http_client.get(dl_url, follow_redirects=True, timeout=10.0)
-                            if dl_resp.status_code != 200:
-                                continue
-                            action_content = dl_resp.text
-                        except Exception:
-                            continue
-
-                        composite_analyzed += 1
-                        short_path = f".github/actions/{action_name}/action.yml"
-
-                        # Store for other agents
-                        workflow_ns.set(f"{repo_name}/{short_path}", action_content)
-
-                        # Run injection checks
-                        context = f"composite action .github/actions/{action_name}"
-                        injections = find_injection_in_run_blocks(action_content, context_label=context)
-                        for sev, detail in injections:
-                            composite_findings.append({
-                                "check": "composite_action_injection",
-                                "severity": sev,
-                                "file": short_path,
-                                "detail": detail,
-                            })
-
-                        # Check unpinned actions inside composite
-                        ca_refs = extract_action_refs(action_content)
-                        for ref in ca_refs:
-                            parsed = parse_action_ref(ref)
-                            if parsed["type"] == "remote" and not parsed["pinned"]:
-                                composite_findings.append({
-                                    "check": "composite_action_unpinned",
-                                    "severity": "MEDIUM",
-                                    "file": short_path,
-                                    "detail": (f"Composite action uses unpinned action `{parsed['raw']}`. "
-                                               "Supply chain risk."),
-                                })
-
-                        # Check inputs.* directly in run blocks (hidden injection)
-                        has_input_injection = False
-                        in_run = False
-                        run_indent = 0
-                        for cline in action_content.split("\n"):
-                            cs = cline.strip()
-                            if cs.startswith("run:"):
-                                in_run = True
-                                run_indent = len(cline) - len(cline.lstrip())
-                                rest = cs[4:].strip()
-                                if rest.startswith("|") or rest.startswith(">"):
+                            try:
+                                dl_url = aresp.json().get("download_url")
+                                if not dl_url:
                                     continue
-                                if "inputs." in rest and "${{" in rest:
-                                    has_input_injection = True
-                                    break
-                            elif in_run:
-                                ci = len(cline) - len(cline.lstrip())
-                                if cs and ci <= run_indent:
-                                    in_run = False
-                                elif "inputs." in cline and "${{" in cline:
-                                    has_input_injection = True
-                                    break
+                                dl_resp = await http_client.get(dl_url, follow_redirects=True, timeout=10.0)
+                                if dl_resp.status_code != 200:
+                                    continue
+                                action_content = dl_resp.text
+                                short_path = f".github/actions/{action_name}/action.yml"
+                                workflow_ns.set(f"{repo_name}/{short_path}", action_content)
+                                composite_items.append((action_name, short_path, action_content))
+                            except Exception:
+                                continue
+                    except Exception as e:
+                        print(f"  Error scanning composite actions for {repo_name}: {str(e)[:100]}", flush=True)
 
-                        if has_input_injection:
-                            composite_findings.append({
-                                "check": "composite_action_input_injection",
-                                "severity": "HIGH",
-                                "file": short_path,
-                                "detail": (f"Composite action `{action_name}` directly interpolates "
-                                           "`inputs.*` in run block. Callers may pass untrusted values — "
-                                           "the injection is hidden from workflow-level analysis."),
-                            })
+            composite_total = len(composite_items)
 
-                except Exception as e:
-                    print(f"  Error scanning composite actions for {repo_name}: {str(e)[:100]}", flush=True)
+            # Analyze each composite action
+            for action_name, short_path, action_content in composite_items:
+                composite_analyzed += 1
+
+                # Run injection checks
+                context = f"composite action .github/actions/{action_name}"
+                injections = find_injection_in_run_blocks(action_content, context_label=context)
+                for sev, detail in injections:
+                    composite_findings.append({
+                        "check": "composite_action_injection",
+                        "severity": sev,
+                        "file": short_path,
+                        "detail": detail,
+                    })
+
+                # Check unpinned actions inside composite
+                ca_refs = extract_action_refs(action_content)
+                for ref in ca_refs:
+                    parsed = parse_action_ref(ref)
+                    if parsed["type"] == "remote" and not parsed["pinned"]:
+                        composite_findings.append({
+                            "check": "composite_action_unpinned",
+                            "severity": "MEDIUM",
+                            "file": short_path,
+                            "detail": (f"Composite action uses unpinned action `{parsed['raw']}`. "
+                                       "Supply chain risk."),
+                        })
+
+                # Check inputs.* directly in run blocks (hidden injection)
+                has_input_injection = False
+                in_run = False
+                run_indent = 0
+                for cline in action_content.split("\n"):
+                    cs = cline.strip()
+                    if cs.startswith("run:"):
+                        in_run = True
+                        run_indent = len(cline) - len(cline.lstrip())
+                        rest = cs[4:].strip()
+                        if rest.startswith("|") or rest.startswith(">"):
+                            continue
+                        if "inputs." in rest and "${{" in rest:
+                            has_input_injection = True
+                            break
+                    elif in_run:
+                        ci = len(cline) - len(cline.lstrip())
+                        if cs and ci <= run_indent:
+                            in_run = False
+                        elif "inputs." in cline and "${{" in cline:
+                            has_input_injection = True
+                            break
+
+                if has_input_injection:
+                    composite_findings.append({
+                        "check": "composite_action_input_injection",
+                        "severity": "HIGH",
+                        "file": short_path,
+                        "detail": (f"Composite action `{action_name}` directly interpolates "
+                                   "`inputs.*` in run block. Callers may pass untrusted values — "
+                                   "the injection is hidden from workflow-level analysis."),
+                    })
 
             # Deduplicate composite findings per file before adding
             composite_findings = deduplicate_findings(composite_findings)

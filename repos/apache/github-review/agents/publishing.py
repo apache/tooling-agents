@@ -407,19 +407,24 @@ async def run(input_dict, tools):
 
         print(f"\nStarting workflow scan of {len(repo_names)} repos...\n", flush=True)
 
-        # ===== STEP 2: Fetch workflows and classify =====
+        # ===== STEP 2: Fetch workflows and classify (parallel) =====
         all_results = {}
         stats = {"repos_scanned": 0, "repos_with_workflows": 0, "total_workflows": 0,
                  "total_classified": 0, "cache_hits": 0, "errors": []}
 
+        # Phase 1: Collect work items (sequential — checks caches, minimal API)
+        pending_llm = []  # [(repo_name, wf_name, yaml_content)]
+        repo_wf_names = {}  # repo -> [wf_names] for setting meta after classification
+
         for repo_idx, repo_name in enumerate(repo_names):
             stats["repos_scanned"] += 1
 
-            if (repo_idx + 1) % 25 == 0 or repo_idx == 0:
-                print(f"[{repo_idx + 1}/{len(repo_names)}] Scanning {repo_name}... "
-                      f"({stats['total_workflows']} wfs, {stats['total_classified']} classified, "
-                      f"{stats['cache_hits']} cached)", flush=True)
+            if (repo_idx + 1) % 100 == 0 or repo_idx == 0:
+                print(f"[{repo_idx + 1}/{len(repo_names)}] Collecting {repo_name}... "
+                      f"({stats['total_workflows']} wfs, {stats['cache_hits']} cached, "
+                      f"{len(pending_llm)} pending LLM)", flush=True)
 
+            # Already fully classified?
             meta_key = f"__meta__:{repo_name}"
             cached_meta = classification_cache.get(meta_key)
 
@@ -439,99 +444,151 @@ async def run(input_dict, tools):
                         stats["total_classified"] += len(repo_results)
                 continue
 
-            resp = await github_get(f"{GITHUB_API}/repos/{owner}/{repo_name}/contents/.github/workflows")
+            # Check prefetch cache first (from prefetch agent)
+            prefetch_meta = workflow_content_cache.get(f"__prefetch__:{repo_name}")
+            wf_names_list = None
+            if prefetch_meta and prefetch_meta.get("complete"):
+                wf_names_list = prefetch_meta.get("workflows", [])
+                if not wf_names_list:
+                    # Prefetch confirmed no workflows
+                    classification_cache.set(meta_key, {"complete": True, "workflows": []})
+                    continue
 
-            if resp is None:
-                stats["errors"].append(f"{owner}/{repo_name}: network error")
-                continue
-            if resp.status_code == 404:
-                classification_cache.set(meta_key, {"complete": True, "workflows": []})
-                continue
-            if resp.status_code != 200:
-                stats["errors"].append(f"{owner}/{repo_name}: HTTP {resp.status_code}")
-                continue
+            # If no prefetch data, fetch from GitHub API
+            if wf_names_list is None:
+                resp = await github_get(f"{GITHUB_API}/repos/{owner}/{repo_name}/contents/.github/workflows")
 
-            try:
-                dir_listing = resp.json()
-            except Exception:
-                classification_cache.set(meta_key, {"complete": True, "workflows": []})
-                continue
+                if resp is None:
+                    stats["errors"].append(f"{owner}/{repo_name}: network error")
+                    continue
+                if resp.status_code == 404:
+                    classification_cache.set(meta_key, {"complete": True, "workflows": []})
+                    continue
+                if resp.status_code != 200:
+                    stats["errors"].append(f"{owner}/{repo_name}: HTTP {resp.status_code}")
+                    continue
 
-            if not isinstance(dir_listing, list):
-                classification_cache.set(meta_key, {"complete": True, "workflows": []})
-                continue
+                try:
+                    dir_listing = resp.json()
+                except Exception:
+                    classification_cache.set(meta_key, {"complete": True, "workflows": []})
+                    continue
 
-            yaml_files = [f for f in dir_listing
-                          if isinstance(f, dict) and f.get("name", "").endswith((".yml", ".yaml"))]
+                if not isinstance(dir_listing, list):
+                    classification_cache.set(meta_key, {"complete": True, "workflows": []})
+                    continue
 
-            if not yaml_files:
-                classification_cache.set(meta_key, {"complete": True, "workflows": []})
-                continue
+                yaml_files = [f for f in dir_listing
+                              if isinstance(f, dict) and f.get("name", "").endswith((".yml", ".yaml"))]
+                wf_names_list = [f.get("name", "unknown") for f in yaml_files]
+
+                if not wf_names_list:
+                    classification_cache.set(meta_key, {"complete": True, "workflows": []})
+                    continue
+
+                # Fetch YAML for any not already in content cache
+                for wf_file in yaml_files:
+                    wf_name = wf_file.get("name", "unknown")
+                    cache_key = f"{repo_name}/{wf_name}"
+                    if not workflow_content_cache.get(cache_key):
+                        raw_url = wf_file.get("download_url")
+                        if raw_url:
+                            try:
+                                content_resp = await http_client.get(raw_url, follow_redirects=True, timeout=30.0)
+                                if content_resp.status_code == 200:
+                                    workflow_content_cache.set(cache_key, content_resp.text)
+                            except Exception:
+                                pass
 
             stats["repos_with_workflows"] += 1
-            repo_results = []
-            workflow_names = []
+            stats["total_workflows"] += len(wf_names_list)
+            repo_wf_names[repo_name] = wf_names_list
 
-            for wf_file in yaml_files:
-                wf_name = wf_file.get("name", "unknown")
-                workflow_names.append(wf_name)
-                stats["total_workflows"] += 1
-
-                wf_cache_key = f"{repo_name}:{wf_name}"
-                cached_cls = classification_cache.get(wf_cache_key)
+            # Check each workflow: cached classification or needs LLM?
+            for wf_name in wf_names_list:
+                cached_cls = classification_cache.get(f"{repo_name}:{wf_name}")
                 if cached_cls:
-                    repo_results.append(cached_cls)
-                    stats["total_classified"] += 1
+                    all_results.setdefault(repo_name, []).append(cached_cls)
                     stats["cache_hits"] += 1
-                    continue
-
-                raw_url = wf_file.get("download_url")
-                yaml_content = None
-                if raw_url:
-                    try:
-                        content_resp = await http_client.get(raw_url, follow_redirects=True, timeout=30.0)
-                        if content_resp.status_code == 200:
-                            yaml_content = content_resp.text
-                    except Exception:
-                        pass
-
-                if yaml_content is None:
-                    repo_results.append({"file": wf_name, "error": "Could not fetch", "publishes_to_registry": None})
-                    continue
-
-                workflow_content_cache.set(f"{repo_name}/{wf_name}", yaml_content)
-                yaml_content = truncate_yaml(yaml_content)
-
-                llm_response = None
-                try:
-                    messages = [{"role": "user", "content": (
-                        f"{CLASSIFICATION_PROMPT}\n\n---\n"
-                        f"File: {owner}/{repo_name}/.github/workflows/{wf_name}\n---\n\n{yaml_content}"
-                    )}]
-
-                    llm_response, _ = await call_llm(
-                        provider=provider, model=model, messages=messages,
-                        parameters=configured_params, user_service=None, user_id=None)
-
-                    classification = parse_classification(llm_response)
-                    classification["file"] = wf_name
-                    repo_results.append(classification)
-                    classification_cache.set(wf_cache_key, classification)
                     stats["total_classified"] += 1
+                    continue
 
-                except json.JSONDecodeError:
-                    repo_results.append({"file": wf_name, "error": "JSON parse error",
-                                         "raw_response": (llm_response or "")[:300], "publishes_to_registry": None})
-                    stats["errors"].append(f"{owner}/{repo_name}/.github/workflows/{wf_name}: JSON parse error")
-                except Exception as e:
-                    repo_results.append({"file": wf_name, "error": str(e)[:200], "publishes_to_registry": None})
-                    stats["errors"].append(f"{owner}/{repo_name}/.github/workflows/{wf_name}: {str(e)[:80]}")
+                # Get YAML from content cache
+                yaml_content = workflow_content_cache.get(f"{repo_name}/{wf_name}")
+                if yaml_content is None:
+                    all_results.setdefault(repo_name, []).append(
+                        {"file": wf_name, "error": "Could not fetch", "publishes_to_registry": None})
+                    continue
 
-                await asyncio.sleep(0.3)
+                pending_llm.append((repo_name, wf_name, yaml_content))
 
-            if repo_results:
-                all_results[repo_name] = repo_results
-            classification_cache.set(meta_key, {"complete": True, "workflows": workflow_names})
+        print(f"\nCollection complete: {stats['repos_scanned']} repos, "
+              f"{stats['total_workflows']} workflows, {stats['cache_hits']} cached, "
+              f"{len(pending_llm)} need LLM classification\n", flush=True)
+
+        # Phase 2: Parallel LLM classification
+        if pending_llm:
+            llm_sem = asyncio.Semaphore(5)
+            completed = {"count": 0}
+
+            async def classify_workflow(repo_name, wf_name, yaml_content):
+                yaml_truncated = truncate_yaml(yaml_content)
+                messages = [{"role": "user", "content": (
+                    f"{CLASSIFICATION_PROMPT}\n\n---\n"
+                    f"File: {owner}/{repo_name}/.github/workflows/{wf_name}\n---\n\n{yaml_truncated}"
+                )}]
+
+                async with llm_sem:
+                    llm_response = None
+                    try:
+                        llm_response, _ = await call_llm(
+                            provider=provider, model=model, messages=messages,
+                            parameters=configured_params, user_service=None, user_id=None)
+
+                        classification = parse_classification(llm_response)
+                        classification["file"] = wf_name
+                        classification_cache.set(f"{repo_name}:{wf_name}", classification)
+
+                        completed["count"] += 1
+                        if completed["count"] % 25 == 0:
+                            print(f"  Classified {completed['count']}/{len(pending_llm)}...", flush=True)
+
+                        return repo_name, wf_name, classification, None
+
+                    except json.JSONDecodeError:
+                        error_result = {"file": wf_name, "error": "JSON parse error",
+                                        "raw_response": (llm_response or "")[:300],
+                                        "publishes_to_registry": None}
+                        return repo_name, wf_name, error_result, \
+                            f"{owner}/{repo_name}/.github/workflows/{wf_name}: JSON parse error"
+
+                    except Exception as e:
+                        error_result = {"file": wf_name, "error": str(e)[:200],
+                                        "publishes_to_registry": None}
+                        return repo_name, wf_name, error_result, \
+                            f"{owner}/{repo_name}/.github/workflows/{wf_name}: {str(e)[:80]}"
+
+            print(f"Starting parallel classification of {len(pending_llm)} workflows "
+                  f"(concurrency=5)...\n", flush=True)
+
+            tasks = [classify_workflow(r, w, y) for r, w, y in pending_llm]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            for result in results:
+                if isinstance(result, Exception):
+                    stats["errors"].append(f"Unexpected error: {str(result)[:100]}")
+                    continue
+
+                repo_name, wf_name, classification, error_msg = result
+                all_results.setdefault(repo_name, []).append(classification)
+                stats["total_classified"] += 1
+                if error_msg:
+                    stats["errors"].append(error_msg)
+
+        # Phase 3: Set meta keys for all processed repos
+        for repo_name, wf_names in repo_wf_names.items():
+            classification_cache.set(f"__meta__:{repo_name}", {
+                "complete": True, "workflows": wf_names})
 
         print(f"\n{'=' * 60}", flush=True)
         print(f"Scan complete! {stats['repos_scanned']} repos, {stats['total_classified']} classified "
