@@ -373,6 +373,10 @@ async def run(input_dict, tools):
                 action_refs = extract_action_refs(content)
                 all_action_refs.extend([(wf_name, ref) for ref in action_refs])
 
+                # NOTE: When adding a new check type, also add a matching entry to
+                # ATTACK_SCENARIOS in Agent 3 (report combiner) so the combined report
+                # includes an attack scenario description for the new check.
+
                 # Check 1: pull_request_target + checkout
                 prt = check_prt_checkout(content)
                 if prt:

@@ -680,6 +680,49 @@ async def run(input_dict, tools):
                 lines.append(f"| {eco} | {count} | {pct:.1f}% |")
             lines.append("")
 
+        # --- Already Using Trusted Publishing ---
+        tp_already = []
+        for w in release_wfs + snapshot_wfs:
+            ecosystems = w.get("ecosystems") or []
+            auth = safe_str(w.get("auth_method"))
+            for eco in ecosystems:
+                if eco in TRUSTED_PUBLISHING_ECOSYSTEMS and not uses_long_lived_token(auth):
+                    auth_lower = auth.lower()
+                    if "oidc" in auth_lower or "trusted publisher" in auth_lower or "id-token" in auth_lower:
+                        tp_info = TRUSTED_PUBLISHING_ECOSYSTEMS[eco]
+                        tp_already.append({
+                            "repo": w.get("repo", "?"), "file": w.get("file", "?"),
+                            "ecosystem": eco, "ecosystem_label": tp_info["label"],
+                            "auth_method": auth, "category": safe_str(w.get("category")),
+                        })
+
+        if tp_already:
+            lines.append("## Already Using Trusted Publishing\n")
+            lines.append("These workflows publish to OIDC-capable ecosystems and are already using "
+                         "Trusted Publishing — no stored secrets needed for publishing.\n")
+
+            tp_already_by_eco = {}
+            for opp in tp_already:
+                tp_already_by_eco.setdefault(opp["ecosystem"], []).append(opp)
+
+            for eco, opps in sorted(tp_already_by_eco.items()):
+                info = TRUSTED_PUBLISHING_ECOSYSTEMS[eco]
+                lines.append(f"### {info['label']}\n")
+                lines.append("| Repository | Workflow | Auth Method | Category |")
+                lines.append("|------------|----------|------------|----------|")
+                seen = set()
+                for opp in sorted(opps, key=lambda x: (x["repo"], x["file"])):
+                    dedup_key = f"{opp['repo']}:{opp['file']}:{eco}"
+                    if dedup_key in seen:
+                        continue
+                    seen.add(dedup_key)
+                    cat_label = CATEGORY_LABELS.get(opp["category"], opp["category"])
+                    lines.append(f"| {opp['repo']} | `{opp['file']}` | {sanitize_md(opp['auth_method'])} | {cat_label} |")
+                lines.append("")
+        else:
+            lines.append("## Already Using Trusted Publishing\n")
+            lines.append("No workflows detected using OIDC Trusted Publishing yet.\n")
+
         # --- Trusted Publishing Opportunities ---
         tp_opportunities = []
         for w in release_wfs + snapshot_wfs:
@@ -916,6 +959,8 @@ async def run(input_dict, tools):
         toc_lines.append(f"- [Executive Summary](#{to_anchor('Executive Summary')})")
         if release_ecosystems:
             toc_lines.append(f"- [Package Ecosystem Distribution](#{to_anchor('Package Ecosystem Distribution releases snapshots only')})")
+        if tp_already:
+            toc_lines.append(f"- [Already Using Trusted Publishing](#{to_anchor('Already Using Trusted Publishing')}) ({len(tp_already)})")
         if tp_opportunities:
             toc_lines.append(f"- [Trusted Publishing Opportunities](#{to_anchor('Trusted Publishing Migration Opportunities')}) ({len(tp_opportunities)})")
         if release_wfs:
@@ -962,6 +1007,7 @@ async def run(input_dict, tools):
             "trusted_input_count": len(trusted_input_notes),
             "downgraded_count": len(downgraded_notes),
             "trusted_publishing_opportunities": len(tp_opportunities),
+            "trusted_publishing_already": len(tp_already),
         })
 
         return {"outputText": full_report}

