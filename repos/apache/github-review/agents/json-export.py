@@ -117,7 +117,7 @@ async def run(input_dict, tools):
                 "severity": f.get("severity", "INFO"),
                 "check": f.get("check", "unknown"),
                 "file": f.get("file", "unknown"),
-                "description": f.get("description", ""),
+                "detail": f.get("detail", ""),
             }
 
         def summarize_severities(findings):
