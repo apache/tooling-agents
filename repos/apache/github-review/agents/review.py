@@ -112,7 +112,7 @@ async def run(input_dict, tools):
                 if tp_section and "| " in line and "`" in line:
                     parts = line.split("|")
                     if len(parts) > 1:
-                        repo_name = parts[1].strip()
+                        repo_name = parts[1].strip().strip("`").strip()
                         if repo_name and repo_name != "Repository":
                             tp_repos.add(repo_name)
 
@@ -164,8 +164,8 @@ async def run(input_dict, tools):
         low_repos = [r for r in repo_rows if r["worst"] in ("LOW", "INFO", "—") and r["publishes"]]
 
         # --- Generate report ---
-        PUB = "apache-github-publishing.md"
-        SEC = "apache-github-security.md"
+        PUB = "publishing.md"
+        SEC = "security.md"
 
         def anchor(text):
             a = text.lower().strip()
@@ -245,9 +245,7 @@ async def run(input_dict, tools):
 
         # --- Findings by Vulnerability Type ---
         check_counts = sec_stats.get("check_counts", {})
-        # Filter out informational-only checks
-        info_checks = {"composite_actions_scanned", "missing_dependency_updates"}
-        vuln_checks = {k: v for k, v in check_counts.items() if k not in info_checks and v > 0}
+        vuln_checks = {k: v for k, v in check_counts.items() if v > 0}
 
         ATTACK_SCENARIOS = {
             "prt_checkout": {
@@ -401,8 +399,8 @@ async def run(input_dict, tools):
             },
             "self_hosted_runner": {
                 "label": "Self-Hosted Runner Exposure",
-                "severity": "HIGH",
-                "description": "Workflow runs on self-hosted runners with PR triggers.",
+                "severity": "HIGH–LOW",
+                "description": "Workflow runs on self-hosted runners with PR triggers. Severity depends on permissions and trigger type.",
                 "attack": ("Self-hosted runners persist state between jobs. An attacker's PR can execute "
                            "arbitrary code on the runner, install backdoors, steal credentials cached on disk, "
                            "or pivot to internal networks the runner has access to."),
@@ -410,6 +408,18 @@ async def run(input_dict, tools):
                             "2. Attacker's PR executes: `curl http://169.254.169.254/latest/meta-data/`\n"
                             "3. AWS instance credentials are exfiltrated\n"
                             "4. Attacker gains access to internal infrastructure"),
+            },
+            "missing_dependency_updates": {
+                "label": "No Automated Dependency Updates",
+                "severity": "INFO",
+                "description": "No dependabot.yml or renovate.json for automated dependency updates.",
+                "attack": ("Without automated dependency updates, vulnerable transitive dependencies and "
+                           "SHA-pinned actions persist indefinitely. Security fixes for actions and libraries "
+                           "are not surfaced as PRs, leaving known vulnerabilities unpatched."),
+                "example": ("1. Repository uses `actions/checkout@abc123` (pinned to SHA)\n"
+                            "2. A security vulnerability is found in that version\n"
+                            "3. No Dependabot or Renovate config to create update PRs\n"
+                            "4. Vulnerable action version persists until manually updated"),
             },
         }
 
@@ -548,20 +558,29 @@ async def run(input_dict, tools):
 
             tp_ecosystems = {}
             if pub_report:
+                in_migration_section = False
                 current_eco = None
                 for line in pub_report.split("\n"):
+                    # Only parse ecosystems within the Migration Opportunities section
+                    if "Trusted Publishing Migration" in line and line.startswith("## "):
+                        in_migration_section = True
+                        continue
+                    if not in_migration_section:
+                        continue
+                    # Stop at the next ## heading that isn't about TP
+                    if line.startswith("## ") and "Trusted Publishing" not in line:
+                        break
                     if line.startswith("### ") and "Trusted Publishing" not in line:
                         eco_name = line[4:].strip()
                         if eco_name in ("crates.io", "npm", "NuGet", "PyPI", "RubyGems"):
                             current_eco = eco_name
                             continue
-                    if current_eco and line.startswith("## "):
-                        current_eco = None
-                        continue
+                        else:
+                            current_eco = None
                     if current_eco and "| " in line and "`" in line:
                         parts = [p.strip() for p in line.split("|")]
                         if len(parts) > 2 and parts[1] and parts[1] != "Repository":
-                            tp_ecosystems.setdefault(current_eco, []).append(parts[1])
+                            tp_ecosystems.setdefault(current_eco, []).append(parts[1].strip("`"))
 
             for eco, repos in sorted(tp_ecosystems.items()):
                 unique = sorted(set(repos))

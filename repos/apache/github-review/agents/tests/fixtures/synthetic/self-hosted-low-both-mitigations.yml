@@ -1,0 +1,12 @@
+name: Test on self-hosted with both mitigations
+on:
+  pull_request_target:
+    types: [labeled, assigned]
+permissions:
+  pull-requests: write
+jobs:
+  test:
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+      - run: make test

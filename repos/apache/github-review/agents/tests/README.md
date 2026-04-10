@@ -22,7 +22,7 @@ Running 16 tests...
   PASS   REAL: Texera email notif — injection LOW (pull_request trigger, not prt)
 
 ============================================================
-Results: 16 passed, 0 failed, 0 errors
+Results: 19 passed, 0 failed, 0 errors
 ============================================================
 ```
 
@@ -39,13 +39,23 @@ The `pull_request_target` + checkout check uses a 2×2 severity matrix based on 
 
 Additional cases: INFO for default ref (safe), None when no prt trigger.
 
+### self_hosted_runner — severity matrix (5 tests)
+
+Same 2×2 pattern as prt_checkout but with HIGH ceiling (runner compromise is serious but doesn't directly grant base repo secrets like prt_checkout):
+
+|                        | Broad permissions | Limited permissions |
+|------------------------|-------------------|---------------------|
+| **Auto-trigger**       | HIGH              | MEDIUM              |
+| **Maintainer-gated**   | MEDIUM            | LOW                 |
+
+Additional case: INFO for push-only (no PR trigger).
+
 ### run_block_injection — trigger-aware (3 tests)
 
 Interpolation of untrusted values (`event.pull_request.title`, etc.) in `run:` blocks. Severity depends on whether the trigger is `pull_request` (fork PRs don't get secrets → LOW) or `pull_request_target` (fork PRs DO get secrets → CRITICAL). Secrets interpolation is always LOW.
 
-### Other checks (4 tests)
+### Other checks (2 tests)
 
-- `self_hosted`: HIGH with PR trigger, INFO without
 - `cache_poisoning`: INFO when actions/cache + PR trigger
 - `permissions`: HIGH for write-all
 
@@ -78,6 +88,9 @@ tests/
     │   ├── injection-low-pr-trigger.yml
     │   ├── injection-low-secret.yml
     │   ├── self-hosted-high-pr.yml
+    │   ├── self-hosted-medium-limited-perms.yml
+    │   ├── self-hosted-medium-labeled.yml
+    │   ├── self-hosted-low-both-mitigations.yml
     │   ├── self-hosted-info-push.yml
     │   ├── cache-poisoning-info.yml
     │   └── broad-perms-high.yml

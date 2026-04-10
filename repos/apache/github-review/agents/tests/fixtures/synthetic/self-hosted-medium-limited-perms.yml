@@ -1,0 +1,12 @@
+name: Test on self-hosted with limited perms
+on:
+  pull_request:
+permissions:
+  pull-requests: write
+  checks: write
+jobs:
+  test:
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+      - run: make test

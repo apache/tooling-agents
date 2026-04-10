@@ -1,0 +1,10 @@
+name: Test on self-hosted with labeled trigger
+on:
+  pull_request_target:
+    types: [labeled]
+jobs:
+  test:
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+      - run: make test

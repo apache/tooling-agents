@@ -69,20 +69,20 @@ def extract_permissions(content):
     return perms
 
 
-def extract_prt_event_types(content):
-    """Extract event types for pull_request_target (e.g., labeled, opened, synchronize)."""
+def extract_trigger_event_types(content, trigger_name):
+    """Extract event types for any trigger (e.g., pull_request_target, pull_request)."""
     types = set()
-    in_prt = False
-    prt_indent = 0
+    in_trigger = False
+    trigger_indent = 0
     for line in content.split("\n"):
         stripped = line.strip()
         indent = len(line) - len(line.lstrip())
-        if stripped.startswith("pull_request_target"):
-            in_prt = True
-            prt_indent = indent
+        if stripped.startswith(trigger_name):
+            in_trigger = True
+            trigger_indent = indent
             continue
-        if in_prt:
-            if stripped and indent <= prt_indent and not stripped.startswith("types"):
+        if in_trigger:
+            if stripped and indent <= trigger_indent and not stripped.startswith("types"):
                 break
             if stripped.startswith("types:"):
                 rest = stripped[6:].strip()
@@ -93,6 +93,11 @@ def extract_prt_event_types(content):
             if stripped.startswith("-"):
                 types.add(stripped.lstrip("- ").strip())
     return types
+
+
+def extract_prt_event_types(content):
+    """Extract event types for pull_request_target (e.g., labeled, opened, synchronize)."""
+    return extract_trigger_event_types(content, "pull_request_target")
 
 
 def _classify_interpolation(line, step_name, context_label="", triggers=None):
@@ -318,13 +323,71 @@ def check_self_hosted(content, triggers=None):
     if triggers is None:
         triggers = extract_triggers(content)
     has_self_hosted = "self-hosted" in content
+    if not has_self_hosted:
+        return None
+
     has_pr_trigger = bool(triggers & PR_TRIGGERS)
-    if has_self_hosted and has_pr_trigger:
-        return ("HIGH", "Self-hosted runner with PR trigger. External contributors can "
-                "execute arbitrary code on self-hosted infrastructure.")
-    elif has_self_hosted:
+    if not has_pr_trigger:
         return ("INFO", "Uses self-hosted runners. Ensure runners are ephemeral.")
-    return None
+
+    # --- PR trigger present — assess mitigating factors (same 2x2 as prt_checkout) ---
+
+    # Factor 1: Event types — is this maintainer-gated?
+    maintainer_gated_types = {"labeled", "unlabeled", "assigned", "unassigned",
+                               "review_requested", "review_request_removed"}
+    pr_event_types = set()
+    for t in ("pull_request_target", "pull_request"):
+        if t in triggers:
+            pr_event_types |= extract_trigger_event_types(content, t)
+
+    is_maintainer_gated = bool(pr_event_types) and pr_event_types.issubset(maintainer_gated_types)
+
+    # Factor 2: Permissions — what can the workflow actually do?
+    perms = extract_permissions(content)
+    dangerous_perms = {"contents", "packages", "id-token", "actions"}
+    has_dangerous_perms = False
+    perm_level = perms.get("_level", "")
+
+    if perm_level in ("write-all",):
+        has_dangerous_perms = True
+    elif not perms:
+        has_dangerous_perms = True
+    else:
+        for perm_name in dangerous_perms:
+            if perms.get(perm_name) == "write":
+                has_dangerous_perms = True
+                break
+
+    # Build detail with mitigating factors
+    mitigations = []
+    if is_maintainer_gated:
+        mitigations.append(f"trigger restricted to maintainer-gated events ({', '.join(sorted(pr_event_types))})")
+    if not has_dangerous_perms:
+        write_perms = [k for k, v in perms.items() if v == "write" and k != "_level"]
+        mitigations.append(f"limited permissions ({', '.join(write_perms) if write_perms else 'read-only'})")
+
+    # Determine severity (same 2x2 as prt_checkout but HIGH ceiling instead of CRITICAL)
+    if is_maintainer_gated and not has_dangerous_perms:
+        return ("LOW",
+                "Self-hosted runner with PR trigger, but risk is mitigated: "
+                + "; ".join(mitigations) + ". "
+                "Maintainer must trigger the workflow and permissions limit blast radius.")
+    elif is_maintainer_gated:
+        return ("MEDIUM",
+                "Self-hosted runner with PR trigger and dangerous permissions, "
+                "but trigger requires maintainer action ("
+                + ", ".join(sorted(pr_event_types)) + "). "
+                "A maintainer labeling a malicious PR would grant runner access to secrets.")
+    elif not has_dangerous_perms:
+        write_perms = [k for k, v in perms.items() if v == "write" and k != "_level"]
+        return ("MEDIUM",
+                "Self-hosted runner with PR trigger, but permissions are limited to: "
+                + (", ".join(write_perms) if write_perms else "read-only") + ". "
+                "Blast radius is reduced — no access to publishing secrets or contents:write.")
+    else:
+        return ("HIGH",
+                "Self-hosted runner with PR trigger. External contributors can "
+                "execute arbitrary code on self-hosted infrastructure with broad permissions.")
 
 
 def check_permissions(content):

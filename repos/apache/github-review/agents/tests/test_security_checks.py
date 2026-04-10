@@ -95,10 +95,28 @@ TESTS = [
 
     # ===== self_hosted =====
     {
-        "name": "self-hosted HIGH: PR trigger",
+        "name": "self-hosted HIGH: broad perms + auto trigger",
         "fixture": ("synthetic", "self-hosted-high-pr.yml"),
         "check": "self_hosted",
         "expected_severity": "HIGH",
+    },
+    {
+        "name": "self-hosted MEDIUM: limited perms + auto trigger",
+        "fixture": ("synthetic", "self-hosted-medium-limited-perms.yml"),
+        "check": "self_hosted",
+        "expected_severity": "MEDIUM",
+    },
+    {
+        "name": "self-hosted MEDIUM: broad perms + maintainer-gated (labeled)",
+        "fixture": ("synthetic", "self-hosted-medium-labeled.yml"),
+        "check": "self_hosted",
+        "expected_severity": "MEDIUM",
+    },
+    {
+        "name": "self-hosted LOW: limited perms + maintainer-gated",
+        "fixture": ("synthetic", "self-hosted-low-both-mitigations.yml"),
+        "check": "self_hosted",
+        "expected_severity": "LOW",
     },
     {
         "name": "self-hosted INFO: push-only trigger",

@@ -132,7 +132,7 @@ The Security agent runs 13 checks. When adding a new check, also update `ATTACK_
 | Check | Severity | What It Detects |
 |-------|----------|-----------------|
 | `prt_checkout` | CRITICAL–LOW | `pull_request_target` + checkout of PR head. Severity uses a 2×2 matrix (see below). |
-| `self_hosted_runner` | HIGH | Self-hosted runners exposed to PR triggers |
+| `self_hosted_runner` | HIGH–LOW | Self-hosted runners exposed to PR triggers. Severity uses same 2×2 matrix as prt_checkout. |
 | `unpinned_actions` | MEDIUM | Actions referenced by mutable tags instead of SHA pins |
 | `composite_action_unpinned` | MEDIUM | Unpinned actions inside composite actions |
 | `composite_action_input_injection` | MEDIUM | Composite action interpolates `inputs.*` in run blocks — latent injection surface |
@@ -159,6 +159,19 @@ When `pull_request_target` checks out PR head code, severity depends on two fact
 - **Maintainer-gated**: all `pull_request_target` types are in `{labeled, unlabeled, assigned, unassigned, review_requested, review_request_removed}`
 - Default checkout (no `ref:` parameter) → INFO (safe, checks out base branch)
 - Explicit base ref checkout → INFO (safe)
+
+### self_hosted_runner severity matrix
+
+Same 2×2 as prt_checkout but with HIGH ceiling instead of CRITICAL (runner compromise is serious but doesn't directly grant access to base repo secrets like prt_checkout does):
+
+|                        | Broad permissions | Limited permissions |
+|------------------------|-------------------|---------------------|
+| **Auto-trigger** (opened, synchronize) | **HIGH** | **MEDIUM** |
+| **Maintainer-gated** (labeled, assigned) | **MEDIUM** | **LOW** |
+
+No PR trigger → INFO (runners used for scheduled/manual workflows only).
+
+Uses the same `extract_permissions()` and generalized `extract_trigger_event_types()` functions as prt_checkout.
 
 ### run_block_injection trigger awareness
 

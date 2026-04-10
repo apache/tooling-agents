@@ -47,7 +47,7 @@ async def run(input_dict, tools):
                     if stripped.startswith("|") and "|" in stripped[1:]:
                         parts = [p.strip() for p in stripped.split("|")]
                         if len(parts) >= 3 and parts[1] and parts[1] not in ("Repository", ""):
-                            repo_name = parts[1].strip()
+                            repo_name = parts[1].strip().strip("`").strip()
                             if repo_name and not repo_name.startswith("-"):
                                 if repo_filter is None or repo_name in repo_filter:
                                     tp_repo_set.add(repo_name)
@@ -124,10 +124,10 @@ async def run(input_dict, tools):
         print(f"HIGH (non-publishing): {len(high_nonpublishing)} findings in {len(high_nonpub_repos)} repos", flush=True)
 
         # --- Build brief ---
-        PUB = "apache-github-publishing.md"
-        SEC = "apache-github-security.md"
-        REVIEW = "apache-github-review.md"
-        JSON = "apache-github-review.json"
+        PUB = "publishing.md"
+        SEC = "security.md"
+        REVIEW = "review.md"
+        JSON = "json-export.json"
 
         def plural(n, singular, plural_form=None):
             if plural_form is None:

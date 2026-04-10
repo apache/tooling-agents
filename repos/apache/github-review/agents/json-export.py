@@ -293,10 +293,17 @@ async def run(input_dict, tools):
             },
             "self_hosted_runner": {
                 "label": "Self-Hosted Runner Exposure",
-                "severity": "MEDIUM",
-                "description": "Workflow runs on self-hosted runners with PR triggers.",
-                "attack": "Self-hosted runners persist state between jobs. An attacker's PR can execute arbitrary code on the runner, install backdoors, or steal credentials cached on disk.",
+                "severity": "HIGH",
+                "description": "Workflow runs on self-hosted runners with PR triggers. Severity depends on permissions and trigger type.",
+                "attack": "Self-hosted runners persist state between jobs. An attacker's PR can execute arbitrary code on the runner, install backdoors, steal credentials cached on disk, or pivot to internal networks.",
                 "example": "1. Workflow runs on self-hosted runner and triggers on pull_request\n2. Attacker's PR executes: curl http://169.254.169.254/latest/meta-data/\n3. AWS instance credentials are exfiltrated\n4. Attacker gains access to internal infrastructure",
+            },
+            "missing_dependency_updates": {
+                "label": "No Dependency Update Configuration",
+                "severity": "INFO",
+                "description": "Repository has no dependabot.yml or renovate.json for automated dependency updates.",
+                "attack": "Without automated dependency updates, vulnerable transitive dependencies may persist indefinitely. Actions pinned to SHA are not automatically updated when security fixes are released.",
+                "example": "1. Repository uses actions/checkout@abc123 (pinned to SHA)\n2. A security vulnerability is found in that version\n3. No Dependabot or Renovate config to create update PRs\n4. Vulnerable action version persists until manually updated",
             },
         }
 
