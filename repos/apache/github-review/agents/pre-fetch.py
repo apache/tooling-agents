@@ -30,10 +30,7 @@ async def run(input_dict, tools):
         classification_cache = data_store.use_namespace(f"ci-classification:{owner}")
 
         if clear_cache:
-            print("Clearing workflow cache...", flush=True)
-            for key in workflow_cache.list_keys():
-                workflow_cache.delete(key)
-            print("Cache cleared.", flush=True)
+            print("Clear cache requested — will re-fetch all workflows and composites.", flush=True)
 
         # --- Preflight ---
         preflight_resp = await http_client.get(f"{GITHUB_API}/rate_limit", headers=gh_headers, timeout=15.0)
@@ -117,18 +114,28 @@ async def run(input_dict, tools):
 
         # --- Build index of what's already cached ---
         print("Building cache index...", flush=True)
-        all_cached_keys = set(workflow_cache.list_keys())
-        print(f"  {len(all_cached_keys)} keys in workflow cache", flush=True)
+        if clear_cache:
+            all_cached_keys = set()
+            print("  Cache bypassed (clear_cache=true)", flush=True)
+        else:
+            all_cached_keys = set(workflow_cache.list_keys())
+            print(f"  {len(all_cached_keys)} keys in workflow cache", flush=True)
 
         def has_prefetch(repo_name):
+            if clear_cache:
+                return False
             meta = workflow_cache.get(f"__prefetch__:{repo_name}")
             return meta and meta.get("complete")
 
         def has_composites(repo_name):
+            if clear_cache:
+                return False
             meta = workflow_cache.get(f"__composites__:{repo_name}")
             return meta and meta.get("complete")
 
         def is_classified(repo_name):
+            if clear_cache:
+                return False
             meta = classification_cache.get(f"__meta__:{repo_name}")
             return meta and meta.get("complete")
 

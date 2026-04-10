@@ -38,11 +38,7 @@ async def run(input_dict, tools):
         report_ns = data_store.use_namespace(f"ci-report:{owner}")
 
         if clear_cache:
-            print("Clearing cached data...", flush=True)
-            for ns in [classification_cache, workflow_content_cache, report_ns]:
-                for key in ns.list_keys():
-                    ns.delete(key)
-            print("Cache cleared.", flush=True)
+            print("Clear cache requested — will re-classify all workflows (prefetch data preserved).", flush=True)
 
         # --- Preflight ---
         print("Running preflight checks...", flush=True)
@@ -428,7 +424,7 @@ async def run(input_dict, tools):
             meta_key = f"__meta__:{repo_name}"
             cached_meta = classification_cache.get(meta_key)
 
-            if cached_meta and cached_meta.get("complete"):
+            if cached_meta and cached_meta.get("complete") and not clear_cache:
                 wf_names = cached_meta.get("workflows", [])
                 if wf_names:
                     repo_results = []
@@ -507,7 +503,7 @@ async def run(input_dict, tools):
             # Check each workflow: cached classification or needs LLM?
             for wf_name in wf_names_list:
                 cached_cls = classification_cache.get(f"{repo_name}:{wf_name}")
-                if cached_cls:
+                if cached_cls and not clear_cache:
                     all_results.setdefault(repo_name, []).append(cached_cls)
                     stats["cache_hits"] += 1
                     stats["total_classified"] += 1

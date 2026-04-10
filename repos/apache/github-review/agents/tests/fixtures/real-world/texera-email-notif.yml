@@ -1,0 +1,30 @@
+# Simplified from apache/texera .github/workflows/automatic-email-notif-on-ddl-change.yml
+# Expected: run_block_injection LOW (pull_request trigger, not pull_request_target)
+name: Automatic email notification on DDL change
+on:
+  pull_request:
+    types:
+      - closed
+jobs:
+  notify:
+    if: >-
+      github.event.pull_request.merged == true &&
+      contains(github.event.pull_request.labels.*.name, 'ddl-change')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          sparse-checkout: sql/updates/
+      - name: Send email
+        run: |
+          curl --ssl-reqd \
+            --url "smtps://smtp.gmail.com:465" \
+            --user "${{ secrets.NOREPLY_EMAIL_USERNAME }}:${{ secrets.NOREPLY_EMAIL_PASSWORD }}" \
+            --mail-from "${{ secrets.NOREPLY_EMAIL_USERNAME }}" \
+            --mail-rcpt "dev@texera.apache.org" \
+            --upload-file - <<EOF
+          Subject: Actions Required After Pulling Latest Update
+          <p>We have merged PR #${{ github.event.pull_request.number }}: ${{ github.event.pull_request.title }}.</p>
+          EOF

@@ -10,6 +10,7 @@ async def run(input_dict, tools):
         github_pat = input_dict.get("github_pat", "").strip()
         clear_cache_raw = input_dict.get("clear_cache", "false")
         clear_cache = str(clear_cache_raw).lower().strip() in ("true", "1", "yes")
+        repos_filter_str = input_dict.get("repos", "").strip()
 
         if not github_pat:
             return {"outputText": "Error: `github_pat` is required."}
@@ -21,10 +22,7 @@ async def run(input_dict, tools):
         security_ns = data_store.use_namespace(f"ci-security:{owner}")
 
         if clear_cache:
-            print("Clearing security cache...", flush=True)
-            for key in security_ns.list_keys():
-                security_ns.delete(key)
-            print("Cache cleared.", flush=True)
+            print("Clear cache requested — will re-scan all repos (no deletions needed).", flush=True)
 
         all_wf_keys = workflow_ns.list_keys()
         if not all_wf_keys:
@@ -37,7 +35,13 @@ async def run(input_dict, tools):
                 repo, wf_name = key.split("/", 1)
                 repos.setdefault(repo, []).append(wf_name)
 
-        print(f"Found {len(all_wf_keys)} cached workflows across {len(repos)} repos\n", flush=True)
+        # Filter to specific repos if provided
+        if repos_filter_str:
+            repo_filter = set(r.strip() for r in repos_filter_str.split(",") if r.strip())
+            repos = {r: wfs for r, wfs in repos.items() if r in repo_filter}
+            print(f"Filtered to {len(repos)} repos: {', '.join(sorted(repos.keys()))}\n", flush=True)
+        else:
+            print(f"Found {len(all_wf_keys)} cached workflows across {len(repos)} repos\n", flush=True)
 
         async def github_get(url, max_retries=3):
             for attempt in range(max_retries):
@@ -145,7 +149,7 @@ async def run(input_dict, tools):
                         perms[key.strip()] = val.strip()
             return perms
 
-        def find_injection_in_run_blocks(content, context_label=""):
+        def find_injection_in_run_blocks(content, context_label="", triggers=None):
             """Find ${{ }} interpolation in run: blocks. Returns list of (severity, detail)."""
             findings = []
             in_run = False
@@ -165,7 +169,7 @@ async def run(input_dict, tools):
                     if run_content.startswith("|") or run_content.startswith(">"):
                         continue
                     if "${{" in run_content:
-                        findings.extend(_classify_interpolation(run_content, current_step, context_label))
+                        findings.extend(_classify_interpolation(run_content, current_step, context_label, triggers))
                     in_run = False
                     continue
 
@@ -174,17 +178,24 @@ async def run(input_dict, tools):
                     if stripped and cur_indent <= run_indent:
                         in_run = False
                     elif "${{" in line:
-                        findings.extend(_classify_interpolation(line, current_step, context_label))
+                        findings.extend(_classify_interpolation(line, current_step, context_label, triggers))
 
             return findings
 
-        def _classify_interpolation(line, step_name, context_label=""):
+        def _classify_interpolation(line, step_name, context_label="", triggers=None):
             findings = []
             prefix = f" in {context_label}" if context_label else ""
             step_info = f" at step '{step_name}'" if step_name else ""
+            triggers = triggers or set()
 
             import re as _re
             exprs = _re.findall(r'\$\{\{([^}]+)\}\}', line)
+
+            # Determine if PR-related expressions are actually dangerous based on trigger
+            # pull_request: fork PRs don't get secrets, so interpolation is low risk
+            # pull_request_target: fork PRs DO get base repo secrets — dangerous
+            has_prt = "pull_request_target" in triggers
+            has_pr_only = "pull_request" in triggers and not has_prt
 
             for expr in exprs:
                 expr = expr.strip()
@@ -198,9 +209,17 @@ async def run(input_dict, tools):
                     "event.discussion.title", "event.discussion.body",
                 ]
                 if any(p in expr_lower for p in untrusted_patterns):
-                    findings.append(("CRITICAL",
-                        f"Direct interpolation of untrusted input `${{{{ {expr} }}}}` in run block"
-                        f"{step_info}{prefix}. Exploitable by external contributors."))
+                    if has_pr_only:
+                        # pull_request trigger: fork PRs don't get secrets
+                        findings.append(("LOW",
+                            f"Untrusted input `${{{{ {expr} }}}}` interpolated in run block"
+                            f"{step_info}{prefix}. Trigger is `pull_request` (not `pull_request_target`), "
+                            f"so fork PRs do not have access to secrets. "
+                            f"Same-repo PRs are from committers. Shell injection possible but low impact."))
+                    else:
+                        findings.append(("CRITICAL",
+                            f"Direct interpolation of untrusted input `${{{{ {expr} }}}}` in run block"
+                            f"{step_info}{prefix}. Exploitable by external contributors."))
                     continue
 
                 if "secrets." in expr_lower:
@@ -226,28 +245,161 @@ async def run(input_dict, tools):
 
             return findings
 
+        def extract_prt_event_types(content):
+            """Extract event types for pull_request_target (e.g., labeled, opened, synchronize)."""
+            types = set()
+            in_prt = False
+            prt_indent = 0
+            for line in content.split("\n"):
+                stripped = line.strip()
+                indent = len(line) - len(line.lstrip())
+                if stripped.startswith("pull_request_target"):
+                    in_prt = True
+                    prt_indent = indent
+                    continue
+                if in_prt:
+                    if stripped and indent <= prt_indent and not stripped.startswith("types"):
+                        break
+                    if stripped.startswith("types:"):
+                        rest = stripped[6:].strip()
+                        if rest.startswith("["):
+                            for t in rest.strip("[]").split(","):
+                                types.add(t.strip())
+                        continue
+                    if stripped.startswith("-"):
+                        types.add(stripped.lstrip("- ").strip())
+            return types
+
         def check_prt_checkout(content):
             triggers = extract_triggers(content)
             if "pull_request_target" not in triggers:
                 return None
-            has_checkout = False
-            checks_head = False
-            for line in content.split("\n"):
+
+            # Parse checkout steps and their ref: parameters
+            lines = content.split("\n")
+            in_checkout = False
+            checkout_indent = 0
+            checkouts = []  # list of (has_ref, ref_value)
+            current_ref = None
+
+            for i, line in enumerate(lines):
                 stripped = line.strip()
-                if "actions/checkout" in stripped:
-                    has_checkout = True
-                if has_checkout and ("pull_request.head.sha" in stripped or
-                                     "pull_request.head.ref" in stripped or
-                                     "github.event.pull_request.head" in stripped):
-                    checks_head = True
+                indent = len(line) - len(line.lstrip())
+
+                if "actions/checkout" in stripped and ("uses:" in stripped or "uses :" in stripped):
+                    if in_checkout:
+                        checkouts.append((current_ref is not None, current_ref or ""))
+                    in_checkout = True
+                    checkout_indent = indent
+                    current_ref = None
+                    continue
+
+                if in_checkout:
+                    if stripped and indent <= checkout_indent and not stripped.startswith("with:"):
+                        checkouts.append((current_ref is not None, current_ref or ""))
+                        in_checkout = False
+                        current_ref = None
+                    elif "ref:" in stripped:
+                        current_ref = stripped.split("ref:", 1)[1].strip()
+
+            if in_checkout:
+                checkouts.append((current_ref is not None, current_ref or ""))
+
+            if not checkouts:
+                return None
+
+            # Classify each checkout
+            pr_head_patterns = [
+                "pull_request.head.sha",
+                "pull_request.head.ref",
+                "github.event.pull_request.head",
+                "github.head_ref",
+            ]
+
+            checks_pr_head = False
+            has_explicit_base = False
+            has_no_ref = False
+
+            for has_ref, ref_value in checkouts:
+                if not has_ref:
+                    has_no_ref = True
+                    continue
+                ref_lower = ref_value.lower()
+                if any(pat in ref_lower for pat in pr_head_patterns):
+                    checks_pr_head = True
                     break
-            if has_checkout and checks_head:
-                return ("CRITICAL", "pull_request_target trigger with checkout of PR head code. "
-                        "Untrusted PR code executes with base repo secrets and write permissions.")
-            elif has_checkout:
-                return ("LOW", "pull_request_target trigger with checkout action present. "
-                        "Verify the checkout uses the base ref, not PR head.")
-            return None
+                if "base.sha" in ref_lower or "base.ref" in ref_lower:
+                    has_explicit_base = True
+
+            if not checks_pr_head:
+                if has_no_ref and not has_explicit_base:
+                    return ("INFO", "pull_request_target trigger with checkout action (default ref). "
+                            "Default behavior checks out base branch — safe unless ref: is added later.")
+                elif has_explicit_base:
+                    return ("INFO", "pull_request_target trigger with explicit base ref checkout. Safe.")
+                else:
+                    return ("LOW", "pull_request_target trigger with checkout action using custom ref. "
+                            "Verify the ref does not resolve to untrusted PR code.")
+
+            # --- PR head IS checked out — assess mitigating factors ---
+
+            # Factor 1: Event types — is this maintainer-gated?
+            prt_types = extract_prt_event_types(content)
+            maintainer_gated_types = {"labeled", "unlabeled", "assigned", "unassigned",
+                                       "review_requested", "review_request_removed"}
+
+            is_maintainer_gated = False
+            if prt_types and prt_types.issubset(maintainer_gated_types):
+                is_maintainer_gated = True
+
+            # Factor 2: Permissions — what can the workflow actually do?
+            perms = extract_permissions(content)
+            dangerous_perms = {"contents", "packages", "id-token", "actions"}
+            has_dangerous_perms = False
+            perm_level = perms.get("_level", "")
+
+            if perm_level in ("write-all",):
+                has_dangerous_perms = True
+            elif not perms:
+                # No permissions block at all — inherits repo defaults (often broad)
+                has_dangerous_perms = True
+            else:
+                for perm_name in dangerous_perms:
+                    if perms.get(perm_name) == "write":
+                        has_dangerous_perms = True
+                        break
+
+            # Build detail with mitigating factors
+            mitigations = []
+            if is_maintainer_gated:
+                mitigations.append(f"trigger restricted to maintainer-gated events ({', '.join(sorted(prt_types))})")
+            if not has_dangerous_perms:
+                write_perms = [k for k, v in perms.items() if v == "write" and k != "_level"]
+                mitigations.append(f"limited permissions ({', '.join(write_perms) if write_perms else 'read-only'})")
+
+            # Determine severity
+            if is_maintainer_gated and not has_dangerous_perms:
+                return ("LOW",
+                        "pull_request_target checks out PR head code, but risk is mitigated: "
+                        + "; ".join(mitigations) + ". "
+                        "Maintainer must trigger the workflow and permissions limit blast radius.")
+            elif is_maintainer_gated:
+                return ("MEDIUM",
+                        "pull_request_target checks out PR head code with dangerous permissions, "
+                        "but trigger requires maintainer action ("
+                        + ", ".join(sorted(prt_types)) + "). "
+                        "A maintainer labeling a malicious PR would grant it access to secrets.")
+            elif not has_dangerous_perms:
+                write_perms = [k for k, v in perms.items() if v == "write" and k != "_level"]
+                return ("MEDIUM",
+                        "pull_request_target checks out PR head code, but permissions are limited to: "
+                        + (", ".join(write_perms) if write_perms else "read-only") + ". "
+                        "Blast radius is reduced — no access to publishing secrets or contents:write.")
+            else:
+                return ("CRITICAL",
+                        "pull_request_target trigger with explicit checkout of PR head code "
+                        "(ref: github.event.pull_request.head). Untrusted PR code executes with "
+                        "base repo secrets and write permissions.")
 
         def check_self_hosted(content, triggers):
             has_self_hosted = "self-hosted" in content
@@ -373,10 +525,6 @@ async def run(input_dict, tools):
                 action_refs = extract_action_refs(content)
                 all_action_refs.extend([(wf_name, ref) for ref in action_refs])
 
-                # NOTE: When adding a new check type, also add a matching entry to
-                # ATTACK_SCENARIOS in Agent 3 (report combiner) so the combined report
-                # includes an attack scenario description for the new check.
-
                 # Check 1: pull_request_target + checkout
                 prt = check_prt_checkout(content)
                 if prt:
@@ -401,7 +549,7 @@ async def run(input_dict, tools):
                                           "file": wf_name, "detail": cp[1]})
 
                 # Check 5: Injection in workflow run blocks
-                injections = find_injection_in_run_blocks(content, context_label=f"workflow {wf_name}")
+                injections = find_injection_in_run_blocks(content, context_label=f"workflow {wf_name}", triggers=triggers)
                 for sev, detail in injections:
                     repo_findings.append({"check": "run_block_injection", "severity": sev,
                                           "file": wf_name, "detail": detail})
@@ -599,11 +747,12 @@ async def run(input_dict, tools):
                 if has_input_injection:
                     composite_findings.append({
                         "check": "composite_action_input_injection",
-                        "severity": "HIGH",
+                        "severity": "MEDIUM",
                         "file": short_path,
                         "detail": (f"Composite action `{action_name}` directly interpolates "
-                                   "`inputs.*` in run block. Callers may pass untrusted values — "
-                                   "the injection is hidden from workflow-level analysis."),
+                                   "`inputs.*` in run block. Not exploitable unless a calling workflow "
+                                   "passes attacker-controlled values (PR title, branch name, comment body). "
+                                   "Currently a latent injection surface — verify callers only pass trusted input."),
                     })
 
             # Deduplicate composite findings per file before adding
@@ -660,7 +809,7 @@ async def run(input_dict, tools):
         lines.append("")
 
         check_descriptions = {
-            "prt_checkout": "pull_request_target + checkout of untrusted PR code",
+            "prt_checkout": "pull_request_target + checkout (CRITICAL only when ref: points to PR head)",
             "self_hosted_runner": "Self-hosted runners exposed to PR triggers",
             "broad_permissions": "Overly broad GITHUB_TOKEN permissions",
             "cache_poisoning": "Potential cache poisoning via PR-controlled keys",
@@ -673,7 +822,7 @@ async def run(input_dict, tools):
             "composite_actions_scanned": "Composite actions analyzed",
             "composite_action_injection": "Injection in composite action run block",
             "composite_action_unpinned": "Unpinned action ref inside composite action",
-            "composite_action_input_injection": "Composite action passes inputs.* directly to run block",
+            "composite_action_input_injection": "Latent injection surface — composite action interpolates inputs.* in run block",
         }
 
         lines.append("## Findings by Check Type\n")

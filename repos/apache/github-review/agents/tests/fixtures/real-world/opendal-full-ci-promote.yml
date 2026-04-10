@@ -1,0 +1,15 @@
+# Simplified from apache/opendal .github/workflows/full-ci-promote.yml
+# Expected: prt_checkout MEDIUM (maintainer-gated: labeled, but no explicit permissions = broad)
+name: Full CI Promote
+on:
+  pull_request_target:
+    types: [labeled]
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Run full CI
+        run: make full-ci

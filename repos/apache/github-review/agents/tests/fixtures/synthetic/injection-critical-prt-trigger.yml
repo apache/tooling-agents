@@ -1,0 +1,9 @@
+name: Comment on PR target
+on:
+  pull_request_target:
+jobs:
+  comment:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Log PR title
+        run: echo "PR: ${{ github.event.pull_request.title }}"

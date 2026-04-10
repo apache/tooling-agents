@@ -1,0 +1,12 @@
+name: Promote on label
+on:
+  pull_request_target:
+    types: [labeled]
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - run: make release
