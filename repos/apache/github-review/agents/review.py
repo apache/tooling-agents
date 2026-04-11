@@ -299,27 +299,27 @@ async def run(input_dict, tools):
             "unpinned_actions": {
                 "label": "Unpinned Action Tags",
                 "severity": "MEDIUM",
-                "description": "Actions referenced by mutable version tags instead of SHA-pinned commits.",
-                "attack": ("An attacker compromises an action's repository (or a maintainer account) and pushes "
-                           "malicious code to an existing tag like `v4`. Every workflow referencing `actions/checkout@v4` "
+                "description": "Third-party actions referenced by mutable version tags instead of SHA-pinned commits. ASF policy exempts actions/*, github/*, and apache/* from pinning requirements.",
+                "attack": ("An attacker compromises a third-party action's repository (or a maintainer account) and pushes "
+                           "malicious code to an existing tag. Every workflow referencing that tag "
                            "immediately runs the compromised code. This happened in the real-world `tj-actions/changed-files` "
                            "supply chain attack (March 2025)."),
-                "example": ("1. Workflow uses `actions/setup-node@v4` (mutable tag)\n"
-                            "2. Attacker compromises the action repo and force-pushes to the `v4` tag\n"
+                "example": ("1. Workflow uses `cool-org/deploy-action@v2` (mutable tag, outside actions/*/github/*/apache/*)\n"
+                            "2. Attacker compromises the action repo and force-pushes to the `v2` tag\n"
                             "3. Next workflow run executes attacker's code with full repo access\n"
-                            "4. Fix: pin to SHA — `actions/setup-node@1a4442cacd436585916f`"),
+                            "4. Fix: pin to SHA — `cool-org/deploy-action@8843d7f92416211de9eb`"),
             },
             "composite_action_unpinned": {
                 "label": "Unpinned Actions in Composite Actions",
                 "severity": "MEDIUM",
-                "description": "Composite actions reference other actions by mutable tags.",
+                "description": "Composite actions reference third-party actions by mutable tags. ASF policy exempts actions/*, github/*, and apache/*.",
                 "attack": ("Same supply chain risk as unpinned workflow actions, but harder to audit. "
                            "Reviewers checking `.github/workflows/` won't see the unpinned refs buried "
                            "inside `.github/actions/*/action.yml`. A compromised dependency action affects "
                            "all workflows that call the composite action."),
-                "example": ("1. Composite action `.github/actions/build/action.yml` uses `actions/cache@v4`\n"
+                "example": ("1. Composite action `.github/actions/build/action.yml` uses `cool-org/cache-action@v4`\n"
                             "2. 15 workflows call this composite action\n"
-                            "3. `actions/cache@v4` tag is compromised\n"
+                            "3. `cool-org/cache-action@v4` tag is compromised\n"
                             "4. All 15 workflows are now executing malicious code"),
             },
             "composite_action_injection": {
@@ -411,8 +411,8 @@ async def run(input_dict, tools):
             },
             "missing_dependency_updates": {
                 "label": "No Automated Dependency Updates",
-                "severity": "INFO",
-                "description": "No dependabot.yml or renovate.json for automated dependency updates.",
+                "severity": "LOW",
+                "description": "No dependabot.yml or renovate.json for automated dependency updates. ASF policy requires automated dependency management for all repos using GitHub Actions.",
                 "attack": ("Without automated dependency updates, vulnerable transitive dependencies and "
                            "SHA-pinned actions persist indefinitely. Security fixes for actions and libraries "
                            "are not surfaced as PRs, leaving known vulnerabilities unpatched."),

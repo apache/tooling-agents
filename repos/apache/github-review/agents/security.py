@@ -64,6 +64,11 @@ async def run(input_dict, tools):
             "dorny", "EnricoMi", "pnpm", "apache",
         }
 
+        # ASF policy: actions in apache/*, github/*, actions/* MAY be used
+        # without restrictions. Only actions outside these orgs MUST be
+        # SHA-pinned. See https://infra.apache.org/github-actions-policy.html
+        ASF_EXEMPT_ORGS = {"actions", "github", "apache"}
+
         PR_TRIGGERS = {"pull_request", "pull_request_target", "issue_comment"}
 
         # --- Pattern matching helpers ---
@@ -625,7 +630,10 @@ async def run(input_dict, tools):
                 if parsed["type"] == "local":
                     continue
                 if parsed["type"] == "remote":
-                    if not parsed["pinned"]:
+                    # ASF policy: actions in apache/*, github/*, actions/* are
+                    # exempt from pinning requirements. Only flag unpinned refs
+                    # for actions outside these namespaces.
+                    if not parsed["pinned"] and parsed["org"] not in ASF_EXEMPT_ORGS:
                         unpinned.append({"file": wf_name, "action": parsed["raw"],
                                          "org": parsed["org"], "name": parsed["name"]})
                     if parsed["org"] not in TRUSTED_ORGS:
@@ -641,7 +649,8 @@ async def run(input_dict, tools):
                 repo_findings.append({
                     "check": "unpinned_actions", "severity": "MEDIUM",
                     "file": "(repo-wide)",
-                    "detail": (f"{len(unpinned)} unpinned action refs (mutable tags). "
+                    "detail": (f"{len(unpinned)} unpinned third-party action refs (mutable tags, "
+                               f"outside actions/*/github/*/apache/*). "
                                f"Top: {', '.join(detail_parts)}."),
                     "count": len(unpinned), "total_refs": len(all_action_refs),
                 })
@@ -697,9 +706,9 @@ async def run(input_dict, tools):
 
             if not has_deps:
                 repo_findings.append({
-                    "check": "missing_dependency_updates", "severity": "INFO",
+                    "check": "missing_dependency_updates", "severity": "LOW",
                     "file": "(missing)",
-                    "detail": "No dependabot.yml or renovate.json found.",
+                    "detail": "No dependabot.yml or renovate.json found. ASF policy requires automated dependency management.",
                 })
 
             # Check 9: Composite actions — read from prefetch cache or fall back to GitHub
@@ -771,11 +780,12 @@ async def run(input_dict, tools):
                         "detail": detail,
                     })
 
-                # Check unpinned actions inside composite
+                # Check unpinned actions inside composite (only third-party per ASF policy)
                 ca_refs = extract_action_refs(action_content)
                 for ref in ca_refs:
                     parsed = parse_action_ref(ref)
-                    if parsed["type"] == "remote" and not parsed["pinned"]:
+                    if (parsed["type"] == "remote" and not parsed["pinned"]
+                            and parsed["org"] not in ASF_EXEMPT_ORGS):
                         composite_findings.append({
                             "check": "composite_action_unpinned",
                             "severity": "MEDIUM",
@@ -873,13 +883,13 @@ async def run(input_dict, tools):
             "broad_permissions": "Overly broad GITHUB_TOKEN permissions",
             "cache_poisoning": "Potential cache poisoning via PR-controlled keys",
             "run_block_injection": "Direct ${{ }} interpolation in workflow run blocks",
-            "unpinned_actions": "Mutable tag refs (not SHA-pinned)",
-            "third_party_actions": "Actions from unverified third-party sources",
+            "unpinned_actions": "Third-party actions not SHA-pinned (ASF policy violation)",
+            "third_party_actions": "Actions from outside actions/*/github/*/apache/* namespaces",
             "codeowners_gap": "CODEOWNERS missing .github/ coverage",
             "missing_codeowners": "No CODEOWNERS file",
-            "missing_dependency_updates": "No dependabot/renovate configuration",
+            "missing_dependency_updates": "No dependabot/renovate configuration (ASF policy violation)",
             "composite_action_injection": "Injection in composite action run block",
-            "composite_action_unpinned": "Unpinned action ref inside composite action",
+            "composite_action_unpinned": "Third-party unpinned action ref inside composite action",
             "composite_action_input_injection": "Latent injection surface — composite action interpolates inputs.* in run block",
         }
 

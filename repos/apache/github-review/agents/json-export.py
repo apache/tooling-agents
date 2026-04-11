@@ -238,16 +238,16 @@ async def run(input_dict, tools):
             "unpinned_actions": {
                 "label": "Unpinned Action Tags",
                 "severity": "MEDIUM",
-                "description": "Actions referenced by mutable version tags instead of SHA-pinned commits.",
-                "attack": "An attacker compromises an action's repository and pushes malicious code to an existing tag. Every workflow referencing that tag immediately runs the compromised code. This happened in the tj-actions/changed-files attack (March 2025).",
-                "example": "1. Workflow uses actions/setup-node@v4 (mutable tag)\n2. Attacker compromises the action repo and force-pushes to the v4 tag\n3. Next workflow run executes attacker's code with full repo access\n4. Fix: pin to SHA — actions/setup-node@1a4442cacd436585916f",
+                "description": "Third-party actions (outside actions/*, github/*, apache/*) referenced by mutable version tags instead of SHA-pinned commits. ASF policy exempts actions in those namespaces.",
+                "attack": "An attacker compromises a third-party action's repository and pushes malicious code to an existing tag. Every workflow referencing that tag immediately runs the compromised code. This happened in the tj-actions/changed-files attack (March 2025).",
+                "example": "1. Workflow uses cool-org/deploy-action@v2 (mutable tag, outside exempt namespaces)\n2. Attacker compromises the action repo and force-pushes to the v2 tag\n3. Next workflow run executes attacker's code with full repo access\n4. Fix: pin to SHA — cool-org/deploy-action@8843d7f92416211de9eb",
             },
             "composite_action_unpinned": {
                 "label": "Unpinned Actions in Composite Actions",
                 "severity": "MEDIUM",
-                "description": "Composite actions reference other actions by mutable tags.",
+                "description": "Composite actions reference third-party actions (outside actions/*, github/*, apache/*) by mutable tags.",
                 "attack": "Same supply chain risk as unpinned workflow actions, but harder to audit. Reviewers checking .github/workflows/ won't see the unpinned refs buried inside .github/actions/*/action.yml.",
-                "example": "1. Composite action uses actions/cache@v4\n2. 15 workflows call this composite action\n3. actions/cache@v4 tag is compromised\n4. All 15 workflows are now executing malicious code",
+                "example": "1. Composite action uses cool-org/cache-action@v4\n2. 15 workflows call this composite action\n3. cool-org/cache-action@v4 tag is compromised\n4. All 15 workflows are now executing malicious code",
             },
             "composite_action_injection": {
                 "label": "Composite Action Input Interpolation",
@@ -287,7 +287,7 @@ async def run(input_dict, tools):
             "third_party_actions": {
                 "label": "Third-Party Actions",
                 "severity": "INFO",
-                "description": "Workflow uses actions from outside the actions/ and github/ organizations.",
+                "description": "Workflow uses actions from outside the actions/*, github/*, and apache/* namespaces.",
                 "attack": "Third-party actions run with full access to the workflow's GITHUB_TOKEN and secrets. A compromised maintainer account or repo transfer can turn a trusted action into a supply chain attack vector.",
                 "example": "1. Workflow uses cool-org/deploy-action@v2\n2. cool-org maintainer's GitHub account is compromised\n3. Attacker pushes malicious code to the v2 tag\n4. Every repo using this action now leaks secrets on next run",
             },
@@ -300,8 +300,8 @@ async def run(input_dict, tools):
             },
             "missing_dependency_updates": {
                 "label": "No Dependency Update Configuration",
-                "severity": "INFO",
-                "description": "Repository has no dependabot.yml or renovate.json for automated dependency updates.",
+                "severity": "LOW",
+                "description": "Repository has no dependabot.yml or renovate.json for automated dependency updates. ASF policy requires automated dependency management for all repos using GitHub Actions.",
                 "attack": "Without automated dependency updates, vulnerable transitive dependencies may persist indefinitely. Actions pinned to SHA are not automatically updated when security fixes are released.",
                 "example": "1. Repository uses actions/checkout@abc123 (pinned to SHA)\n2. A security vulnerability is found in that version\n3. No Dependabot or Renovate config to create update PRs\n4. Vulnerable action version persists until manually updated",
             },

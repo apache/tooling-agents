@@ -242,13 +242,14 @@ async def run(input_dict, tools):
             rec_num += 1
 
         if high_pub_repos:
+            n_hp = len(high_pub_repos)
             lines.append(f"{rec_num}. **Investigate HIGH findings in publishing repos.** "
-                         f"The {len(high_pub_repos)} repos above have HIGH-severity issues "
-                         f"that need review.\n")
+                         f"The {n_hp} {plural(n_hp, 'repo')} above {plural(n_hp, 'has', 'have')} "
+                         f"HIGH-severity issues that need review.\n")
             rec_num += 1
 
-        if composite_injection_repos:
-            n_ca = len(composite_injection_repos)
+        if ca_pub_only:
+            n_ca = len(ca_pub_only)
             lines.append(f"{rec_num}. **Audit composite action callers.** "
                          f"{n_ca} publishing {plural(n_ca, 'repo')} {plural(n_ca, 'has', 'have')} composite "
                          f"actions that interpolate `inputs.*` in shell blocks. Verify no workflow passes "
