@@ -155,13 +155,13 @@ async def run(input_dict, tools):
             return perms
 
         def find_injection_in_run_blocks(content, context_label="", triggers=None):
-            """Find ${{ }} interpolation in run: blocks. Returns list of (severity, detail)."""
+            """Find ${{ }} interpolation in run: blocks. Returns list of (severity, detail, line_num)."""
             findings = []
             in_run = False
             run_indent = 0
             current_step = ""
 
-            for line in content.split("\n"):
+            for line_num, line in enumerate(content.split("\n"), 1):
                 stripped = line.strip()
 
                 if stripped.startswith("- name:"):
@@ -174,7 +174,7 @@ async def run(input_dict, tools):
                     if run_content.startswith("|") or run_content.startswith(">"):
                         continue
                     if "${{" in run_content:
-                        findings.extend(_classify_interpolation(run_content, current_step, context_label, triggers))
+                        findings.extend(_classify_interpolation(run_content, current_step, context_label, triggers, line_num))
                     in_run = False
                     continue
 
@@ -183,11 +183,11 @@ async def run(input_dict, tools):
                     if stripped and cur_indent <= run_indent:
                         in_run = False
                     elif "${{" in line:
-                        findings.extend(_classify_interpolation(line, current_step, context_label, triggers))
+                        findings.extend(_classify_interpolation(line, current_step, context_label, triggers, line_num))
 
             return findings
 
-        def _classify_interpolation(line, step_name, context_label="", triggers=None):
+        def _classify_interpolation(line, step_name, context_label="", triggers=None, line_num=None):
             findings = []
             prefix = f" in {context_label}" if context_label else ""
             step_info = f" at step '{step_name}'" if step_name else ""
@@ -220,23 +220,27 @@ async def run(input_dict, tools):
                             f"Untrusted input `${{{{ {expr} }}}}` interpolated in run block"
                             f"{step_info}{prefix}. Trigger is `pull_request` (not `pull_request_target`), "
                             f"so fork PRs do not have access to secrets. "
-                            f"Same-repo PRs are from committers. Shell injection possible but low impact."))
+                            f"Same-repo PRs are from committers. Shell injection possible but low impact.",
+                            line_num))
                     else:
                         findings.append(("CRITICAL",
                             f"Direct interpolation of untrusted input `${{{{ {expr} }}}}` in run block"
-                            f"{step_info}{prefix}. Exploitable by external contributors."))
+                            f"{step_info}{prefix}. Exploitable by external contributors.",
+                            line_num))
                     continue
 
                 if "secrets." in expr_lower:
                     findings.append(("LOW",
                         f"Secret `${{{{ {expr} }}}}` directly interpolated in run block"
-                        f"{step_info}{prefix}. Trusted value but risks log leakage."))
+                        f"{step_info}{prefix}. Trusted value but risks log leakage.",
+                        line_num))
                     continue
 
                 if "event.inputs." in expr_lower or "inputs." in expr_lower:
                     findings.append(("LOW",
                         f"Workflow input `${{{{ {expr} }}}}` directly interpolated in run block"
-                        f"{step_info}{prefix}. Trusted committer input but should use env: block."))
+                        f"{step_info}{prefix}. Trusted committer input but should use env: block.",
+                        line_num))
                     continue
 
                 github_controlled = [
@@ -289,8 +293,10 @@ async def run(input_dict, tools):
             lines = content.split("\n")
             in_checkout = False
             checkout_indent = 0
-            checkouts = []  # list of (has_ref, ref_value)
+            checkouts = []  # list of (has_ref, ref_value, checkout_line, ref_line)
             current_ref = None
+            current_checkout_line = None
+            current_ref_line = None
 
             for i, line in enumerate(lines):
                 stripped = line.strip()
@@ -298,22 +304,30 @@ async def run(input_dict, tools):
 
                 if "actions/checkout" in stripped and ("uses:" in stripped or "uses :" in stripped):
                     if in_checkout:
-                        checkouts.append((current_ref is not None, current_ref or ""))
+                        checkouts.append((current_ref is not None, current_ref or "",
+                                          current_checkout_line, current_ref_line))
                     in_checkout = True
                     checkout_indent = indent
                     current_ref = None
+                    current_checkout_line = i + 1  # 1-indexed
+                    current_ref_line = None
                     continue
 
                 if in_checkout:
                     if stripped and indent <= checkout_indent and not stripped.startswith("with:"):
-                        checkouts.append((current_ref is not None, current_ref or ""))
+                        checkouts.append((current_ref is not None, current_ref or "",
+                                          current_checkout_line, current_ref_line))
                         in_checkout = False
                         current_ref = None
+                        current_checkout_line = None
+                        current_ref_line = None
                     elif "ref:" in stripped:
                         current_ref = stripped.split("ref:", 1)[1].strip()
+                        current_ref_line = i + 1
 
             if in_checkout:
-                checkouts.append((current_ref is not None, current_ref or ""))
+                checkouts.append((current_ref is not None, current_ref or "",
+                                  current_checkout_line, current_ref_line))
 
             if not checkouts:
                 return None
@@ -329,27 +343,34 @@ async def run(input_dict, tools):
             checks_pr_head = False
             has_explicit_base = False
             has_no_ref = False
+            finding_line = None
 
-            for has_ref, ref_value in checkouts:
+            for has_ref, ref_value, checkout_line, ref_line in checkouts:
                 if not has_ref:
                     has_no_ref = True
+                    finding_line = checkout_line
                     continue
                 ref_lower = ref_value.lower()
                 if any(pat in ref_lower for pat in pr_head_patterns):
                     checks_pr_head = True
+                    finding_line = ref_line or checkout_line
                     break
                 if "base.sha" in ref_lower or "base.ref" in ref_lower:
                     has_explicit_base = True
+                    finding_line = checkout_line
 
             if not checks_pr_head:
                 if has_no_ref and not has_explicit_base:
                     return ("INFO", "pull_request_target trigger with checkout action (default ref). "
-                            "Default behavior checks out base branch — safe unless ref: is added later.")
+                            "Default behavior checks out base branch — safe unless ref: is added later.",
+                            finding_line)
                 elif has_explicit_base:
-                    return ("INFO", "pull_request_target trigger with explicit base ref checkout. Safe.")
+                    return ("INFO", "pull_request_target trigger with explicit base ref checkout. Safe.",
+                            finding_line)
                 else:
                     return ("LOW", "pull_request_target trigger with checkout action using custom ref. "
-                            "Verify the ref does not resolve to untrusted PR code.")
+                            "Verify the ref does not resolve to untrusted PR code.",
+                            finding_line)
 
             # --- PR head IS checked out — assess mitigating factors ---
 
@@ -392,33 +413,42 @@ async def run(input_dict, tools):
                 return ("LOW",
                         "pull_request_target checks out PR head code, but risk is mitigated: "
                         + "; ".join(mitigations) + ". "
-                        "Maintainer must trigger the workflow and permissions limit blast radius.")
+                        "Maintainer must trigger the workflow and permissions limit blast radius.",
+                        finding_line)
             elif is_maintainer_gated:
                 return ("MEDIUM",
                         "pull_request_target checks out PR head code with dangerous permissions, "
                         "but trigger requires maintainer action ("
                         + ", ".join(sorted(prt_types)) + "). "
-                        "A maintainer labeling a malicious PR would grant it access to secrets.")
+                        "A maintainer labeling a malicious PR would grant it access to secrets.",
+                        finding_line)
             elif not has_dangerous_perms:
                 write_perms = [k for k, v in perms.items() if v == "write" and k != "_level"]
                 return ("MEDIUM",
                         "pull_request_target checks out PR head code, but permissions are limited to: "
                         + (", ".join(write_perms) if write_perms else "read-only") + ". "
-                        "Blast radius is reduced — no access to publishing secrets or contents:write.")
+                        "Blast radius is reduced — no access to publishing secrets or contents:write.",
+                        finding_line)
             else:
                 return ("CRITICAL",
                         "pull_request_target trigger with explicit checkout of PR head code "
                         "(ref: github.event.pull_request.head). Untrusted PR code executes with "
-                        "base repo secrets and write permissions.")
+                        "base repo secrets and write permissions.",
+                        finding_line)
 
         def check_self_hosted(content, triggers):
-            has_self_hosted = "self-hosted" in content
-            if not has_self_hosted:
+            # Find first line with self-hosted
+            sh_line = None
+            for line_num, line in enumerate(content.split("\n"), 1):
+                if "self-hosted" in line:
+                    sh_line = line_num
+                    break
+            if sh_line is None:
                 return None
 
             has_pr_trigger = bool(triggers & PR_TRIGGERS)
             if not has_pr_trigger:
-                return ("INFO", "Uses self-hosted runners. Ensure runners are ephemeral.")
+                return ("INFO", "Uses self-hosted runners. Ensure runners are ephemeral.", sh_line)
 
             # --- PR trigger present — assess mitigating factors (same 2x2 as prt_checkout) ---
 
@@ -461,47 +491,63 @@ async def run(input_dict, tools):
                 return ("LOW",
                         "Self-hosted runner with PR trigger, but risk is mitigated: "
                         + "; ".join(mitigations) + ". "
-                        "Maintainer must trigger the workflow and permissions limit blast radius.")
+                        "Maintainer must trigger the workflow and permissions limit blast radius.",
+                        sh_line)
             elif is_maintainer_gated:
                 return ("MEDIUM",
                         "Self-hosted runner with PR trigger and dangerous permissions, "
                         "but trigger requires maintainer action ("
                         + ", ".join(sorted(pr_event_types)) + "). "
-                        "A maintainer labeling a malicious PR would grant runner access to secrets.")
+                        "A maintainer labeling a malicious PR would grant runner access to secrets.",
+                        sh_line)
             elif not has_dangerous_perms:
                 write_perms = [k for k, v in perms.items() if v == "write" and k != "_level"]
                 return ("MEDIUM",
                         "Self-hosted runner with PR trigger, but permissions are limited to: "
                         + (", ".join(write_perms) if write_perms else "read-only") + ". "
-                        "Blast radius is reduced — no access to publishing secrets or contents:write.")
+                        "Blast radius is reduced — no access to publishing secrets or contents:write.",
+                        sh_line)
             else:
                 return ("HIGH",
                         "Self-hosted runner with PR trigger. External contributors can "
-                        "execute arbitrary code on self-hosted infrastructure with broad permissions.")
+                        "execute arbitrary code on self-hosted infrastructure with broad permissions.",
+                        sh_line)
 
         def check_permissions(content):
             perms = extract_permissions(content)
             findings = []
+            # Find the permissions: line
+            perm_line = None
+            for line_num, line in enumerate(content.split("\n"), 1):
+                if line.strip().startswith("permissions:"):
+                    perm_line = line_num
+                    break
             level = perms.get("_level", "")
             if level in ("write-all", "read-all|write-all"):
                 findings.append(("HIGH", "Workflow uses `permissions: write-all`. "
-                                 "Follow least-privilege principle."))
+                                 "Follow least-privilege principle.", perm_line))
             write_perms = [k for k, v in perms.items() if v == "write" and k != "_level"]
             if len(write_perms) > 3:
                 findings.append(("LOW", f"Requests write access to {len(write_perms)} scopes: "
-                                 f"{', '.join(write_perms)}."))
+                                 f"{', '.join(write_perms)}.", perm_line))
             return findings
 
         def check_cache_poisoning(content, triggers):
             has_pr = bool(triggers & {"pull_request", "pull_request_target"})
             has_cache = "actions/cache" in content
             if has_cache and has_pr:
-                for line in content.split("\n"):
+                # Find the actions/cache line
+                cache_line = None
+                for line_num, line in enumerate(content.split("\n"), 1):
+                    if "actions/cache" in line:
+                        cache_line = line_num
+                        break
+                for line_num, line in enumerate(content.split("\n"), 1):
                     if "key:" in line and ("pull_request" in line or "head_ref" in line):
                         return ("HIGH", "Cache key derived from PR-controlled value. "
-                                "A malicious PR could poison the cache.")
+                                "A malicious PR could poison the cache.", line_num)
                 return ("INFO", "Uses actions/cache with PR trigger. Verify cache keys "
-                        "are not PR-controlled.")
+                        "are not PR-controlled.", cache_line)
             return None
 
         def deduplicate_findings(findings):
@@ -512,6 +558,10 @@ async def run(input_dict, tools):
             for f in findings:
                 key = (f["check"], f["file"], f["severity"])
                 groups.setdefault(key, []).append(f)
+
+            def _collect_lines(items):
+                """Collect non-null line numbers from a list of findings."""
+                return sorted(set(item["line"] for item in items if item.get("line")))
 
             for (check, file, severity), items in groups.items():
                 if len(items) == 1:
@@ -526,19 +576,24 @@ async def run(input_dict, tools):
                     expr_list = sorted(exprs)[:5]
                     expr_str = ", ".join(f"`{e}`" for e in expr_list)
                     more = f" +{len(exprs) - 5} more" if len(exprs) > 5 else ""
-                    deduped.append({
+                    collected = _collect_lines(items)
+                    entry = {
                         "check": check,
                         "file": file,
                         "severity": severity,
                         "detail": (f"{len(items)} instances of direct interpolation in run blocks. "
                                    f"Expressions: {expr_str}{more}."),
                         "count": len(items),
-                    })
+                    }
+                    if collected:
+                        entry["lines"] = collected
+                    deduped.append(entry)
                 elif check == "composite_action_unpinned":
                     # Summarize unpinned refs inside one composite action
                     refs = [item["detail"].split("`")[1] if "`" in item["detail"] else "?" for item in items]
                     unique_refs = sorted(set(refs))
-                    deduped.append({
+                    collected = _collect_lines(items)
+                    entry = {
                         "check": check,
                         "file": file,
                         "severity": severity,
@@ -546,13 +601,19 @@ async def run(input_dict, tools):
                                    f"{', '.join(f'`{r}`' for r in unique_refs[:5])}"
                                    + (f" +{len(unique_refs)-5} more" if len(unique_refs) > 5 else "")),
                         "count": len(items),
-                    })
+                    }
+                    if collected:
+                        entry["lines"] = collected
+                    deduped.append(entry)
                 else:
                     # For other checks, keep first and note count
                     entry = dict(items[0])
                     if len(items) > 1:
                         entry["detail"] = f"({len(items)}x) {entry['detail']}"
                         entry["count"] = len(items)
+                        collected = _collect_lines(items)
+                        if collected:
+                            entry["lines"] = collected
                     deduped.append(entry)
 
             return deduped
@@ -597,30 +658,35 @@ async def run(input_dict, tools):
                 prt = check_prt_checkout(content)
                 if prt:
                     repo_findings.append({"check": "prt_checkout", "severity": prt[0],
-                                          "file": wf_name, "detail": prt[1]})
+                                          "file": wf_name, "detail": prt[1],
+                                          "line": prt[2] if len(prt) > 2 else None})
 
                 # Check 2: Self-hosted runners
                 sh = check_self_hosted(content, triggers)
                 if sh:
                     repo_findings.append({"check": "self_hosted_runner", "severity": sh[0],
-                                          "file": wf_name, "detail": sh[1]})
+                                          "file": wf_name, "detail": sh[1],
+                                          "line": sh[2] if len(sh) > 2 else None})
 
                 # Check 3: Permissions
-                for sev, detail in check_permissions(content):
-                    repo_findings.append({"check": "broad_permissions", "severity": sev,
-                                          "file": wf_name, "detail": detail})
+                for item in check_permissions(content):
+                    repo_findings.append({"check": "broad_permissions", "severity": item[0],
+                                          "file": wf_name, "detail": item[1],
+                                          "line": item[2] if len(item) > 2 else None})
 
                 # Check 4: Cache poisoning
                 cp = check_cache_poisoning(content, triggers)
                 if cp:
                     repo_findings.append({"check": "cache_poisoning", "severity": cp[0],
-                                          "file": wf_name, "detail": cp[1]})
+                                          "file": wf_name, "detail": cp[1],
+                                          "line": cp[2] if len(cp) > 2 else None})
 
                 # Check 5: Injection in workflow run blocks
                 injections = find_injection_in_run_blocks(content, context_label=f"workflow {wf_name}", triggers=triggers)
-                for sev, detail in injections:
-                    repo_findings.append({"check": "run_block_injection", "severity": sev,
-                                          "file": wf_name, "detail": detail})
+                for item in injections:
+                    repo_findings.append({"check": "run_block_injection", "severity": item[0],
+                                          "file": wf_name, "detail": item[1],
+                                          "line": item[2] if len(item) > 2 else None})
 
             # Check 6: Unpinned actions (repo-wide summary)
             unpinned = []
@@ -772,12 +838,13 @@ async def run(input_dict, tools):
                 # Run injection checks
                 context = f"composite action .github/actions/{action_name}"
                 injections = find_injection_in_run_blocks(action_content, context_label=context)
-                for sev, detail in injections:
+                for item in injections:
                     composite_findings.append({
                         "check": "composite_action_injection",
-                        "severity": sev,
+                        "severity": item[0],
                         "file": short_path,
-                        "detail": detail,
+                        "detail": item[1],
+                        "line": item[2] if len(item) > 2 else None,
                     })
 
                 # Check unpinned actions inside composite (only third-party per ASF policy)
@@ -786,19 +853,27 @@ async def run(input_dict, tools):
                     parsed = parse_action_ref(ref)
                     if (parsed["type"] == "remote" and not parsed["pinned"]
                             and parsed["org"] not in ASF_EXEMPT_ORGS):
+                        # Find the line with this uses: ref
+                        ref_line = None
+                        for ln, cl in enumerate(action_content.split("\n"), 1):
+                            if ref in cl:
+                                ref_line = ln
+                                break
                         composite_findings.append({
                             "check": "composite_action_unpinned",
                             "severity": "MEDIUM",
                             "file": short_path,
                             "detail": (f"Composite action uses unpinned action `{parsed['raw']}`. "
                                        "Supply chain risk."),
+                            "line": ref_line,
                         })
 
                 # Check inputs.* directly in run blocks (hidden injection)
                 has_input_injection = False
+                input_inj_line = None
                 in_run = False
                 run_indent = 0
-                for cline in action_content.split("\n"):
+                for ln, cline in enumerate(action_content.split("\n"), 1):
                     cs = cline.strip()
                     if cs.startswith("run:"):
                         in_run = True
@@ -808,6 +883,7 @@ async def run(input_dict, tools):
                             continue
                         if "inputs." in rest and "${{" in rest:
                             has_input_injection = True
+                            input_inj_line = ln
                             break
                     elif in_run:
                         ci = len(cline) - len(cline.lstrip())
@@ -815,6 +891,7 @@ async def run(input_dict, tools):
                             in_run = False
                         elif "inputs." in cline and "${{" in cline:
                             has_input_injection = True
+                            input_inj_line = ln
                             break
 
                 if has_input_injection:
@@ -826,6 +903,7 @@ async def run(input_dict, tools):
                                    "`inputs.*` in run block. Not exploitable unless a calling workflow "
                                    "passes attacker-controlled values (PR title, branch name, comment body). "
                                    "Currently a latent injection surface — verify callers only pass trusted input."),
+                        "line": input_inj_line,
                     })
 
             # Deduplicate composite findings per file before adding
@@ -908,38 +986,47 @@ async def run(input_dict, tools):
                 if sev in by_severity:
                     by_severity[sev].append((repo, f))
 
+        def file_ref(f):
+            """Format file reference with line number(s) if available."""
+            name = f.get("file", "")
+            if f.get("lines"):
+                return f"{name}:{','.join(str(l) for l in f['lines'])}"
+            elif f.get("line"):
+                return f"{name}:{f['line']}"
+            return name
+
         if by_severity["CRITICAL"]:
             lines.append("## CRITICAL Findings\n")
             lines.append("Untrusted external input directly interpolated in shell execution contexts.\n")
             for repo, f in sorted(by_severity["CRITICAL"], key=lambda x: (x[0], x[1].get("file", ""))):
-                lines.append(f"- **{owner}/{repo}** (`{f['file']}`): [{f['check']}] {f['detail']}")
+                lines.append(f"- **{owner}/{repo}** (`{file_ref(f)}`): [{f['check']}] {f['detail']}")
             lines.append("")
 
         if by_severity["HIGH"]:
             lines.append("## HIGH Findings\n")
             for repo, f in sorted(by_severity["HIGH"], key=lambda x: (x[0], x[1].get("file", ""))):
-                lines.append(f"- **{owner}/{repo}** (`{f['file']}`): [{f['check']}] {f['detail']}")
+                lines.append(f"- **{owner}/{repo}** (`{file_ref(f)}`): [{f['check']}] {f['detail']}")
             lines.append("")
 
         if by_severity["MEDIUM"]:
             lines.append("## MEDIUM Findings\n")
             lines.append(f"<details>\n<summary>Show {len(by_severity['MEDIUM'])} medium findings</summary>\n")
             for repo, f in sorted(by_severity["MEDIUM"], key=lambda x: (x[0], x[1].get("file", ""))):
-                lines.append(f"- **{owner}/{repo}** (`{f['file']}`): [{f['check']}] {f['detail']}")
+                lines.append(f"- **{owner}/{repo}** (`{file_ref(f)}`): [{f['check']}] {f['detail']}")
             lines.append(f"\n</details>\n")
 
         if by_severity["LOW"]:
             lines.append("## LOW Findings\n")
             lines.append(f"<details>\n<summary>Show {len(by_severity['LOW'])} low findings</summary>\n")
             for repo, f in sorted(by_severity["LOW"], key=lambda x: (x[0], x[1].get("file", ""))):
-                lines.append(f"- **{owner}/{repo}** (`{f['file']}`): [{f['check']}] {f['detail']}")
+                lines.append(f"- **{owner}/{repo}** (`{file_ref(f)}`): [{f['check']}] {f['detail']}")
             lines.append(f"\n</details>\n")
 
         if by_severity["INFO"]:
             lines.append("## INFO Findings\n")
             lines.append(f"<details>\n<summary>Show {len(by_severity['INFO'])} info findings</summary>\n")
             for repo, f in sorted(by_severity["INFO"], key=lambda x: (x[0], x[1].get("file", ""))):
-                lines.append(f"- **{owner}/{repo}** (`{f['file']}`): [{f['check']}] {f['detail']}")
+                lines.append(f"- **{owner}/{repo}** (`{file_ref(f)}`): [{f['check']}] {f['detail']}")
             lines.append(f"\n</details>\n")
 
         lines.append("## Detailed Results by Repository\n")
@@ -957,7 +1044,7 @@ async def run(input_dict, tools):
 
             sev_order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "INFO": 4}
             for f in sorted(findings, key=lambda x: sev_order.get(x["severity"], 99)):
-                lines.append(f"- **[{f['severity']}]** `{f['file']}` — [{f['check']}] {f['detail']}")
+                lines.append(f"- **[{f['severity']}]** `{file_ref(f)}` — [{f['check']}] {f['detail']}")
             lines.append("")
 
         lines.append("---\n")

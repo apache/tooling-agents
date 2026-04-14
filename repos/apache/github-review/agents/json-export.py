@@ -122,12 +122,17 @@ async def run(input_dict, tools):
 
         def classify_finding(f):
             """Extract clean finding record."""
-            return {
+            record = {
                 "severity": f.get("severity", "INFO"),
                 "check": f.get("check", "unknown"),
                 "file": f.get("file", "unknown"),
                 "detail": f.get("detail", ""),
             }
+            if f.get("line"):
+                record["line"] = f["line"]
+            if f.get("lines"):
+                record["lines"] = f["lines"]
+            return record
 
         def summarize_severities(findings):
             counts = {}

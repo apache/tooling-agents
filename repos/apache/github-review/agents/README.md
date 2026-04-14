@@ -125,25 +125,57 @@ for g in gaps: print(f'  {g}')
 "
 ```
 
+## ASF policy integration
+
+The security checks incorporate guidance from three ASF sources:
+
+- [GitHub Actions Security](https://cwiki.apache.org/confluence/display/BUILDS/GitHub+Actions+Security) — practical advice on dangerous workflows
+- [GitHub Actions Policy](https://infra.apache.org/github-actions-policy.html) — formal rules (MUST/SHOULD requirements)
+- [Automated Release Signing](https://infra.apache.org/release-signing.html#automated-release-signing) — CI signing key requirements
+
+Two material policy integrations:
+
+**ASF-exempt action namespaces.** ASF policy says actions in `actions/*`, `github/*`, and `apache/*` MAY be used without restrictions. The `ASF_EXEMPT_ORGS` constant excludes these from `unpinned_actions` and `composite_action_unpinned` checks — only third-party actions outside these namespaces are flagged. The broader `TRUSTED_ORGS` set (which also includes docker, gradle, pypa, etc.) is still used for the informational `third_party_actions` check.
+
+**Mandatory dependency management.** ASF policy says "All repositories using GitHub Actions **must** have automatic dependency management." `missing_dependency_updates` is therefore LOW severity (policy violation), not just informational.
+
 ## Security checks reference
 
 The Security agent runs 13 checks. When adding a new check, also update `ATTACK_SCENARIOS` in `review.py` and `check_definitions` in `json-export.py`.
 
 | Check | Severity | What It Detects |
 |-------|----------|-----------------|
-| `prt_checkout` | CRITICAL–LOW | `pull_request_target` + checkout of PR head. Severity uses a 2×2 matrix (see below). |
-| `self_hosted_runner` | HIGH–LOW | Self-hosted runners exposed to PR triggers. Severity uses same 2×2 matrix as prt_checkout. |
-| `unpinned_actions` | MEDIUM | Actions referenced by mutable tags instead of SHA pins |
-| `composite_action_unpinned` | MEDIUM | Unpinned actions inside composite actions |
+| `prt_checkout` | CRITICAL–INFO | `pull_request_target` + checkout of PR head. Severity uses a 2×2 matrix (see below). |
+| `self_hosted_runner` | HIGH–INFO | Self-hosted runners exposed to PR triggers. Severity uses same 2×2 matrix as prt_checkout. |
+| `unpinned_actions` | MEDIUM | Third-party actions (outside `actions/*`, `github/*`, `apache/*`) referenced by mutable tags instead of SHA pins |
+| `composite_action_unpinned` | MEDIUM | Third-party unpinned actions inside composite actions (same ASF exemption) |
 | `composite_action_input_injection` | MEDIUM | Composite action interpolates `inputs.*` in run blocks — latent injection surface |
 | `run_block_injection` | LOW–CRITICAL | `${{ }}` interpolation in run blocks. CRITICAL for `pull_request_target`, LOW for `pull_request`. |
 | `composite_action_injection` | LOW | Interpolation in composite action run blocks |
 | `broad_permissions` | LOW–HIGH | GITHUB_TOKEN with excessive scopes |
 | `missing_codeowners` | LOW | No CODEOWNERS file |
 | `codeowners_gap` | LOW | CODEOWNERS missing `.github/` coverage |
+| `missing_dependency_updates` | LOW | No dependabot.yml or renovate.json (ASF policy violation) |
 | `cache_poisoning` | INFO | `actions/cache` with PR trigger |
-| `third_party_actions` | INFO | Actions from outside `actions/` and `github/` orgs |
-| `missing_dependency_updates` | INFO | No dependabot.yml or renovate.json |
+| `third_party_actions` | INFO | Actions from outside `actions/*`, `github/*`, `apache/*` namespaces |
+
+### Line numbers
+
+Each finding includes a `line` field (integer, nullable) pointing to the relevant line in the workflow YAML. When deduplication collapses multiple findings, a `lines` list replaces the single `line` field. Repo-wide findings (`unpinned_actions`, `third_party_actions`, `missing_codeowners`, etc.) have `line: null`.
+
+In the markdown security report, line numbers render as `filename:LINE` (e.g., `renovate-changelog.yml:47`).
+
+In the JSON export, findings look like:
+
+```json
+{
+  "severity": "CRITICAL",
+  "check": "prt_checkout",
+  "file": "renovate-changelog.yml",
+  "detail": "pull_request_target trigger with checkout of PR head code...",
+  "line": 47
+}
+```
 
 ### prt_checkout severity matrix
 
@@ -181,15 +213,22 @@ Interpolation of PR-related values (`event.pull_request.title`, `.body`, `.head.
 - **`pull_request` trigger** → LOW (fork PRs do NOT get secrets)
 - **No PR trigger** → CRITICAL (conservative default)
 
+### ASF_EXEMPT_ORGS vs TRUSTED_ORGS
+
+Two org sets serve different purposes:
+
+- **`ASF_EXEMPT_ORGS`** = `{"actions", "github", "apache"}` — per ASF policy, actions in these namespaces need not be SHA-pinned. Used by `unpinned_actions` and `composite_action_unpinned`.
+- **`TRUSTED_ORGS`** — broader set including docker, gradle, pypa, codecov, etc. Used only for the informational `third_party_actions` check (which flags actions outside this set for awareness, not as a policy violation).
+
 ## Adding a new check
 
 When you add a check to `security.py`:
 
-1. **Add the check function** and call it in the main scan loop
-2. **Add a comment** referencing the ATTACK_SCENARIOS update (see existing comment above Check 1)
-3. **Update `review.py`**: add entry to `ATTACK_SCENARIOS` dict
+1. **Add the check function** — return `(severity, detail, line_num)` tuples. Use `enumerate(content.split("\n"), 1)` to track 1-indexed line numbers.
+2. **Call it in the main scan loop** — capture the `line` field: `"line": result[2] if len(result) > 2 else None`
+3. **Update `review.py`**: add entry to `ATTACK_SCENARIOS` dict with label, severity, description, attack, and example
 4. **Update `json-export.py`**: add entry to `check_definitions` dict
-5. **Update `tests/security_checks.py`**: add the function
+5. **Update `tests/security_checks.py`**: add the function (note: test module still uses 2-tuples for backward compatibility)
 6. **Update `tests/test_security_checks.py`**: add handler in `run_check()`, create fixtures, add test cases
 7. **Run tests**: `python3 tests/test_security_checks.py`
 
@@ -201,7 +240,7 @@ Run before deploying any Security agent changes:
 python3 tests/test_security_checks.py
 ```
 
-16 tests covering the prt_checkout severity matrix, trigger-aware injection, self-hosted runners, cache poisoning, broad permissions, and three real-world regression cases (Beam, OpenDAL, Texera).
+19 tests covering the prt_checkout severity matrix, trigger-aware injection, self-hosted runners, cache poisoning, broad permissions, and three real-world regression cases (Beam, OpenDAL, Texera).
 
 See `tests/README.md` for details on adding tests and fixtures.
 
@@ -212,3 +251,4 @@ See `tests/README.md` for details on adding tests and fixtures.
 - **Composite action nesting**: Only top-level `.github/actions/*/action.yml` are checked — composites calling other composites are not recursively analyzed.
 - **No runtime verification**: Does not verify whether secrets are configured, branch protection rules exist, or GITHUB_TOKEN permissions are effective given org-level settings.
 - **Org-level security models**: Some projects (e.g., Apache Beam) scope publishing secrets to manual/scheduled workflows only. The scanner cannot detect these policies and may overstate risk.
+- **Conditional gates not evaluated**: Workflows with access control checks (e.g., `github.event.pull_request.user.login == 'renovate[bot]'`) are flagged based on the dangerous pattern even if the gate prevents exploitation. These appear as mitigated findings in the report.

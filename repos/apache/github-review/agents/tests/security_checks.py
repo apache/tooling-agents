@@ -3,6 +3,10 @@ Security check functions extracted from agent-security-scanner-v3.py.
 
 Keep in sync with Agent 2. When modifying checks in the agent,
 update this module and run the tests before deploying.
+
+Note: Agent functions now return 3-tuples (severity, detail, line_num).
+This module returns 2-tuples for backward compatibility with existing tests.
+Tests access result[0] and result[1] which work with both formats.
 """
 import re
 
@@ -14,6 +18,11 @@ TRUSTED_ORGS = {
     "pypa", "peter-evans", "softprops", "JamesIves", "crazy-max",
     "dorny", "EnricoMi", "pnpm", "apache",
 }
+
+# ASF policy: actions in apache/*, github/*, actions/* MAY be used
+# without restrictions. Only actions outside these orgs MUST be
+# SHA-pinned. See https://infra.apache.org/github-actions-policy.html
+ASF_EXEMPT_ORGS = {"actions", "github", "apache"}
 
 
 def extract_triggers(content):
