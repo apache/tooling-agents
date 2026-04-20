@@ -5,6 +5,8 @@ Automated analysis of GitHub Actions workflows across the Apache Software Founda
 1. **Which projects publish packages to registries from CI?** (npm, PyPI, Maven Central, Docker Hub, crates.io, etc.)
 2. **What are the security risks in those CI pipelines?**
 
+> **Note:** Some high-severity findings may be omitted from this public report while remediation is in progress. The full unredacted analysis is available to ASF infrastructure and security teams.
+
 ## Reports at a Glance
 
 | Report | File | What It Covers | Size |
@@ -19,7 +21,7 @@ Automated analysis of GitHub Actions workflows across the Apache Software Founda
 
 ## Reading Order
 
-**If you have 2 minutes:** Read the Executive Brief. It tells you what's exploitable, what to fix, and when.
+**If you have 2 minutes:** Read the Executive Brief. It tells you what needs attention and when.
 
 **If you have 15 minutes:** Read the Combined Review. It has the full risk tiering, vulnerability type breakdown, and attack scenarios.
 
@@ -38,7 +40,6 @@ The one-pager. The Brief agent reads the same data as the Combined Review but st
 | Section | What It Shows |
 |---------|--------------|
 | **Goal** | What was scanned, how many repos publish packages |
-| **Exploitable Now** | CRITICAL findings only — repos where external contributors can execute code with publishing secrets today. Each entry names the repo, file, and what registries it publishes to. |
 | **High Risk: Publishing Repos** | Repos that publish AND have HIGH-severity findings |
 | **Latent Risk: Composite Action Injection** | Publishing repos with composite actions that interpolate inputs — not exploitable today, one unsafe caller away |
 | **Systemic Issues** | Org-wide problems: trusted publishing migration, unpinned actions, missing CODEOWNERS |
@@ -48,7 +49,6 @@ The one-pager. The Brief agent reads the same data as the Combined Review but st
 ### How to Read It
 
 - **Share this with leadership and the security team.** It's designed to be read in 2 minutes and forwarded without explanation.
-- **"Exploitable Now" is your P0 list.** These need fixes this week.
 - **"Recommended Actions" are ordered by urgency and impact.** Each one links to details.
 - Everything else is in the linked reports for whoever needs to dig in.
 
@@ -65,7 +65,7 @@ The entry point. The Review agent generates this by cross-referencing data from 
 | **At a Glance** | Dashboard: repos scanned, publishing count, finding totals, top ecosystems |
 | **Findings by Vulnerability Type** | Aggregate table of all vulnerability types found, with counts and severity. Each row links to an attack scenario. |
 | **Attack Scenarios** | For each vulnerability type: what it is, how an attacker exploits it, step-by-step example |
-| **Immediate Attention Required** | CRITICAL/HIGH repos that *also publish packages* — highest supply-chain risk |
+| **Immediate Attention Required** | HIGH repos that *also publish packages* — highest supply-chain risk |
 | **Non-Publishing Repos with HIGH Findings** | HIGH-severity repos that don't publish (CI-only risk, no supply-chain impact) |
 | **Moderate Risk** | Publishing repos with MEDIUM findings (typically unpinned actions) |
 | **Low Risk** | Publishing repos with only LOW/INFO findings |
@@ -74,8 +74,8 @@ The entry point. The Review agent generates this by cross-referencing data from 
 
 ### How to Read It
 
-- **Immediate Attention repos** are your P0s — they publish packages AND have exploitable vulnerabilities
-- **Non-Publishing HIGH repos** are P1s — important but no supply-chain blast radius
+- **Immediate Attention repos** are your top priorities — they publish packages AND have exploitable vulnerabilities
+- **Non-Publishing HIGH repos** are next — important but no supply-chain blast radius
 - Everything links to the detailed repo sections in the publishing and security reports
 - The "Attack Scenarios" section is designed to be shared with developers who need to understand *why* a finding matters
 
@@ -128,17 +128,17 @@ The Security agent generates this by pattern-matching on cached workflow YAML. Z
 
 | Section | What It Shows |
 |---------|--------------|
-| **Executive Summary** | Severity breakdown: CRITICAL, HIGH, MEDIUM, LOW, INFO |
+| **Executive Summary** | Severity breakdown: HIGH, MEDIUM, LOW, INFO |
 | **Findings by Check Type** | Which checks found what, with counts |
-| **CRITICAL / HIGH / MEDIUM / LOW / INFO Findings** | All findings grouped by severity |
+| **HIGH / MEDIUM / LOW / INFO Findings** | All findings grouped by severity |
 | **Detailed Results by Repository** | Per-repo: all findings sorted by severity with file and detail |
 
 ### Check Types (Severity Order)
 
 | Check | Severity | What It Detects |
 |-------|----------|-----------------|
-| `prt_checkout` | CRITICAL–LOW | `pull_request_target` + checkout of PR head code. CRITICAL if broad permissions + auto-trigger. MEDIUM if one mitigating factor (limited perms or maintainer-gated). LOW if both. |
-| `self_hosted_runner` | HIGH | Self-hosted runners exposed to PR triggers — persistent compromise risk |
+| `prt_checkout` | HIGH–LOW | `pull_request_target` + checkout of PR head code. Severity depends on permissions and trigger type. |
+| `self_hosted_runner` | HIGH–LOW | Self-hosted runners exposed to PR triggers — persistent compromise risk. Severity depends on permissions and trigger type. |
 | `unpinned_actions` | MEDIUM | Third-party actions (outside `actions/*`, `github/*`, `apache/*`) referenced by mutable tags instead of SHA pins — supply chain risk |
 | `composite_action_unpinned` | MEDIUM | Third-party unpinned actions inside composite actions — harder to audit. Same ASF exemption as above. |
 | `composite_action_input_injection` | MEDIUM | Composite action interpolates `inputs.*` in `run:` blocks — latent injection surface, exploitable only if callers pass untrusted values |
@@ -153,8 +153,7 @@ The Security agent generates this by pattern-matching on cached workflow YAML. Z
 
 ### How to Read It
 
-- **CRITICAL findings are confirmed vulnerabilities** — PR head checkout with broad permissions and no maintainer gate. An external contributor can exploit these by opening a PR.
-- **HIGH findings are active risks** — self-hosted runner exposure, write-all permissions, or other patterns that could be exploited with existing triggers
+- **HIGH findings are active risks** — self-hosted runner exposure, PR target checkout with broad permissions, or other patterns that could be exploited
 - **MEDIUM findings are supply chain hygiene and latent risks** — unpinned actions (real attacks have exploited this, e.g., tj-actions/changed-files, March 2025) and composite action injection patterns that are not exploitable today but become dangerous if a future caller passes untrusted input
 - **LOW/INFO are best practices** — important for defense-in-depth but not urgent
 
@@ -175,7 +174,7 @@ Machine-readable structured data combining everything from the Publishing Analys
   "check_definitions": {                    // Attack scenarios for each check type
     "<check_name>": {
       "label": "Human-Readable Name",
-      "severity": "CRITICAL|HIGH|MEDIUM|LOW|INFO",
+      "severity": "HIGH|MEDIUM|LOW|INFO",
       "description": "What this check detects",
       "attack": "How an attacker exploits it",
       "example": "Step-by-step attack example"
@@ -187,7 +186,7 @@ Machine-readable structured data combining everything from the Publishing Analys
     "repos_with_workflows": 1202,
     "total_workflows": 4731,
     "repos_publishing": 343,
-    "ecosystem_counts": {                   // All ecosystems (including docs/CI)
+    "ecosystem_counts": {
       "npm": 150, "docker_hub": 80, ...
     },
     "category_counts": {
@@ -198,69 +197,79 @@ Machine-readable structured data combining everything from the Publishing Analys
     },
     "trusted_publishing_opportunities": 113,
     "security": {
-      "total_findings": 5357,
-      "repos_with_findings": 1203,
+      "total_findings": 4200,
+      "repos_with_findings": 1190,
       "severity_counts": {
-        "CRITICAL": 22, "HIGH": 283, "MEDIUM": 1180,
-        "LOW": 1872, "INFO": 2000
+        "HIGH": 195, "MEDIUM": 599,
+        "LOW": 2487, "INFO": 1321
       },
       "check_counts": {
         "missing_codeowners": 1176,
-        "unpinned_actions": 1109, ...
+        "unpinned_actions": 498, ...
       }
     }
   },
 
   "repos": [                                // One entry per repo
     {
-      "repo": "apache/kafka",
+      "repo": "apache/commons-lang",
       "has_workflows": true,
-      "total_workflows": 22,
-      "publishes_to_registry": true,        // release or snapshot only
-      "ecosystems": ["docker_hub"],         // publishing ecosystems
+      "total_workflows": 5,
+      "publishes_to_registry": true,
+      "ecosystems": ["maven_central"],
       "category_counts": {
-        "release_artifact": 2
+        "release_artifact": 1
       },
       "trusted_publishing": {
-        "migration_needed": false,          // uses long-lived token for OIDC-capable ecosystem?
-        "eligible_ecosystems": []           // which ecosystems could migrate
+        "migration_needed": false,
+        "eligible_ecosystems": []
       },
       "security": {
-        "total_findings": 9,
-        "worst_severity": "CRITICAL",       // worst across all findings
-        "severity_counts": {"CRITICAL": 1, "MEDIUM": 4, "LOW": 2, "INFO": 2},
-        "check_counts": {"composite_action_unpinned": 3, "prt_checkout": 2, ...}
+        "total_findings": 4,
+        "worst_severity": "MEDIUM",
+        "severity_counts": {"MEDIUM": 1, "LOW": 2, "INFO": 1},
+        "check_counts": {"unpinned_actions": 1, "missing_codeowners": 1, "missing_dependency_updates": 1, "third_party_actions": 1}
       },
-      "workflows": [                        // publishing workflows only
+      "workflows": [
         {
-          "file": "docker_promote.yml",
-          "workflow_name": "Promote Release Candidate Docker Image",
+          "file": "maven-release.yml",
+          "workflow_name": "Release to Maven Central",
           "publishes": true,
           "category": "release_artifact",
-          "ecosystems": ["docker_hub"],
+          "ecosystems": ["maven_central"],
           "trigger": "workflow_dispatch",
-          "auth_method": "secrets.DOCKERHUB_USER and secrets.DOCKERHUB_TOKEN",
-          "publish_actions": ["docker/login-action@5e57cd..."],
-          "publish_commands": ["docker buildx imagetools create ..."],
-          "summary": "Promotes RC Docker images to final release on Docker Hub.",
+          "auth_method": "secrets.NEXUS_USER / secrets.NEXUS_PW",
+          "publish_actions": [],
+          "publish_commands": ["mvn deploy -P apache-release"],
+          "summary": "Publishes release artifacts to Maven Central via Nexus staging.",
           "confidence": "high",
-          "security_notes": ["[LOW] github.event.inputs directly interpolated..."]
+          "security_notes": []
         }
       ],
-      "findings": [                         // all security findings
+      "findings": [
         {
-          "severity": "CRITICAL",
-          "check": "prt_checkout",
-          "file": "pr-labeled.yml",
-          "detail": "pull_request_target trigger with checkout of PR head code...",
-          "line": 47                         // line number in workflow file (optional)
+          "severity": "MEDIUM",
+          "check": "unpinned_actions",
+          "file": "(repo-wide)",
+          "detail": "3 unpinned third-party action refs (outside actions/*/github/*/apache/*)."
         },
         {
           "severity": "LOW",
-          "check": "run_block_injection",
-          "file": "build.yml",
-          "detail": "(3x) ...",
-          "lines": [12, 38, 55]              // multiple line numbers when deduplicated (optional)
+          "check": "missing_codeowners",
+          "file": "(missing)",
+          "detail": "No CODEOWNERS file. Workflow changes have no mandatory review."
+        },
+        {
+          "severity": "LOW",
+          "check": "missing_dependency_updates",
+          "file": "(missing)",
+          "detail": "No dependabot.yml or renovate.json found."
+        },
+        {
+          "severity": "INFO",
+          "check": "third_party_actions",
+          "file": "(repo-wide)",
+          "detail": "3 third-party actions: codecov/codecov-action, ..."
         }
       ]
     }
@@ -282,8 +291,8 @@ jq '{
   repos_scanned: .summary.repos_scanned,
   publishing: .summary.repos_publishing,
   findings: .summary.security.total_findings,
-  critical: .summary.security.severity_counts.CRITICAL,
-  high: .summary.security.severity_counts.HIGH
+  high: .summary.security.severity_counts.HIGH,
+  medium: .summary.security.severity_counts.MEDIUM
 }' json-export.json
 
 # Top 10 ecosystems
@@ -296,11 +305,11 @@ jq -r '.summary.security.check_counts | to_entries | sort_by(-.value) | .[0:10] 
 ### Find Repos by Vulnerability
 
 ```bash
-# All repos with CRITICAL findings
-jq '[.repos[] | select(.security.worst_severity == "CRITICAL") | .repo]' json-export.json
+# All repos with HIGH findings
+jq '[.repos[] | select(.security.worst_severity == "HIGH") | .repo]' json-export.json
 
-# All repos with a specific check type (e.g., prt_checkout)
-jq '[.repos[] | select(.security.check_counts.prt_checkout > 0) | {repo, count: .security.check_counts.prt_checkout}]' json-export.json
+# All repos with a specific check type (e.g., self_hosted_runner)
+jq '[.repos[] | select(.security.check_counts.self_hosted_runner > 0) | {repo, count: .security.check_counts.self_hosted_runner}]' json-export.json
 
 # Repos with composite action injection that also publish
 jq '[.repos[] | select(.publishes_to_registry and .security.check_counts.composite_action_input_injection > 0) | {repo, ecosystems, findings: .security.total_findings}]' json-export.json
@@ -313,16 +322,16 @@ jq '[.repos[] | select(.security.check_counts.missing_codeowners > 0 and (.ecosy
 
 ```bash
 # Everything about a specific repo
-jq '.repos[] | select(.repo == "apache/kafka")' json-export.json
+jq '.repos[] | select(.repo == "apache/commons-lang")' json-export.json
 
 # Repo security summary (no workflow/finding details)
-jq '.repos[] | select(.repo == "apache/kafka") | {repo, publishes: .publishes_to_registry, ecosystems, security, trusted_publishing}' json-export.json
+jq '.repos[] | select(.repo == "apache/commons-lang") | {repo, publishes: .publishes_to_registry, ecosystems, security, trusted_publishing}' json-export.json
 
 # Just findings for a repo, sorted by severity
-jq '.repos[] | select(.repo == "apache/kafka") | .findings | sort_by(if .severity == "CRITICAL" then 0 elif .severity == "HIGH" then 1 elif .severity == "MEDIUM" then 2 elif .severity == "LOW" then 3 else 4 end)' json-export.json
+jq '.repos[] | select(.repo == "apache/commons-lang") | .findings | sort_by(if .severity == "HIGH" then 0 elif .severity == "MEDIUM" then 1 elif .severity == "LOW" then 2 else 3 end)' json-export.json
 
 # Findings with line numbers (for linking to source)
-jq '[.repos[] | select(.repo == "apache/solr") | .findings[] | select(.line) | {file, line, severity, check}]' json-export.json
+jq '[.repos[] | select(.repo == "apache/commons-lang") | .findings[] | select(.line) | {file, line, severity, check}]' json-export.json
 ```
 
 ### Publishing Analysis
@@ -344,7 +353,7 @@ jq '[.repos[] | select(.ecosystems | index("docker_hub")) | {repo, workflows: [.
 ### Triage and Remediation
 
 ```bash
-# Priority list: repos sorted by risk (CRITICAL first, then HIGH, then by finding count)
+# Priority list: repos sorted by risk (HIGH first, then by finding count)
 jq '[.repos[] | select(.security.total_findings > 0) | {
   repo,
   worst: .security.worst_severity,
@@ -352,14 +361,14 @@ jq '[.repos[] | select(.security.total_findings > 0) | {
   publishes: .publishes_to_registry,
   ecosystems
 }] | sort_by([
-  (if .worst == "CRITICAL" then 0 elif .worst == "HIGH" then 1 elif .worst == "MEDIUM" then 2 else 3 end),
+  (if .worst == "HIGH" then 0 elif .worst == "MEDIUM" then 1 else 2 end),
   (-.findings)
 ])' json-export.json
 
-# Repos with CRITICAL or HIGH that publish — your P0 list
+# Repos with HIGH that publish — your priority list
 jq '[.repos[] | select(
   .publishes_to_registry and
-  (.security.worst_severity == "CRITICAL" or .security.worst_severity == "HIGH")
+  .security.worst_severity == "HIGH"
 ) | {repo, worst: .security.worst_severity, ecosystems, findings: .security.total_findings}]' json-export.json
 
 # Generate a remediation CSV
@@ -369,7 +378,7 @@ jq -r '.repos[] | select(.security.total_findings > 0) |
    (.trusted_publishing.migration_needed | tostring)] | @csv' json-export.json
 
 # Get the attack scenario for a specific check
-jq '.check_definitions.prt_checkout' json-export.json
+jq '.check_definitions.self_hosted_runner' json-export.json
 ```
 
 ### Aggregate Statistics
@@ -395,41 +404,33 @@ jq '[.repos[] | select(.security.total_findings > 0) | {repo, findings: .securit
 
 ## Agent Architecture
 
-Six agents share data via CouchDB namespaces:
+Seven agents share data via CouchDB namespaces:
 
 ```
-Pre-fetch ──→   ci-workflows:{owner}        (YAML cache + composite actions)
+Pre-fetch ──→   ci-workflows:{github_owner}   (YAML cache + composites + extras)
        │
-Publishing ──→  ci-classification:{owner}   (LLM classifications)
-       │        ci-report:{owner}           (report + stats)
+Publishing ──→  ci-classification:{github_owner}   (LLM classifications)
+       │        ci-report:{github_owner}           (report + stats)
        │
-Security ──→    ci-security:{owner}         (findings + stats)
+Security ──→    ci-security:{github_owner}         (findings + stats)
        │
-Review ──→      ci-combined:{owner}         (combined report)
+Review ──→      ci-combined:{github_owner}         (combined report)
        │
-Brief ──→       ci-combined:{owner}         (executive brief)
+Brief ──→       ci-combined:{github_owner}         (executive brief)
        │
-JSON Export ──→ ci-combined:{owner}         (JSON export)
+JSON Export ──→ ci-combined:{github_owner}         (JSON export)
+
+Orchestrator    Runs all of the above, pushes private + public reports to GitHub
 ```
 
 **Run order:** Pre-fetch → Publishing → Security → then any of: Review, Brief, JSON Export
 
 - **Pre-fetch** fetches all workflow YAML and composite action files from GitHub. No LLM calls. Run once, then everything reads from cache.
 - **Publishing** classifies each workflow with an LLM call (Sonnet). Cached per-workflow — reruns only classify new/changed workflows.
-- **Security** runs pattern-matching security checks on cached YAML. No LLM calls. Reads composite actions from prefetch cache.
+- **Security** runs pattern-matching security checks on cached YAML. No LLM calls. Reads composite actions and extras from prefetch cache.
 - **Review** cross-references Publishing and Security data to produce the combined markdown report. No LLM calls, no API calls.
 - **Brief** produces the one-page action plan from the same data. No LLM calls, no API calls.
 - **JSON Export** reads the same data stores and produces structured JSON. No LLM calls, no API calls.
-
-### Caching
-
-All data is cached in CouchDB. After the initial run:
-
-- **Re-running Pre-fetch** skips repos already cached (checks `__prefetch__` and `__composites__` meta keys)
-- **Re-running Publishing** skips workflows already classified (checks `__meta__` and per-workflow keys)
-- **Re-running Security** with `clear_cache: true` re-scans everything from cached YAML (fast — no API calls)
-- **Review and JSON Export** always regenerate from current data (seconds to run)
-- **Brief** always regenerates from current data (seconds to run)
 
 ### Input Schemas
 
@@ -445,7 +446,7 @@ All data is cached in CouchDB. After the initial run:
 
 Only Pre-fetch hits the GitHub API. All other agents read from CouchDB cache.
 
-Set `redacted_severity` to `CRITICAL` to generate public reports with CRITICAL findings omitted. Leave empty for full reports. When set, agents skip CouchDB writes to preserve the full data for other agents to read.
+Set `redacted_severity` to `CRITICAL` to generate public reports with findings at that severity omitted. Leave empty for full reports. When set, agents skip CouchDB writes to preserve the full data for other agents to read.
 
 ---
 

@@ -8,4 +8,6 @@ Each subdirectory corresponds to an Apache repository that agents are being deve
 
 | Repository | Area | Description |
 |------------|------|-------------|
-| [tooling-trusted-releases](tooling-trusted-releases/) | [ASVS](tooling-trusted-releases/ASVS/) | Automated ASVS L1/L2 security audit pipeline using Gofannon agents |
+| [github-review](apache/github-review/) | [GitHub Security](apache/github-review/) | Automated `.github` catalog of actions and workflows |
+| [tooling-trusted-releases](tooling-trusted-releases/) | [ATR ASVS](tooling-trusted-releases/ASVS/) | Automated ASVS L1/L2 security audit pipeline |
+| [apache/ASVS](apache/ASVS/) | [apache/ASVS](apache/ASVS/) | Automated ASVS L1/L2 security audit pipeline |
