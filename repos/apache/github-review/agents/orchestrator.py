@@ -36,14 +36,14 @@ async def run(input_dict, tools):
 
         async def push_file(repo, pat, directory, filename, content, commit_msg):
             try:
+                filepath = f"{directory}/{filename}" if directory else filename
                 result = await gofannon_client.call(
                     agent_name="add_markdown_file_to_github_directory",
                     input_dict={
                         "inputText": json.dumps({
                             "repo": repo,
                             "token": pat,
-                            "directory": directory,
-                            "filename": filename,
+                            "filePath": filepath,
                         }),
                         "commitMessage": commit_msg,
                         "fileContents": content,
