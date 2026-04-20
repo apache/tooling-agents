@@ -101,11 +101,18 @@ async def run(input_dict, tools):
         latest_version = crate_meta.get("versions", [{}])[0] if crate_meta.get("versions") else {}
         crate_version = latest_version.get("num", "unknown")
         crate_license = latest_version.get("license", crate_info.get("license", "unknown"))
+        crate_features = latest_version.get("features", {})
+        default_features = crate_features.get("default", [])
 
         log(f"- Crate: **{crate_name}** v{crate_version}")
         log(f"- License: `{crate_license}`")
         log(f"- Description: {crate_info.get('description', 'N/A')}")
-        log(f"- Repository: {crate_repo}\n")
+        log(f"- Repository: {crate_repo}")
+        if crate_features:
+            log(f"- Available features: {', '.join(sorted(crate_features.keys()))}")
+            if default_features:
+                log(f"- Default features: {', '.join(default_features)}")
+        log("")
 
         # -- 2. License audit ----------------------------------------------
 
@@ -219,6 +226,8 @@ async def run(input_dict, tools):
 
 CRATE: {crate_name} v{crate_version}
 LICENSE: {crate_license}
+AVAILABLE FEATURES: {json.dumps(crate_features) if crate_features else "none"}
+DEFAULT FEATURES: {json.dumps(default_features) if default_features else "none"}
 WRAPPER PACKAGE: {package_name} (module: {module_name})
 WRAPPER LICENSE: {wrapper_license}
 
@@ -254,6 +263,7 @@ CRITICAL RULES:
 6. Do NOT enable any feature that depends on GPL/copyleft libraries.
 7. Map I/O errors to PyOSError, parse errors to PyValueError.
 8. Use py.allow_threads() around filesystem I/O operations.
+9. In the generated Cargo.toml, ONLY use features that are listed in AVAILABLE FEATURES above. Do NOT invent features like "std" unless they actually exist. If no features are needed, omit the features key entirely.
 
 Output ONLY valid JSON, no markdown fences, no explanation outside the JSON.
 Keep test_py concise - one or two tests per wrapped function, not exhaustive.
@@ -267,10 +277,11 @@ For large crates, wrap the primary public API (pub types, pub functions) not int
         ]
 
         response_content, thoughts = await call_llm(
-            provider="anthropic",
-            model="claude-sonnet-4-20250514",
+            provider="bedrock",
+            model="us.anthropic.claude-opus-4-6-v1",
             messages=llm_messages,
-            parameters={"max_tokens": 64000, "temperature": 0},
+            parameters={"temperature": 1, "reasoning_effort": "high", "max_tokens": 128000},
+            timeout=1800,
         )
 
         # Detect truncation and attempt continuation
@@ -282,13 +293,14 @@ For large crates, wrap the primary public API (pub types, pub functions) not int
         if not cleaned.endswith("}"):
             log("Response appears truncated — requesting continuation...")
             continuation, _ = await call_llm(
-                provider="anthropic",
-                model="claude-sonnet-4-20250514",
+                provider="bedrock",
+                model="us.anthropic.claude-opus-4-6-v1",
                 messages=llm_messages + [
                     {"role": "assistant", "content": response_content},
                     {"role": "user", "content": "Your JSON was truncated. Continue from exactly where you left off. Output ONLY the remaining JSON text, nothing else."},
                 ],
-                parameters={"max_tokens": 64000, "temperature": 0},
+                parameters={"temperature": 1, "reasoning_effort": "high", "max_tokens": 128000},
+                timeout=1800,
             )
             cleaned = cleaned + continuation.strip()
             log(f"Continuation received ({len(continuation)} chars)")
@@ -312,6 +324,30 @@ For large crates, wrap the primary public API (pub types, pub functions) not int
         if generated.get("lib_rs"):
             files["src/lib.rs"] = license_header_rust + generated["lib_rs"]
         if generated.get("cargo_toml"):
+            # Post-process: strip features the crate doesn't actually have
+            if crate_features:
+                valid_features = set(crate_features.keys())
+                cargo_content = generated["cargo_toml"]
+                # Find features = ["..."] for the target crate and validate
+                feature_pattern = re.compile(
+                    r'(features\s*=\s*\[)([^\]]*?)(\])'
+                )
+                def fix_features(match):
+                    prefix, feat_str, suffix = match.group(1), match.group(2), match.group(3)
+                    feats = [f.strip().strip('"').strip("'") for f in feat_str.split(",") if f.strip()]
+                    kept = [f for f in feats if f in valid_features]
+                    removed = [f for f in feats if f not in valid_features]
+                    if removed:
+                        log(f"**Stripped invalid features**: {', '.join(removed)}")
+                    if not kept:
+                        return ""
+                    quoted = ", ".join('"' + f + '"' for f in kept)
+                    return prefix + quoted + suffix
+                cargo_content = feature_pattern.sub(fix_features, cargo_content)
+                # Clean up empty default-features if features was removed
+                if 'features = ' not in cargo_content:
+                    cargo_content = re.sub(r',?\s*default-features\s*=\s*false', '', cargo_content)
+                generated["cargo_toml"] = cargo_content
             files["Cargo.toml"] = generated["cargo_toml"]
         if generated.get("pyproject_toml"):
             files["pyproject.toml"] = generated["pyproject_toml"]
@@ -467,10 +503,12 @@ jobs:
             log(f"```")
 
         log(f"\n## Next steps\n")
-        log(f"1. Clone the repo and run `maturin develop` to find compile errors")
-        log(f"2. Fix `src/lib.rs` based on compiler output")
-        log(f"3. Run `cargo fmt` before committing")
-        log(f"4. Run `pytest tests/ -v` once it compiles")
+        log(f"1. Clone the repo")
+        log(f"2. Set up environment: `uv venv && source .venv/bin/activate && uv pip install maturin pytest`")
+        log(f"3. Run `maturin develop` to find compile errors")
+        log(f"4. Fix `src/lib.rs` based on compiler output")
+        log(f"5. Run `cargo fmt` before committing")
+        log(f"6. Run `pytest tests/ -v` once it compiles")
 
         return {"outputText": "\n".join(lines)}
 
