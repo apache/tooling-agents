@@ -55,6 +55,11 @@ async def run(input_dict, tools):
 
         repo_security = {}
 
+        # Accumulate org-level stats from filtered findings
+        agg_total = 0
+        agg_sev_counts = {}
+        agg_check_counts = {}
+
         for k in finding_keys:
             repo = k.replace("findings:", "")
             findings = security_ns.get(k)
@@ -71,9 +76,13 @@ async def run(input_dict, tools):
             for f in findings:
                 sev = f.get("severity", "INFO")
                 sev_counts[sev] = sev_counts.get(sev, 0) + 1
+                agg_sev_counts[sev] = agg_sev_counts.get(sev, 0) + 1
                 chk = f.get("check", "unknown")
+                agg_check_counts[chk] = agg_check_counts.get(chk, 0) + 1
                 if sev != "INFO":
                     check_counts[chk] = check_counts.get(chk, 0) + 1
+
+            agg_total += len(findings)
 
             worst = "INFO"
             for s in ["CRITICAL", "HIGH", "MEDIUM", "LOW"]:
@@ -88,6 +97,15 @@ async def run(input_dict, tools):
                 "total": len(findings),
                 "worst": worst,
                 "top_checks": top_checks,
+            }
+
+        # When redacting, override sec_stats with recomputed values
+        if redacted_severity:
+            sec_stats = {
+                "total_findings": agg_total,
+                "repos_with_findings": len(repo_security),
+                "severity_counts": agg_sev_counts,
+                "check_counts": agg_check_counts,
             }
 
         print(f"Security data for {len(repo_security)} repos", flush=True)

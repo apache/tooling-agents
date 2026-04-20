@@ -311,6 +311,36 @@ async def run(input_dict, tools):
         }
 
         # --- Build top-level summary ---
+        # When redacting, recompute security stats from filtered per-repo data
+        if redacted_severity:
+            agg_total = 0
+            agg_sev = {}
+            agg_checks = {}
+            agg_repos_with = 0
+            for rj in repos_json:
+                sec = rj.get("security", {})
+                n = sec.get("total_findings", 0)
+                if n > 0:
+                    agg_repos_with += 1
+                agg_total += n
+                for s, c in sec.get("severity_counts", {}).items():
+                    agg_sev[s] = agg_sev.get(s, 0) + c
+                for ch, c in sec.get("check_counts", {}).items():
+                    agg_checks[ch] = agg_checks.get(ch, 0) + c
+            sec_summary = {
+                "total_findings": agg_total,
+                "repos_with_findings": agg_repos_with,
+                "severity_counts": agg_sev,
+                "check_counts": agg_checks,
+            }
+        else:
+            sec_summary = {
+                "total_findings": sec_stats.get("total_findings", 0),
+                "repos_with_findings": sec_stats.get("repos_with_findings", 0),
+                "severity_counts": sec_stats.get("severity_counts", {}),
+                "check_counts": sec_stats.get("check_counts", {}),
+            }
+
         output = {
             "schema_version": "1.0",
             "owner": github_owner,
@@ -324,12 +354,7 @@ async def run(input_dict, tools):
                 "ecosystem_counts": pub_stats.get("ecosystem_counts", {}),
                 "category_counts": pub_stats.get("by_category", {}),
                 "trusted_publishing_opportunities": pub_stats.get("trusted_publishing_opportunities", 0),
-                "security": {
-                    "total_findings": sec_stats.get("total_findings", 0),
-                    "repos_with_findings": sec_stats.get("repos_with_findings", 0),
-                    "severity_counts": sec_stats.get("severity_counts", {}),
-                    "check_counts": sec_stats.get("check_counts", {}),
-                },
+                "security": sec_summary,
             },
             "repos": repos_json,
         }

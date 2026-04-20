@@ -45,6 +45,9 @@ async def run(input_dict, tools):
         repos_with_high = set()
         repos_unpinned = 0
 
+        agg_total = 0
+        agg_check_counts = {}
+
         for k in finding_keys:
             repo = k.replace("findings:", "")
             findings = security_ns.get(k)
@@ -56,12 +59,14 @@ async def run(input_dict, tools):
                 if not findings:
                     continue
 
+            agg_total += len(findings)
             has_unpinned = False
             for f in findings:
                 sev = f.get("severity", "INFO")
                 check = f.get("check", "unknown")
                 detail = f.get("detail", "")
                 file = f.get("file", "")
+                agg_check_counts[check] = agg_check_counts.get(check, 0) + 1
 
                 if sev == "CRITICAL":
                     critical_findings.append((repo, file, check, detail))
@@ -81,6 +86,11 @@ async def run(input_dict, tools):
 
             if has_unpinned:
                 repos_unpinned += 1
+
+        # When redacting, override CouchDB stats with filtered counts
+        if redacted_severity:
+            total_findings = agg_total
+            check_counts = agg_check_counts
 
         # Deduplicate HIGH to repo level for the brief
         high_pub_repos = sorted(set(r for r, _, _, _ in high_publishing))
