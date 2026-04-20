@@ -8,6 +8,8 @@ async def run(input_dict, tools):
     try:
         github_owner = input_dict.get("github_owner", "apache")
         read_pat = input_dict.get("read_pat", "").strip()
+        rescan_raw = input_dict.get("rescan", "false")
+        rescan = str(rescan_raw).lower().strip() in ("true", "1", "yes")
 
         if not read_pat:
             return {"outputText": "Error: `read_pat` is required.\n"
@@ -19,7 +21,8 @@ async def run(input_dict, tools):
 
         workflow_cache = data_store.use_namespace(f"ci-workflows:{github_owner}")
 
-        print(f"Prefetch starting for github_owner={github_owner} (always rescans)", flush=True)
+        print(f"Prefetch starting for github_owner={github_owner}"
+              f"{' (rescan=true, ignoring cache)' if rescan else ''}", flush=True)
 
         # --- Preflight ---
         preflight_resp = await http_client.get(f"{GITHUB_API}/rate_limit", headers=gh_headers, timeout=15.0)
@@ -97,8 +100,28 @@ async def run(input_dict, tools):
         if not repo_names:
             return {"outputText": "No repositories found."}
 
-        # Always rescan — no cache checks
-        all_cached_keys = set()
+        # --- Build cache index ---
+        if rescan:
+            all_cached_keys = set()
+            print("  Cache bypassed (rescan=true)", flush=True)
+        else:
+            all_cached_keys = set(workflow_cache.list_keys())
+            print(f"  {len(all_cached_keys)} keys in workflow cache", flush=True)
+
+        def has_prefetch(repo_name):
+            if rescan:
+                return False
+            meta = workflow_cache.get(f"__prefetch__:{repo_name}")
+            return meta and meta.get("complete")
+
+        def has_composites(repo_name):
+            if rescan:
+                return False
+            meta = workflow_cache.get(f"__composites__:{repo_name}")
+            return meta and meta.get("complete")
+
+        def has_extras(repo_name):
+            return workflow_cache.get(f"__extras__:{repo_name}") is not None
 
         # --- Semaphore for concurrent fetches ---
         api_sem = asyncio.Semaphore(10)
@@ -107,6 +130,7 @@ async def run(input_dict, tools):
         stats = {"repos": 0, "wf_skipped": 0, "wf_fetched": 0, "wf_no_workflows": 0,
                  "wf_yaml_cached": 0, "wf_yaml_existed": 0,
                  "ca_skipped": 0, "ca_fetched": 0, "ca_repos_with": 0, "ca_total": 0,
+                 "extras_skipped": 0, "extras_fetched": 0,
                  "errors": 0}
 
         async def fetch_single_yaml(repo_name, wf_name, download_url):
@@ -126,6 +150,16 @@ async def run(input_dict, tools):
                     pass
             return False, False
 
+        def extract_extras_from_tree(tree):
+            """Extract CODEOWNERS and dependabot booleans from tree listing."""
+            paths = {item["path"] for item in tree if item.get("type") == "blob"}
+            has_co = any(p in paths for p in [
+                ".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS"])
+            has_deps = any(p in paths for p in [
+                ".github/dependabot.yml", ".github/dependabot.yaml",
+                "renovate.json", ".github/renovate.json", ".renovaterc.json"])
+            return {"has_codeowners": has_co, "has_dependency_updates": has_deps}
+
         for idx, repo_name in enumerate(repo_names):
             stats["repos"] += 1
 
@@ -135,8 +169,12 @@ async def run(input_dict, tools):
                       f"{stats['wf_yaml_cached']} YAMLs, "
                       f"{stats['ca_total']} composites)", flush=True)
 
-            # ---- Workflows (always rescan) ----
-            if False:
+            wf_cached = has_prefetch(repo_name)
+            ca_cached = has_composites(repo_name)
+            ex_cached = has_extras(repo_name)
+
+            # ---- Workflows ----
+            if wf_cached:
                 stats["wf_skipped"] += 1
             else:
                 resp = await github_get(
@@ -196,17 +234,29 @@ async def run(input_dict, tools):
                                                {"complete": True, "workflows": wf_names})
                             stats["wf_fetched"] += 1
 
-            # ---- Composite actions (always rescan) ----
-            if False:
+            # ---- Composites + Extras (share the tree fetch) ----
+            need_tree = (not ca_cached) or (not ex_cached)
+
+            if not need_tree:
                 stats["ca_skipped"] += 1
+                stats["extras_skipped"] += 1
             else:
                 resp = await github_get(
                     f"{GITHUB_API}/repos/{github_owner}/{repo_name}/git/trees/HEAD?recursive=1")
 
-                composite_names = []
+                tree = []
                 if resp and resp.status_code == 200:
                     try:
                         tree = resp.json().get("tree", [])
+                    except Exception as e:
+                        print(f"  Error parsing tree for {repo_name}: {str(e)[:80]}", flush=True)
+
+                # -- Composites from tree --
+                if ca_cached:
+                    stats["ca_skipped"] += 1
+                else:
+                    composite_names = []
+                    try:
                         action_files = [
                             item["path"] for item in tree
                             if item.get("path", "").startswith(".github/actions/")
@@ -219,12 +269,10 @@ async def run(input_dict, tools):
                             short_path = f".github/actions/{action_name}/action.yml"
                             cache_key = f"{repo_name}/{short_path}"
 
-                            # Already cached?
                             if cache_key in all_cached_keys:
                                 composite_names.append(short_path)
                                 continue
 
-                            # Fetch it
                             async with api_sem:
                                 aresp = await github_get(
                                     f"{GITHUB_API}/repos/{github_owner}/{repo_name}/contents/{action_path}")
@@ -241,43 +289,25 @@ async def run(input_dict, tools):
                                                 stats["ca_total"] += 1
                                     except Exception:
                                         pass
-
                     except Exception as e:
-                        print(f"  Error scanning tree for {repo_name}: {str(e)[:80]}", flush=True)
+                        print(f"  Error scanning composites for {repo_name}: {str(e)[:80]}", flush=True)
 
-                if composite_names:
-                    stats["ca_repos_with"] += 1
+                    if composite_names:
+                        stats["ca_repos_with"] += 1
 
-                workflow_cache.set(f"__composites__:{repo_name}", {
-                    "complete": True,
-                    "actions": composite_names,
-                })
-                stats["ca_fetched"] += 1
+                    workflow_cache.set(f"__composites__:{repo_name}", {
+                        "complete": True,
+                        "actions": composite_names,
+                    })
+                    stats["ca_fetched"] += 1
 
-            # ---- Extras: CODEOWNERS + dependabot ----
-            extras = {"codeowners": None, "has_dependency_updates": False}
-
-            resp = await github_get(
-                f"{GITHUB_API}/repos/{github_owner}/{repo_name}/contents/.github/CODEOWNERS")
-            if resp and resp.status_code == 200:
-                try:
-                    co_url = resp.json().get("download_url")
-                    if co_url:
-                        co_resp = await http_client.get(co_url, follow_redirects=True, timeout=10.0)
-                        if co_resp.status_code == 200:
-                            extras["codeowners"] = co_resp.text
-                except Exception:
-                    pass
-
-            for dep_path in [".github/dependabot.yml", ".github/dependabot.yaml",
-                         "renovate.json", ".github/renovate.json", ".renovaterc.json"]:
-                resp = await github_get(
-                    f"{GITHUB_API}/repos/{github_owner}/{repo_name}/contents/{dep_path}")
-                if resp and resp.status_code == 200:
-                    extras["has_dependency_updates"] = True
-                    break
-
-            workflow_cache.set(f"__extras__:{repo_name}", extras)
+                # -- Extras from tree (zero extra API calls) --
+                if ex_cached:
+                    stats["extras_skipped"] += 1
+                else:
+                    extras = extract_extras_from_tree(tree)
+                    workflow_cache.set(f"__extras__:{repo_name}", extras)
+                    stats["extras_fetched"] += 1
 
         print(f"\n{'=' * 60}", flush=True)
         print(f"Prefetch complete!", flush=True)
@@ -292,6 +322,9 @@ async def run(input_dict, tools):
         print(f"    Repos scanned: {stats['ca_fetched']}", flush=True)
         print(f"    Repos with composites: {stats['ca_repos_with']}", flush=True)
         print(f"    Action files cached: {stats['ca_total']}", flush=True)
+        print(f"  Extras:", flush=True)
+        print(f"    Skipped (already done): {stats['extras_skipped']}", flush=True)
+        print(f"    Fetched: {stats['extras_fetched']}", flush=True)
         print(f"  Errors: {stats['errors']}", flush=True)
         print(f"{'=' * 60}\n", flush=True)
 

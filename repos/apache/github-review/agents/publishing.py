@@ -8,6 +8,34 @@ async def run(input_dict, tools):
     try:
         github_owner = input_dict.get("github_owner", "apache")
         redacted_severity = input_dict.get("redacted_severity", "").strip().upper()
+
+        SEV_ORDER = ["INFO", "LOW", "MEDIUM", "HIGH", "CRITICAL"]
+        def is_severity_redacted(sev):
+            if not redacted_severity:
+                return False
+            try:
+                return SEV_ORDER.index(sev) >= SEV_ORDER.index(redacted_severity)
+            except ValueError:
+                return False
+
+        def note_severity(note):
+            """Map a security note tag to a severity level."""
+            if note.startswith("[CRITICAL]"):
+                return "CRITICAL"
+            if note.startswith("[HIGH]"):
+                return "HIGH"
+            if note.startswith("[LOW"):  # covers [LOW], [LOW-LEAKAGE], [LOW-TRUSTED-INPUT]
+                return "LOW"
+            if note.startswith("[INFO") or note.startswith("[MEDIUM]"):
+                return note[1:note.index("]")] if "]" in note else "INFO"
+            return "INFO"
+
+        def is_note_redacted(note):
+            """Return True if a security note is at or above the redacted threshold."""
+            if not redacted_severity:
+                return False
+            return is_severity_redacted(note_severity(note))
+
         print(f"Publishing agent starting for github_owner={github_owner}" +
               (f" (redacting {redacted_severity})" if redacted_severity else ""), flush=True)
 
@@ -290,12 +318,15 @@ async def run(input_dict, tools):
             return str(value).replace("|", "∣").replace("\n", " ").strip()
 
         def redact_summary_text(text):
-            """Strip sentences mentioning redacted severity from LLM summaries."""
+            """Strip sentences mentioning redacted severities from LLM summaries."""
             if not redacted_severity or not text:
                 return text
-            sev_lower = redacted_severity.lower()
-            text = re.sub(rf'[^.]*{sev_lower}\s+security[^.]*\.?\s*', '', text, flags=re.IGNORECASE)
-            text = re.sub(rf'[^.]*has\s+{sev_lower}[^.]*\.?\s*', '', text, flags=re.IGNORECASE)
+            # Strip sentences for every severity at or above the threshold
+            threshold_idx = SEV_ORDER.index(redacted_severity)
+            for sev in SEV_ORDER[threshold_idx:]:
+                sev_lower = sev.lower()
+                text = re.sub(rf'[^.]*{sev_lower}\s+security[^.]*\.?\s*', '', text, flags=re.IGNORECASE)
+                text = re.sub(rf'[^.]*has\s+{sev_lower}[^.]*\.?\s*', '', text, flags=re.IGNORECASE)
             return text.strip()
 
 
@@ -489,7 +520,7 @@ async def run(input_dict, tools):
 
         report_title = (f"CI Registry Publishing Analysis: {github_owner}/{repo_names[0]}"
                         if len(repo_names) == 1
-                        else f"CI Registry Publishing Analysis: {owner}")
+                        else f"CI Registry Publishing Analysis: {github_owner}")
 
         lines = []
         lines.append(f"Scanned **{stats['repos_scanned']}** repositories, "
@@ -530,7 +561,7 @@ async def run(input_dict, tools):
 
                 for raw_note in (w.get("security_notes") or []):
                     note = downgrade_contradictions(normalize_note(raw_note)) if raw_note else ""
-                    if note and not (redacted_severity and note.startswith(f"[{redacted_severity}]")):
+                    if note and not is_note_redacted(note):
                         security_notes_all.append({"repo": repo, "file": w.get("file", "?"), "note": note, "category": cat})
 
         release_wfs = by_category["release_artifact"]
@@ -712,7 +743,7 @@ async def run(input_dict, tools):
         downgraded_notes = [sn for sn in security_notes_all if "[INFO-DOWNGRADED]" in sn["note"]]
         low_notes = [sn for sn in security_notes_all if sn["note"].startswith("[LOW]")]
 
-        if critical_notes and not (redacted_severity and redacted_severity == "CRITICAL"):
+        if critical_notes and not is_severity_redacted("CRITICAL"):
             lines.append("## Security: Critical — Untrusted Input Injection\n")
             lines.append("Direct `${{ }}` interpolation of **untrusted external input** in `run:` blocks. "
                          "These are real script injection vectors exploitable by external contributors.\n")
@@ -796,7 +827,7 @@ async def run(input_dict, tools):
                     lines.append(f"- **Commands**: {', '.join(f'`{c}`' for c in w['publish_commands'])}")
                 sec_notes = w.get("security_notes") or []
                 notable = [downgrade_contradictions(normalize_note(n)) for n in sec_notes
-                           if n and not (redacted_severity and normalize_note(n).startswith(f"[{redacted_severity}]"))
+                           if n and not is_note_redacted(downgrade_contradictions(normalize_note(n)))
                            and any(tag in downgrade_contradictions(normalize_note(n))
                                         for tag in ["[CRITICAL]", "[LOW-LEAKAGE]", "[LOW-TRUSTED-INPUT]"])]
                 if notable:
@@ -833,8 +864,7 @@ async def run(input_dict, tools):
             lines.append("")
 
         lines.append("---\n")
-        lines.append(f"*Cached in `ci-classification:{owner}`. "
-                     f"Set `clear_cache` to `true` to force a fresh scan.*")
+        lines.append(f"*Cached in `ci-classification:{github_owner}`.*")
 
         report_body = "\n".join(lines)
 
@@ -862,7 +892,7 @@ async def run(input_dict, tools):
             toc_lines.append(f"- [CI Infrastructure Workflows](#{to_anchor('CI Infrastructure Image Workflows')}) ({len(ci_wfs)})")
         if doc_wfs:
             toc_lines.append(f"- [Documentation Workflows](#{to_anchor('Documentation Website Workflows')}) ({len(doc_wfs)})")
-        if critical_notes and not (redacted_severity and redacted_severity == "CRITICAL"):
+        if critical_notes and not is_severity_redacted("CRITICAL"):
             toc_lines.append(f"- [Security: Critical](#{to_anchor('Security Critical Untrusted Input Injection')}) ({len(critical_notes)})")
         if leakage_notes:
             toc_lines.append(f"- [Security: Credential Leakage](#{to_anchor('Security Credential Leakage Risk')}) ({len(leakage_notes)})")

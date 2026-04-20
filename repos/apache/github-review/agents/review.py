@@ -9,6 +9,16 @@ async def run(input_dict, tools):
     try:
         github_owner = input_dict.get("github_owner", "apache")
         redacted_severity = input_dict.get("redacted_severity", "").strip().upper()
+        SEV_ORDER = ["INFO", "LOW", "MEDIUM", "HIGH", "CRITICAL"]
+        def is_severity_redacted(sev):
+            """Return True if sev is at or above the redacted_severity threshold."""
+            if not redacted_severity:
+                return False
+            try:
+                return SEV_ORDER.index(sev) >= SEV_ORDER.index(redacted_severity)
+            except ValueError:
+                return False
+
         print(f"Review starting for github_owner={github_owner}" +
               (f" (redacting {redacted_severity})" if redacted_severity else ""), flush=True)
 
@@ -67,7 +77,7 @@ async def run(input_dict, tools):
                 continue
 
             if redacted_severity:
-                findings = [f for f in findings if f.get("severity", "INFO") != redacted_severity]
+                findings = [f for f in findings if not is_severity_redacted(f.get("severity", "INFO"))]
                 if not findings:
                     continue
 
@@ -391,18 +401,6 @@ async def run(input_dict, tools):
                             "3. PR is merged with standard code review (reviewer may miss security implication)\n"
                             "4. Workflow is now vulnerable to external PRs"),
             },
-            "codeowners_gap": {
-                "label": "CODEOWNERS Missing .github/ Coverage",
-                "severity": "LOW",
-                "description": "CODEOWNERS exists but has no rule covering `.github/` directory.",
-                "attack": ("Same risk as missing CODEOWNERS but more subtle — the repo has CODEOWNERS for source "
-                           "code but forgot to add `.github/` coverage. Security team reviews code changes "
-                           "but workflow modifications slip through."),
-                "example": ("1. CODEOWNERS has: `*.java @security-team` but no `.github/` rule\n"
-                            "2. Committer modifies `.github/workflows/release.yml`\n"
-                            "3. Change bypasses security team review\n"
-                            "4. Fix: add `/.github/ @security-team` to CODEOWNERS"),
-            },
             "third_party_actions": {
                 "label": "Third-Party Actions",
                 "severity": "INFO",
@@ -657,17 +655,11 @@ async def run(input_dict, tools):
             rec_num += 1
 
         codeowners_missing = sec_stats.get("check_counts", {}).get("missing_codeowners", 0)
-        codeowners_gap = sec_stats.get("check_counts", {}).get("codeowners_gap", 0)
-        if codeowners_missing or codeowners_gap:
-            parts = []
-            if codeowners_missing:
-                parts.append(f"{codeowners_missing} {plural(codeowners_missing, 'repo')} "
-                             f"{plural(codeowners_missing, 'has', 'have')} no CODEOWNERS file")
-            if codeowners_gap:
-                parts.append(f"{codeowners_gap} {plural(codeowners_gap, 'has', 'have')} CODEOWNERS "
-                             f"without `.github/` rules")
+        if codeowners_missing:
             lines.append(f"{rec_num}. **Add CODEOWNERS with `.github/` coverage.** "
-                         f"{' and '.join(parts)}. Workflow changes can bypass security review.")
+                         f"{codeowners_missing} {plural(codeowners_missing, 'repo')} "
+                         f"{plural(codeowners_missing, 'has', 'have')} no CODEOWNERS file. "
+                         f"Workflow changes can bypass security review.")
         lines.append("")
 
         lines.append("---\n")

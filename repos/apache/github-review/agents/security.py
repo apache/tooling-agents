@@ -8,6 +8,16 @@ async def run(input_dict, tools):
     try:
         github_owner = input_dict.get("github_owner", "apache")
         redacted_severity = input_dict.get("redacted_severity", "").strip().upper()
+        SEV_ORDER = ["INFO", "LOW", "MEDIUM", "HIGH", "CRITICAL"]
+        def is_severity_redacted(sev):
+            """Return True if sev is at or above the redacted_severity threshold."""
+            if not redacted_severity:
+                return False
+            try:
+                return SEV_ORDER.index(sev) >= SEV_ORDER.index(redacted_severity)
+            except ValueError:
+                return False
+
         print(f"Security scan starting for github_owner={github_owner}" +
               (f" (redacting {redacted_severity})" if redacted_severity else ""), flush=True)
 
@@ -603,7 +613,7 @@ async def run(input_dict, tools):
             if redacted_severity:
                 cached = security_ns.get(f"findings:{repo_name}")
                 if cached:
-                    filtered = [f for f in cached if f.get("severity", "INFO") != redacted_severity]
+                    filtered = [f for f in cached if not is_severity_redacted(f.get("severity", "INFO"))]
                     if filtered:
                         all_findings[repo_name] = filtered
                 continue
@@ -710,23 +720,12 @@ async def run(input_dict, tools):
             # Check 7: CODEOWNERS (from prefetch __extras__)
             extras = workflow_ns.get(f"__extras__:{repo_name}")
             if extras:
-                co_content = extras.get("codeowners")
-                if co_content is None:
+                if not extras.get("has_codeowners"):
                     repo_findings.append({
                         "check": "missing_codeowners", "severity": "LOW",
                         "file": "(missing)",
                         "detail": "No CODEOWNERS file. Workflow changes have no mandatory review.",
                     })
-                elif co_content:
-                    has_github_rule = any(".github" in line and not line.strip().startswith("#")
-                                          for line in co_content.split("\n"))
-                    if not has_github_rule:
-                        repo_findings.append({
-                            "check": "codeowners_gap", "severity": "LOW",
-                            "file": "CODEOWNERS",
-                            "detail": "CODEOWNERS exists but has no rule covering `.github/`. "
-                                      "Workflow changes can bypass security-focused review.",
-                        })
 
                 # Check 8: Dependabot / Renovate (from prefetch __extras__)
                 if not extras.get("has_dependency_updates"):
@@ -855,7 +854,7 @@ async def run(input_dict, tools):
         print(f"{'=' * 60}\n", flush=True)
 
         # ===== Build report =====
-        report_title = f"CI Security Scan: {owner}"
+        report_title = f"CI Security Scan: {github_owner}"
 
         severity_counts = {}
         check_counts = {}
@@ -887,7 +886,6 @@ async def run(input_dict, tools):
             "run_block_injection": "Direct ${{ }} interpolation in workflow run blocks",
             "unpinned_actions": "Third-party actions not SHA-pinned (ASF policy violation)",
             "third_party_actions": "Actions from outside actions/*/github/*/apache/* namespaces",
-            "codeowners_gap": "CODEOWNERS missing .github/ coverage",
             "missing_codeowners": "No CODEOWNERS file",
             "missing_dependency_updates": "No dependabot/renovate configuration (ASF policy violation)",
             "composite_action_injection": "Injection in composite action run block",
@@ -972,8 +970,7 @@ async def run(input_dict, tools):
             lines.append("")
 
         lines.append("---\n")
-        lines.append(f"*Findings cached in `ci-security:{owner}`. "
-                     f"Set `clear_cache` to `true` to re-scan.*")
+        lines.append(f"*Findings cached in `ci-security:{github_owner}`.*")
 
         report_body = "\n".join(lines)
 

@@ -9,6 +9,26 @@ async def run(input_dict, tools):
     try:
         github_owner = input_dict.get("github_owner", "apache")
         redacted_severity = input_dict.get("redacted_severity", "").strip().upper()
+        SEV_ORDER = ["INFO", "LOW", "MEDIUM", "HIGH", "CRITICAL"]
+        def is_severity_redacted(sev):
+            """Return True if sev is at or above the redacted_severity threshold."""
+            if not redacted_severity:
+                return False
+            try:
+                return SEV_ORDER.index(sev) >= SEV_ORDER.index(redacted_severity)
+            except ValueError:
+                return False
+
+        def note_severity(note):
+            """Map a security note tag to a severity level."""
+            for sev in reversed(SEV_ORDER):
+                if note.startswith(f"[{sev}"):
+                    return sev
+            return "INFO"
+
+        def is_note_redacted(note):
+            return is_severity_redacted(note_severity(note))
+
         print(f"JSON export starting for github_owner={github_owner}" +
               (f" (redacting {redacted_severity})" if redacted_severity else ""), flush=True)
 
@@ -58,7 +78,7 @@ async def run(input_dict, tools):
             findings = security_ns.get(k)
             if findings and isinstance(findings, list):
                 if redacted_severity:
-                    findings = [f for f in findings if f.get("severity", "INFO") != redacted_severity]
+                    findings = [f for f in findings if not is_severity_redacted(f.get("severity", "INFO"))]
                 if findings:
                     repo_findings[repo] = findings
 
@@ -165,7 +185,7 @@ async def run(input_dict, tools):
             if redacted_severity:
                 for wr in workflow_records:
                     wr["security_notes"] = [n for n in wr["security_notes"]
-                                            if not n.startswith(f"[{redacted_severity}]")]
+                                            if not is_note_redacted(n)]
                 # Drop non-publishing workflows with no remaining notes
                 workflow_records = [wr for wr in workflow_records
                                    if wr["publishes"] or wr["security_notes"]]
@@ -286,13 +306,6 @@ async def run(input_dict, tools):
                 "description": "Repository has no CODEOWNERS file for workflow change review.",
                 "attack": "Without CODEOWNERS requiring security team review of .github/ changes, any committer can modify workflow files, add new triggers, or introduce injection patterns without mandatory security review.",
                 "example": "1. Committer adds pull_request_target trigger to an existing workflow\n2. No CODEOWNERS rule requires security review for .github/ changes\n3. PR is merged with standard code review\n4. Workflow is now vulnerable to external PRs",
-            },
-            "codeowners_gap": {
-                "label": "CODEOWNERS Missing .github/ Coverage",
-                "severity": "LOW",
-                "description": "CODEOWNERS exists but has no rule covering .github/ directory.",
-                "attack": "The repo has CODEOWNERS for source code but forgot to add .github/ coverage. Workflow modifications slip through without security review.",
-                "example": "1. CODEOWNERS has: *.java @security-team but no .github/ rule\n2. Committer modifies .github/workflows/release.yml\n3. Change bypasses security team review\n4. Fix: add /.github/ @security-team to CODEOWNERS",
             },
             "third_party_actions": {
                 "label": "Third-Party Actions",

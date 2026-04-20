@@ -18,6 +18,8 @@ async def run(input_dict, tools):
         write_public_directory = input_dict.get("write_public_directory", "").strip()
         write_public_pat = input_dict.get("write_public_pat", "").strip()
         redacted_severity = input_dict.get("redacted_severity", "CRITICAL").strip().upper()
+        skip_prefetch_raw = input_dict.get("skip_prefetch", "false")
+        skip_prefetch = str(skip_prefetch_raw).lower().strip() in ("true", "1", "yes")
 
         for name, val in [("github_owner", github_owner), ("read_pat", read_pat),
                           ("write_private_repo", write_private_repo),
@@ -76,24 +78,30 @@ async def run(input_dict, tools):
         # Phase 1: Prefetch (only step that hits GitHub API)
         # ==============================================================
 
-        print(f"\n{'='*60}", flush=True)
-        print(f"Phase 1: Prefetch for {github_owner}", flush=True)
-        print(f"{'='*60}\n", flush=True)
-
-        prefetch_output = await run_agent("asf_gha_prefetch",
-            github_owner=github_owner,
-            read_pat=read_pat,
-        )
-
-        if prefetch_output is None:
-            return {"outputText": "Error: Prefetch failed. Cannot continue.\n\n" +
-                    "\n".join(errors)}
-
         prefetch_stats = {}
-        try:
-            prefetch_stats = json.loads(prefetch_output)
-        except Exception:
-            pass
+
+        if skip_prefetch:
+            print(f"\n{'='*60}", flush=True)
+            print(f"Phase 1: Prefetch SKIPPED (skip_prefetch=true)", flush=True)
+            print(f"{'='*60}\n", flush=True)
+        else:
+            print(f"\n{'='*60}", flush=True)
+            print(f"Phase 1: Prefetch for {github_owner}", flush=True)
+            print(f"{'='*60}\n", flush=True)
+
+            prefetch_output = await run_agent("asf_gha_prefetch",
+                github_owner=github_owner,
+                read_pat=read_pat,
+            )
+
+            if prefetch_output is None:
+                return {"outputText": "Error: Prefetch failed. Cannot continue.\n\n" +
+                        "\n".join(errors)}
+
+            try:
+                prefetch_stats = json.loads(prefetch_output)
+            except Exception:
+                pass
 
         # ==============================================================
         # Phase 2: Private reports (full, no redaction)

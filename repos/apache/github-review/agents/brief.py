@@ -9,6 +9,16 @@ async def run(input_dict, tools):
     try:
         github_owner = input_dict.get("github_owner", "apache")
         redacted_severity = input_dict.get("redacted_severity", "").strip().upper()
+        SEV_ORDER = ["INFO", "LOW", "MEDIUM", "HIGH", "CRITICAL"]
+        def is_severity_redacted(sev):
+            """Return True if sev is at or above the redacted_severity threshold."""
+            if not redacted_severity:
+                return False
+            try:
+                return SEV_ORDER.index(sev) >= SEV_ORDER.index(redacted_severity)
+            except ValueError:
+                return False
+
         print(f"Executive brief starting for github_owner={github_owner}" +
               (f" (redacting {redacted_severity})" if redacted_severity else ""), flush=True)
 
@@ -55,7 +65,7 @@ async def run(input_dict, tools):
                 continue
 
             if redacted_severity:
-                findings = [f for f in findings if f.get("severity", "INFO") != redacted_severity]
+                findings = [f for f in findings if not is_severity_redacted(f.get("severity", "INFO"))]
                 if not findings:
                     continue
 
