@@ -6,8 +6,8 @@ Cross-referencing CI publishing analysis with security scan results across **120
 
 | Report | Description |
 |--------|-------------|
-| [apache-github-publishing.md](apache-github-publishing.md) | Which repos publish packages to registries, what ecosystems, auth methods, trusted publishing opportunities. 2387 workflows across 634 repos. |
-| [apache-github-security.md](apache-github-security.md) | Pattern-matching security checks on cached workflow YAML: injection patterns, unpinned actions, permissions, composite action analysis. 4610 findings across 1205 repos. |
+| [publishing.md](publishing.md) | Which repos publish packages to registries, what ecosystems, auth methods, trusted publishing opportunities. 2387 workflows across 634 repos. |
+| [security.md](security.md) | Pattern-matching security checks on cached workflow YAML: injection patterns, unpinned actions, permissions, composite action analysis. 4610 findings across 1205 repos. |
 
 ## At a Glance
 
@@ -208,15 +208,15 @@ Repos with CRITICAL or HIGH security findings that also publish packages.
 **Publishes to:** apache_dist, docker_hub, gcr, gcs, github_releases, maven_central, pypi (4 release, 5 snapshot)  
 **Security:** 702 findings — 189 HIGH, 12 MEDIUM, 194 LOW  
 **Top issues:** self_hosted_runner (191), broad_permissions (179), composite_action_injection (7)  
-**Trusted publishing:** migration opportunity — currently using long-lived tokens ([details](apache-github-publishing.md#trusted-publishing-migration-opportunities))  
-**Details:** [publishing](apache-github-publishing.md#apachebeam) · [security](apache-github-security.md#apachebeam)
+**Trusted publishing:** migration opportunity — currently using long-lived tokens ([details](publishing.md#trusted-publishing-migration-opportunities))  
+**Details:** [publishing](publishing.md#apachebeam) · [security](security.md#apachebeam)
 
 ### apache/gluten
 
 **Publishes to:** apache_dist (1 snapshot)  
 **Security:** 11 findings — 1 HIGH, 1 MEDIUM, 3 LOW  
 **Top issues:** run_block_injection (1), broad_permissions (1), unpinned_actions (1)  
-**Details:** [publishing](apache-github-publishing.md#apachegluten) · [security](apache-github-security.md#apachegluten)
+**Details:** [publishing](publishing.md#apachegluten) · [security](security.md#apachegluten)
 
 ## Non-Publishing Repos with HIGH Findings
 
@@ -226,55 +226,55 @@ These repos do not publish packages but have HIGH-severity security findings in 
 
 **Security:** 15 findings — 3 HIGH, 1 MEDIUM, 3 LOW  
 **Top issues:** self_hosted_runner (3), run_block_injection (2), unpinned_actions (1)  
-**Details:** [security](apache-github-security.md#apacheiotdb)
+**Details:** [security](security.md#apacheiotdb)
 
 ### apache/doris-website
 
 **Security:** 6 findings — 1 HIGH, 1 MEDIUM, 4 LOW  
 **Top issues:** run_block_injection (2), broad_permissions (1), unpinned_actions (1)  
-**Details:** [security](apache-github-security.md#apachedoris-website)
+**Details:** [security](security.md#apachedoris-website)
 
 ### apache/helix
 
 **Security:** 6 findings — 2 HIGH, 1 MEDIUM, 3 LOW  
 **Top issues:** broad_permissions (2), run_block_injection (1), unpinned_actions (1)  
-**Details:** [security](apache-github-security.md#apachehelix)
+**Details:** [security](security.md#apachehelix)
 
 ### apache/incubator-graphar
 
 **Security:** 5 findings — 1 HIGH, 1 MEDIUM, 2 LOW  
 **Top issues:** cache_poisoning (1), unpinned_actions (1), missing_codeowners (1)  
-**Details:** [security](apache-github-security.md#apacheincubator-graphar)
+**Details:** [security](security.md#apacheincubator-graphar)
 
 ### apache/dubbo-python
 
 **Security:** 3 findings — 1 HIGH, 2 LOW  
 **Top issues:** broad_permissions (1), missing_codeowners (1), missing_dependency_updates (1)  
-**Details:** [security](apache-github-security.md#apachedubbo-python)
+**Details:** [security](security.md#apachedubbo-python)
 
 ### apache/solr
 
 **Security:** 3 findings — 1 HIGH, 1 MEDIUM, 1 LOW  
 **Top issues:** self_hosted_runner (1), unpinned_actions (1), missing_codeowners (1)  
-**Details:** [security](apache-github-security.md#apachesolr)
+**Details:** [security](security.md#apachesolr)
 
 ### apache/struts-examples
 
 **Security:** 3 findings — 1 HIGH, 1 LOW  
 **Top issues:** broad_permissions (1), missing_codeowners (1)  
-**Details:** [security](apache-github-security.md#apachestruts-examples)
+**Details:** [security](security.md#apachestruts-examples)
 
 ### apache/teaclave-java-tee-sdk
 
 **Security:** 3 findings — 1 HIGH, 2 LOW  
 **Top issues:** self_hosted_runner (1), missing_codeowners (1), missing_dependency_updates (1)  
-**Details:** [security](apache-github-security.md#apacheteaclave-java-tee-sdk)
+**Details:** [security](security.md#apacheteaclave-java-tee-sdk)
 
 ### apache/zeppelin-site
 
 **Security:** 3 findings — 1 HIGH, 2 LOW  
 **Top issues:** broad_permissions (1), missing_codeowners (1), missing_dependency_updates (1)  
-**Details:** [security](apache-github-security.md#apachezeppelin-site)
+**Details:** [security](security.md#apachezeppelin-site)
 
 ## Moderate Risk: Publishing Repos with MEDIUM Findings
 
@@ -282,131 +282,131 @@ These repos publish packages and have MEDIUM-severity findings (typically unpinn
 
 | Repo | Ecosystems | Findings | Top Issue | Trusted Pub | Details |
 |------|-----------|----------|-----------|------------|---------|
-| apache/dolphinscheduler | docker_hub, ghcr, helm, maven_central | 11 | run_block_injection | — | [publishing](apache-github-publishing.md#apachedolphinscheduler) · [security](apache-github-security.md#apachedolphinscheduler) |
-| apache/grails-core | apache_dist, gcr, github_releases, maven_central | 11 | run_block_injection | — | [publishing](apache-github-publishing.md#apachegrails-core) · [security](apache-github-security.md#apachegrails-core) |
-| apache/grails-gradle-publish | apache_dist, github_pages, github_releases, maven_central | 5 | run_block_injection | — | [publishing](apache-github-publishing.md#apachegrails-gradle-publish) · [security](apache-github-security.md#apachegrails-gradle-publish) |
-| apache/arrow | apache_dist, github_releases | 24 | run_block_injection | — | [publishing](apache-github-publishing.md#apachearrow) · [security](apache-github-security.md#apachearrow) |
-| apache/casbin-lego | docker_hub, github_pages, github_releases | 6 | unpinned_actions | — | [publishing](apache-github-publishing.md#apachecasbin-lego) · [security](apache-github-security.md#apachecasbin-lego) |
-| apache/fory | crates_io, maven_central, pypi | 5 | unpinned_actions | — | [publishing](apache-github-publishing.md#apachefory) · [security](apache-github-security.md#apachefory) |
-| apache/casbin-rust-dufs-with-casbin | crates_io, docker_hub, github_releases | 3 | unpinned_actions | migrate | [publishing](apache-github-publishing.md#apachecasbin-rust-dufs-with-casbin) · [security](apache-github-security.md#apachecasbin-rust-dufs-with-casbin) |
-| apache/datafusion-comet | ghcr | 19 | composite_action_injection | — | [publishing](apache-github-publishing.md#apachedatafusion-comet) · [security](apache-github-security.md#apachedatafusion-comet) |
-| apache/camel-k | docker_hub, maven_central | 8 | composite_action_injection | — | [publishing](apache-github-publishing.md#apachecamel-k) · [security](apache-github-security.md#apachecamel-k) |
-| apache/doris-opentelemetry-demo | docker_hub, ghcr | 6 | run_block_injection | — | [publishing](apache-github-publishing.md#apachedoris-opentelemetry-demo) · [security](apache-github-security.md#apachedoris-opentelemetry-demo) |
-| apache/casbin-dart-casbin | dart_pub, github_releases | 5 | run_block_injection | — | [publishing](apache-github-publishing.md#apachecasbin-dart-casbin) · [security](apache-github-security.md#apachecasbin-dart-casbin) |
-| apache/casbin-ex | github_releases, hex | 5 | unpinned_actions | — | [publishing](apache-github-publishing.md#apachecasbin-ex) · [security](apache-github-security.md#apachecasbin-ex) |
-| apache/casbin-lua-casbin | github_releases, luarocks | 5 | run_block_injection | — | [publishing](apache-github-publishing.md#apachecasbin-lua-casbin) · [security](apache-github-security.md#apachecasbin-lua-casbin) |
-| apache/casbin-rust-string-adapter | crates_io, github_releases | 5 | run_block_injection | migrate | [publishing](apache-github-publishing.md#apachecasbin-rust-string-adapter) · [security](apache-github-security.md#apachecasbin-rust-string-adapter) |
-| apache/kyuubi | docker_hub, maven_central | 5 | unpinned_actions | — | [publishing](apache-github-publishing.md#apachekyuubi) · [security](apache-github-security.md#apachekyuubi) |
-| apache/answer | docker_hub, github_releases | 4 | unpinned_actions | — | [publishing](apache-github-publishing.md#apacheanswer) · [security](apache-github-security.md#apacheanswer) |
-| apache/avro | maven_central | 14 | unpinned_actions | — | [publishing](apache-github-publishing.md#apacheavro) · [security](apache-github-security.md#apacheavro) |
-| apache/casbin-Casbin.NET | github_packages, nuget | 4 | unpinned_actions | migrate | [publishing](apache-github-publishing.md#apachecasbin-casbinnet) · [security](apache-github-security.md#apachecasbin-casbinnet) |
-| apache/casbin-Casbin.NET-redis-adapter | github_packages, nuget | 4 | unpinned_actions | migrate | [publishing](apache-github-publishing.md#apachecasbin-casbinnet-redis-adapter) · [security](apache-github-security.md#apachecasbin-casbinnet-redis-adapter) |
-| apache/casbin-actix-casbin-auth | crates_io, github_releases | 4 | run_block_injection | migrate | [publishing](apache-github-publishing.md#apachecasbin-actix-casbin-auth) · [security](apache-github-security.md#apachecasbin-actix-casbin-auth) |
-| apache/casbin-admission-webhook | docker_hub, github_releases | 4 | unpinned_actions | — | [publishing](apache-github-publishing.md#apachecasbin-admission-webhook) · [security](apache-github-security.md#apachecasbin-admission-webhook) |
-| apache/casbin-axum-casbin | crates_io, github_releases | 4 | run_block_injection | migrate | [publishing](apache-github-publishing.md#apachecasbin-axum-casbin) · [security](apache-github-security.md#apachecasbin-axum-casbin) |
-| apache/casbin-jcasbin-lettuce-redis-watcher | github_releases, maven_central | 4 | unpinned_actions | — | [publishing](apache-github-publishing.md#apachecasbin-jcasbin-lettuce-redis-watcher) · [security](apache-github-security.md#apachecasbin-jcasbin-lettuce-redis-watcher) |
-| apache/casbin-jcasbin-mongo-adapter | github_releases, maven_central | 4 | unpinned_actions | — | [publishing](apache-github-publishing.md#apachecasbin-jcasbin-mongo-adapter) · [security](apache-github-security.md#apachecasbin-jcasbin-mongo-adapter) |
-| apache/casbin-jcasbin-redis-watcher | github_releases, maven_central | 4 | unpinned_actions | — | [publishing](apache-github-publishing.md#apachecasbin-jcasbin-redis-watcher) · [security](apache-github-security.md#apachecasbin-jcasbin-redis-watcher) |
-| apache/casbin-jcasbin-shiro-casbin | github_releases, maven_central | 4 | unpinned_actions | — | [publishing](apache-github-publishing.md#apachecasbin-jcasbin-shiro-casbin) · [security](apache-github-security.md#apachecasbin-jcasbin-shiro-casbin) |
-| apache/casbin-node-casbin-expression-eval | github_releases, npm | 4 | unpinned_actions | migrate | [publishing](apache-github-publishing.md#apachecasbin-node-casbin-expression-eval) · [security](apache-github-security.md#apachecasbin-node-casbin-expression-eval) |
-| apache/casbin-node-casbin-file-adapter | github_releases, npm | 4 | unpinned_actions | migrate | [publishing](apache-github-publishing.md#apachecasbin-node-casbin-file-adapter) · [security](apache-github-security.md#apachecasbin-node-casbin-file-adapter) |
-| apache/casbin-node-casbin-node-redis-adapter | github_releases, npm | 4 | unpinned_actions | migrate | [publishing](apache-github-publishing.md#apachecasbin-node-casbin-node-redis-adapter) · [security](apache-github-security.md#apachecasbin-node-casbin-node-redis-adapter) |
-| apache/casbin-node-casbin-prisma-adapter | github_releases, npm | 4 | unpinned_actions | migrate | [publishing](apache-github-publishing.md#apachecasbin-node-casbin-prisma-adapter) · [security](apache-github-security.md#apachecasbin-node-casbin-prisma-adapter) |
-| apache/casbin-pycasbin | github_releases, pypi | 4 | unpinned_actions | migrate | [publishing](apache-github-publishing.md#apachecasbin-pycasbin) · [security](apache-github-security.md#apachecasbin-pycasbin) |
-| apache/casbin-python-fastapi-casbin-auth | github_releases, pypi | 4 | unpinned_actions | migrate | [publishing](apache-github-publishing.md#apachecasbin-python-fastapi-casbin-auth) · [security](apache-github-security.md#apachecasbin-python-fastapi-casbin-auth) |
-| apache/casbin-python-pymongo-adapter | github_releases, pypi | 4 | unpinned_actions | migrate | [publishing](apache-github-publishing.md#apachecasbin-python-pymongo-adapter) · [security](apache-github-security.md#apachecasbin-python-pymongo-adapter) |
-| apache/casbin-rust-actix-casbin | crates_io, github_releases | 4 | run_block_injection | migrate | [publishing](apache-github-publishing.md#apachecasbin-rust-actix-casbin) · [security](apache-github-security.md#apachecasbin-rust-actix-casbin) |
-| apache/casbin-rust-diesel-adapter | crates_io, github_releases | 4 | run_block_injection | migrate | [publishing](apache-github-publishing.md#apachecasbin-rust-diesel-adapter) · [security](apache-github-security.md#apachecasbin-rust-diesel-adapter) |
-| apache/casbin-rust-rocket-authz | crates_io, github_releases | 4 | unpinned_actions | migrate | [publishing](apache-github-publishing.md#apachecasbin-rust-rocket-authz) · [security](apache-github-security.md#apachecasbin-rust-rocket-authz) |
-| apache/casbin-vscode-plugin | github_releases, npm | 4 | unpinned_actions | migrate | [publishing](apache-github-publishing.md#apachecasbin-vscode-plugin) · [security](apache-github-security.md#apachecasbin-vscode-plugin) |
-| apache/cassandra-sidecar | ghcr, github_releases | 4 | run_block_injection | — | [publishing](apache-github-publishing.md#apachecassandra-sidecar) · [security](apache-github-security.md#apachecassandra-sidecar) |
-| apache/daffodil-sbt | apache_dist, maven_central | 4 | unpinned_actions | — | [publishing](apache-github-publishing.md#apachedaffodil-sbt) · [security](apache-github-security.md#apachedaffodil-sbt) |
-| apache/doris-operator | docker_hub, helm | 4 | unpinned_actions | — | [publishing](apache-github-publishing.md#apachedoris-operator) · [security](apache-github-security.md#apachedoris-operator) |
-| apache/hudi-rs | crates_io, pypi | 4 | unpinned_actions | migrate | [publishing](apache-github-publishing.md#apachehudi-rs) · [security](apache-github-security.md#apachehudi-rs) |
-| apache/incubator-devlake-helm-chart | ghcr, helm | 4 | unpinned_actions | — | [publishing](apache-github-publishing.md#apacheincubator-devlake-helm-chart) · [security](apache-github-security.md#apacheincubator-devlake-helm-chart) |
-| apache/casbin-jcasbin | github_releases, maven_central | 3 | unpinned_actions | — | [publishing](apache-github-publishing.md#apachecasbin-jcasbin) · [security](apache-github-security.md#apachecasbin-jcasbin) |
-| apache/casbin-jcasbin-dynamodb-adapter | github_releases, maven_central | 3 | unpinned_actions | — | [publishing](apache-github-publishing.md#apachecasbin-jcasbin-dynamodb-adapter) · [security](apache-github-security.md#apachecasbin-jcasbin-dynamodb-adapter) |
-| apache/casbin-jcasbin-hibernate-adapter | github_releases, maven_central | 3 | unpinned_actions | — | [publishing](apache-github-publishing.md#apachecasbin-jcasbin-hibernate-adapter) · [security](apache-github-security.md#apachecasbin-jcasbin-hibernate-adapter) |
-| apache/casbin-jcasbin-jdbc-adapter | github_releases, maven_central | 3 | unpinned_actions | — | [publishing](apache-github-publishing.md#apachecasbin-jcasbin-jdbc-adapter) · [security](apache-github-security.md#apachecasbin-jcasbin-jdbc-adapter) |
-| apache/casbin-jcasbin-jfinal-authz | github_releases, maven_central | 3 | unpinned_actions | — | [publishing](apache-github-publishing.md#apachecasbin-jcasbin-jfinal-authz) · [security](apache-github-security.md#apachecasbin-jcasbin-jfinal-authz) |
-| apache/casbin-jcasbin-kafka-casbin | github_releases, maven_central | 3 | unpinned_actions | — | [publishing](apache-github-publishing.md#apachecasbin-jcasbin-kafka-casbin) · [security](apache-github-security.md#apachecasbin-jcasbin-kafka-casbin) |
-| apache/casbin-jcasbin-mybatis-adapter | github_releases, maven_central | 3 | unpinned_actions | — | [publishing](apache-github-publishing.md#apachecasbin-jcasbin-mybatis-adapter) · [security](apache-github-security.md#apachecasbin-jcasbin-mybatis-adapter) |
-| apache/casbin-jcasbin-mybatisplus-adapter | github_releases, maven_central | 3 | unpinned_actions | — | [publishing](apache-github-publishing.md#apachecasbin-jcasbin-mybatisplus-adapter) · [security](apache-github-security.md#apachecasbin-jcasbin-mybatisplus-adapter) |
-| apache/casbin-jcasbin-nutz-authz | github_releases, maven_central | 3 | unpinned_actions | — | [publishing](apache-github-publishing.md#apachecasbin-jcasbin-nutz-authz) · [security](apache-github-security.md#apachecasbin-jcasbin-nutz-authz) |
-| apache/casbin-jcasbin-play-authz | github_releases, maven_central | 3 | unpinned_actions | — | [publishing](apache-github-publishing.md#apachecasbin-jcasbin-play-authz) · [security](apache-github-security.md#apachecasbin-jcasbin-play-authz) |
-| apache/casbin-jcasbin-rabbitmq-watcher | github_releases, maven_central | 3 | unpinned_actions | — | [publishing](apache-github-publishing.md#apachecasbin-jcasbin-rabbitmq-watcher) · [security](apache-github-security.md#apachecasbin-jcasbin-rabbitmq-watcher) |
-| apache/casbin-jcasbin-redis-adapter | github_releases, maven_central | 3 | unpinned_actions | — | [publishing](apache-github-publishing.md#apachecasbin-jcasbin-redis-adapter) · [security](apache-github-security.md#apachecasbin-jcasbin-redis-adapter) |
-| apache/casbin-jcasbin-redis-watcher-ex | github_releases, maven_central | 3 | unpinned_actions | — | [publishing](apache-github-publishing.md#apachecasbin-jcasbin-redis-watcher-ex) · [security](apache-github-security.md#apachecasbin-jcasbin-redis-watcher-ex) |
-| apache/casbin-jcasbin-spring-security-starter | github_releases, maven_central | 3 | unpinned_actions | — | [publishing](apache-github-publishing.md#apachecasbin-jcasbin-spring-security-starter) · [security](apache-github-security.md#apachecasbin-jcasbin-spring-security-starter) |
-| apache/casbin-jcasbin-string-adapter | github_releases, maven_central | 3 | unpinned_actions | — | [publishing](apache-github-publishing.md#apachecasbin-jcasbin-string-adapter) · [security](apache-github-security.md#apachecasbin-jcasbin-string-adapter) |
-| apache/casbin-jcasbin-vertx-authz | github_releases, maven_central | 3 | unpinned_actions | — | [publishing](apache-github-publishing.md#apachecasbin-jcasbin-vertx-authz) · [security](apache-github-security.md#apachecasbin-jcasbin-vertx-authz) |
-| apache/casbin-jcasbin-zookeeper-watcher | github_releases, maven_central | 3 | unpinned_actions | — | [publishing](apache-github-publishing.md#apachecasbin-jcasbin-zookeeper-watcher) · [security](apache-github-security.md#apachecasbin-jcasbin-zookeeper-watcher) |
-| apache/casbin-js-vue-authz | github_releases, npm | 3 | unpinned_actions | migrate | [publishing](apache-github-publishing.md#apachecasbin-js-vue-authz) · [security](apache-github-security.md#apachecasbin-js-vue-authz) |
-| apache/casbin-nest-authz | github_releases, npm | 3 | unpinned_actions | migrate | [publishing](apache-github-publishing.md#apachecasbin-nest-authz) · [security](apache-github-security.md#apachecasbin-nest-authz) |
-| apache/casbin-rust-postgres-adapter | crates_io, github_releases | 3 | unpinned_actions | migrate | [publishing](apache-github-publishing.md#apachecasbin-rust-postgres-adapter) · [security](apache-github-security.md#apachecasbin-rust-postgres-adapter) |
-| apache/casbin-rust-semantic-release-action-rust | crates_io, github_releases | 3 | unpinned_actions | migrate | [publishing](apache-github-publishing.md#apachecasbin-rust-semantic-release-action-rust) · [security](apache-github-security.md#apachecasbin-rust-semantic-release-action-rust) |
-| apache/fluss-rust | crates_io, pypi | 3 | unpinned_actions | migrate | [publishing](apache-github-publishing.md#apachefluss-rust) · [security](apache-github-security.md#apachefluss-rust) |
-| apache/hamilton | docker_hub, pypi | 3 | unpinned_actions | — | [publishing](apache-github-publishing.md#apachehamilton) · [security](apache-github-security.md#apachehamilton) |
-| apache/arrow-flight-sql-postgresql | ghcr, github_releases | 2 | unpinned_actions | — | [publishing](apache-github-publishing.md#apachearrow-flight-sql-postgresql) · [security](apache-github-security.md#apachearrow-flight-sql-postgresql) |
-| apache/cassandra-easy-stress | ghcr, github_releases | 2 | unpinned_actions | — | [publishing](apache-github-publishing.md#apachecassandra-easy-stress) · [security](apache-github-security.md#apachecassandra-easy-stress) |
-| apache/arrow-nanoarrow | pypi | 11 | self_hosted_runner | migrate | [publishing](apache-github-publishing.md#apachearrow-nanoarrow) · [security](apache-github-security.md#apachearrow-nanoarrow) |
-| apache/celeborn | docker_hub | 8 | run_block_injection | — | [publishing](apache-github-publishing.md#apacheceleborn) · [security](apache-github-security.md#apacheceleborn) |
-| apache/gravitino | docker_hub | 8 | run_block_injection | — | [publishing](apache-github-publishing.md#apachegravitino) · [security](apache-github-security.md#apachegravitino) |
-| apache/casbin-rs | crates_io | 7 | run_block_injection | migrate | [publishing](apache-github-publishing.md#apachecasbin-rs) · [security](apache-github-security.md#apachecasbin-rs) |
-| apache/cloudstack | docker_hub | 6 | run_block_injection | — | [publishing](apache-github-publishing.md#apachecloudstack) · [security](apache-github-security.md#apachecloudstack) |
-| apache/datafusion-ballista | ghcr | 6 | unpinned_actions | — | [publishing](apache-github-publishing.md#apachedatafusion-ballista) · [security](apache-github-security.md#apachedatafusion-ballista) |
-| apache/dubbo-go-pixiu | github_releases | 6 | prt_checkout | — | [publishing](apache-github-publishing.md#apachedubbo-go-pixiu) · [security](apache-github-security.md#apachedubbo-go-pixiu) |
-| apache/dubbo-go-pixiu-samples | github_releases | 6 | prt_checkout | — | [publishing](apache-github-publishing.md#apachedubbo-go-pixiu-samples) · [security](apache-github-security.md#apachedubbo-go-pixiu-samples) |
-| apache/flink-kubernetes-operator | maven_central | 6 | run_block_injection | — | [publishing](apache-github-publishing.md#apacheflink-kubernetes-operator) · [security](apache-github-security.md#apacheflink-kubernetes-operator) |
-| apache/hive | docker_hub | 6 | run_block_injection | — | [publishing](apache-github-publishing.md#apachehive) · [security](apache-github-security.md#apachehive) |
-| apache/arrow-go | github_releases | 5 | unpinned_actions | — | [publishing](apache-github-publishing.md#apachearrow-go) · [security](apache-github-security.md#apachearrow-go) |
-| apache/camel-k-runtime | maven_central | 5 | unpinned_actions | — | [publishing](apache-github-publishing.md#apachecamel-k-runtime) · [security](apache-github-security.md#apachecamel-k-runtime) |
-| apache/cloudstack-kubernetes-provider | docker_hub | 5 | run_block_injection | — | [publishing](apache-github-publishing.md#apachecloudstack-kubernetes-provider) · [security](apache-github-security.md#apachecloudstack-kubernetes-provider) |
-| apache/datafusion-ray | ghcr | 5 | unpinned_actions | — | [publishing](apache-github-publishing.md#apachedatafusion-ray) · [security](apache-github-security.md#apachedatafusion-ray) |
-| apache/hertzbeat | docker_hub | 5 | unpinned_actions | — | [publishing](apache-github-publishing.md#apachehertzbeat) · [security](apache-github-security.md#apachehertzbeat) |
-| apache/kvrocks | docker_hub | 5 | unpinned_actions | — | [publishing](apache-github-publishing.md#apachekvrocks) · [security](apache-github-security.md#apachekvrocks) |
-| apache/apisix-ingress-controller | docker_hub | 4 | unpinned_actions | — | [publishing](apache-github-publishing.md#apacheapisix-ingress-controller) · [security](apache-github-security.md#apacheapisix-ingress-controller) |
-| apache/bifromq | docker_hub | 4 | run_block_injection | — | [publishing](apache-github-publishing.md#apachebifromq) · [security](apache-github-security.md#apachebifromq) |
-| apache/casbin-core | npm | 4 | unpinned_actions | migrate | [publishing](apache-github-publishing.md#apachecasbin-core) · [security](apache-github-security.md#apachecasbin-core) |
-| apache/casbin-docker_auth | docker_hub | 4 | unpinned_actions | — | [publishing](apache-github-publishing.md#apachecasbin-docker_auth) · [security](apache-github-security.md#apachecasbin-docker_auth) |
-| apache/casbin-gateway | docker_hub | 4 | unpinned_actions | — | [publishing](apache-github-publishing.md#apachecasbin-gateway) · [security](apache-github-security.md#apachecasbin-gateway) |
-| apache/casbin-go-cli | github_releases | 4 | unpinned_actions | — | [publishing](apache-github-publishing.md#apachecasbin-go-cli) · [security](apache-github-security.md#apachecasbin-go-cli) |
-| apache/casbin-mcp-gateway | github_releases | 4 | unpinned_actions | — | [publishing](apache-github-publishing.md#apachecasbin-mcp-gateway) · [security](apache-github-security.md#apachecasbin-mcp-gateway) |
-| apache/casbin-node-casbin | npm | 4 | unpinned_actions | migrate | [publishing](apache-github-publishing.md#apachecasbin-node-casbin) · [security](apache-github-security.md#apachecasbin-node-casbin) |
-| apache/casbin-node-casbin-couchdb-adapter | npm | 4 | unpinned_actions | migrate | [publishing](apache-github-publishing.md#apachecasbin-node-casbin-couchdb-adapter) · [security](apache-github-security.md#apachecasbin-node-casbin-couchdb-adapter) |
-| apache/casbin-node-casbin-drizzle-adapter | npm | 4 | unpinned_actions | migrate | [publishing](apache-github-publishing.md#apachecasbin-node-casbin-drizzle-adapter) · [security](apache-github-security.md#apachecasbin-node-casbin-drizzle-adapter) |
-| apache/casbin-node-casbin-mongo-changestream-watcher | npm | 4 | unpinned_actions | migrate | [publishing](apache-github-publishing.md#apachecasbin-node-casbin-mongo-changestream-watcher) · [security](apache-github-security.md#apachecasbin-node-casbin-mongo-changestream-watcher) |
-| apache/casbin-node-casbin-mongoose-adapter | npm | 4 | unpinned_actions | migrate | [publishing](apache-github-publishing.md#apachecasbin-node-casbin-mongoose-adapter) · [security](apache-github-security.md#apachecasbin-node-casbin-mongoose-adapter) |
-| apache/casbin-node-casbin-redis-watcher | npm | 4 | unpinned_actions | migrate | [publishing](apache-github-publishing.md#apachecasbin-node-casbin-redis-watcher) · [security](apache-github-security.md#apachecasbin-node-casbin-redis-watcher) |
-| apache/casbin-python-graphql-authz | pypi | 4 | unpinned_actions | migrate | [publishing](apache-github-publishing.md#apachecasbin-python-graphql-authz) · [security](apache-github-security.md#apachecasbin-python-graphql-authz) |
-| apache/casbin-python-rabbitmq-watcher | pypi | 4 | unpinned_actions | migrate | [publishing](apache-github-publishing.md#apachecasbin-python-rabbitmq-watcher) · [security](apache-github-security.md#apachecasbin-python-rabbitmq-watcher) |
-| apache/casbin-python-redis-adapter | pypi | 4 | unpinned_actions | migrate | [publishing](apache-github-publishing.md#apachecasbin-python-redis-adapter) · [security](apache-github-security.md#apachecasbin-python-redis-adapter) |
-| apache/casbin-rust-casbin-rust-cli | crates_io | 4 | unpinned_actions | migrate | [publishing](apache-github-publishing.md#apachecasbin-rust-casbin-rust-cli) · [security](apache-github-security.md#apachecasbin-rust-casbin-rust-cli) |
-| apache/casbin-rust-redis-watcher | crates_io | 4 | unpinned_actions | migrate | [publishing](apache-github-publishing.md#apachecasbin-rust-redis-watcher) · [security](apache-github-security.md#apachecasbin-rust-redis-watcher) |
-| apache/casbin-sequelize-adapter | npm | 4 | unpinned_actions | migrate | [publishing](apache-github-publishing.md#apachecasbin-sequelize-adapter) · [security](apache-github-security.md#apachecasbin-sequelize-adapter) |
-| apache/casbin-server | docker_hub | 4 | unpinned_actions | — | [publishing](apache-github-publishing.md#apachecasbin-server) · [security](apache-github-security.md#apachecasbin-server) |
-| apache/casbin-sqlx-adapter | crates_io | 4 | run_block_injection | migrate | [publishing](apache-github-publishing.md#apachecasbin-sqlx-adapter) · [security](apache-github-security.md#apachecasbin-sqlx-adapter) |
-| apache/casbin-typeorm-adapter | npm | 4 | unpinned_actions | migrate | [publishing](apache-github-publishing.md#apachecasbin-typeorm-adapter) · [security](apache-github-security.md#apachecasbin-typeorm-adapter) |
-| apache/causeway | github_packages | 4 | unpinned_actions | — | [publishing](apache-github-publishing.md#apachecauseway) · [security](apache-github-security.md#apachecauseway) |
-| apache/couchdb-mochiweb | hex | 4 | unpinned_actions | — | [publishing](apache-github-publishing.md#apachecouchdb-mochiweb) · [security](apache-github-security.md#apachecouchdb-mochiweb) |
-| apache/doris-thirdparty | github_releases | 4 | run_block_injection | — | [publishing](apache-github-publishing.md#apachedoris-thirdparty) · [security](apache-github-security.md#apachedoris-thirdparty) |
-| apache/gobblin | docker_hub | 4 | unpinned_actions | — | [publishing](apache-github-publishing.md#apachegobblin) · [security](apache-github-security.md#apachegobblin) |
-| apache/knox | docker_hub | 4 | run_block_injection | — | [publishing](apache-github-publishing.md#apacheknox) · [security](apache-github-security.md#apacheknox) |
-| apache/airavata | docker_hub | 3 | unpinned_actions | — | [publishing](apache-github-publishing.md#apacheairavata) · [security](apache-github-security.md#apacheairavata) |
-| apache/airflow-publish | pypi | 3 | unpinned_actions | — | [publishing](apache-github-publishing.md#apacheairflow-publish) · [security](apache-github-security.md#apacheairflow-publish) |
-| apache/amoro | docker_hub | 3 | unpinned_actions | — | [publishing](apache-github-publishing.md#apacheamoro) · [security](apache-github-security.md#apacheamoro) |
-| apache/apisix-docker | docker_hub | 3 | unpinned_actions | — | [publishing](apache-github-publishing.md#apacheapisix-docker) · [security](apache-github-security.md#apacheapisix-docker) |
-| apache/casbin-editor | github_releases | 3 | unpinned_actions | — | [publishing](apache-github-publishing.md#apachecasbin-editor) · [security](apache-github-security.md#apachecasbin-editor) |
-| apache/casbin-mesh | ghcr | 3 | unpinned_actions | — | [publishing](apache-github-publishing.md#apachecasbin-mesh) · [security](apache-github-security.md#apachecasbin-mesh) |
-| apache/dubbo-initializer | docker_hub | 3 | unpinned_actions | — | [publishing](apache-github-publishing.md#apachedubbo-initializer) · [security](apache-github-security.md#apachedubbo-initializer) |
-| apache/dubbo-kubernetes | github_releases | 3 | unpinned_actions | — | [publishing](apache-github-publishing.md#apachedubbo-kubernetes) · [security](apache-github-security.md#apachedubbo-kubernetes) |
-| apache/eventmesh | docker_hub | 3 | unpinned_actions | — | [publishing](apache-github-publishing.md#apacheeventmesh) · [security](apache-github-security.md#apacheeventmesh) |
-| apache/eventmesh-dashboard | docker_hub | 3 | unpinned_actions | — | [publishing](apache-github-publishing.md#apacheeventmesh-dashboard) · [security](apache-github-security.md#apacheeventmesh-dashboard) |
-| apache/flink-docker | ghcr | 3 | unpinned_actions | — | [publishing](apache-github-publishing.md#apacheflink-docker) · [security](apache-github-security.md#apacheflink-docker) |
-| apache/kyuubi-docker | docker_hub | 3 | unpinned_actions | — | [publishing](apache-github-publishing.md#apachekyuubi-docker) · [security](apache-github-security.md#apachekyuubi-docker) |
-| apache/activemq | maven_central | 2 | unpinned_actions | — | [publishing](apache-github-publishing.md#apacheactivemq) · [security](apache-github-security.md#apacheactivemq) |
-| apache/camel-kafka-connector | maven_central | 2 | unpinned_actions | — | [publishing](apache-github-publishing.md#apachecamel-kafka-connector) · [security](apache-github-security.md#apachecamel-kafka-connector) |
-| apache/grails-forge-ui | github_releases | 2 | unpinned_actions | — | [publishing](apache-github-publishing.md#apachegrails-forge-ui) · [security](apache-github-security.md#apachegrails-forge-ui) |
+| apache/dolphinscheduler | docker_hub, ghcr, helm, maven_central | 11 | run_block_injection | — | [publishing](publishing.md#apachedolphinscheduler) · [security](security.md#apachedolphinscheduler) |
+| apache/grails-core | apache_dist, gcr, github_releases, maven_central | 11 | run_block_injection | — | [publishing](publishing.md#apachegrails-core) · [security](security.md#apachegrails-core) |
+| apache/grails-gradle-publish | apache_dist, github_pages, github_releases, maven_central | 5 | run_block_injection | — | [publishing](publishing.md#apachegrails-gradle-publish) · [security](security.md#apachegrails-gradle-publish) |
+| apache/arrow | apache_dist, github_releases | 24 | run_block_injection | — | [publishing](publishing.md#apachearrow) · [security](security.md#apachearrow) |
+| apache/casbin-lego | docker_hub, github_pages, github_releases | 6 | unpinned_actions | — | [publishing](publishing.md#apachecasbin-lego) · [security](security.md#apachecasbin-lego) |
+| apache/fory | crates_io, maven_central, pypi | 5 | unpinned_actions | — | [publishing](publishing.md#apachefory) · [security](security.md#apachefory) |
+| apache/casbin-rust-dufs-with-casbin | crates_io, docker_hub, github_releases | 3 | unpinned_actions | migrate | [publishing](publishing.md#apachecasbin-rust-dufs-with-casbin) · [security](security.md#apachecasbin-rust-dufs-with-casbin) |
+| apache/datafusion-comet | ghcr | 19 | composite_action_injection | — | [publishing](publishing.md#apachedatafusion-comet) · [security](security.md#apachedatafusion-comet) |
+| apache/camel-k | docker_hub, maven_central | 8 | composite_action_injection | — | [publishing](publishing.md#apachecamel-k) · [security](security.md#apachecamel-k) |
+| apache/doris-opentelemetry-demo | docker_hub, ghcr | 6 | run_block_injection | — | [publishing](publishing.md#apachedoris-opentelemetry-demo) · [security](security.md#apachedoris-opentelemetry-demo) |
+| apache/casbin-dart-casbin | dart_pub, github_releases | 5 | run_block_injection | — | [publishing](publishing.md#apachecasbin-dart-casbin) · [security](security.md#apachecasbin-dart-casbin) |
+| apache/casbin-ex | github_releases, hex | 5 | unpinned_actions | — | [publishing](publishing.md#apachecasbin-ex) · [security](security.md#apachecasbin-ex) |
+| apache/casbin-lua-casbin | github_releases, luarocks | 5 | run_block_injection | — | [publishing](publishing.md#apachecasbin-lua-casbin) · [security](security.md#apachecasbin-lua-casbin) |
+| apache/casbin-rust-string-adapter | crates_io, github_releases | 5 | run_block_injection | migrate | [publishing](publishing.md#apachecasbin-rust-string-adapter) · [security](security.md#apachecasbin-rust-string-adapter) |
+| apache/kyuubi | docker_hub, maven_central | 5 | unpinned_actions | — | [publishing](publishing.md#apachekyuubi) · [security](security.md#apachekyuubi) |
+| apache/answer | docker_hub, github_releases | 4 | unpinned_actions | — | [publishing](publishing.md#apacheanswer) · [security](security.md#apacheanswer) |
+| apache/avro | maven_central | 14 | unpinned_actions | — | [publishing](publishing.md#apacheavro) · [security](security.md#apacheavro) |
+| apache/casbin-Casbin.NET | github_packages, nuget | 4 | unpinned_actions | migrate | [publishing](publishing.md#apachecasbin-casbinnet) · [security](security.md#apachecasbin-casbinnet) |
+| apache/casbin-Casbin.NET-redis-adapter | github_packages, nuget | 4 | unpinned_actions | migrate | [publishing](publishing.md#apachecasbin-casbinnet-redis-adapter) · [security](security.md#apachecasbin-casbinnet-redis-adapter) |
+| apache/casbin-actix-casbin-auth | crates_io, github_releases | 4 | run_block_injection | migrate | [publishing](publishing.md#apachecasbin-actix-casbin-auth) · [security](security.md#apachecasbin-actix-casbin-auth) |
+| apache/casbin-admission-webhook | docker_hub, github_releases | 4 | unpinned_actions | — | [publishing](publishing.md#apachecasbin-admission-webhook) · [security](security.md#apachecasbin-admission-webhook) |
+| apache/casbin-axum-casbin | crates_io, github_releases | 4 | run_block_injection | migrate | [publishing](publishing.md#apachecasbin-axum-casbin) · [security](security.md#apachecasbin-axum-casbin) |
+| apache/casbin-jcasbin-lettuce-redis-watcher | github_releases, maven_central | 4 | unpinned_actions | — | [publishing](publishing.md#apachecasbin-jcasbin-lettuce-redis-watcher) · [security](security.md#apachecasbin-jcasbin-lettuce-redis-watcher) |
+| apache/casbin-jcasbin-mongo-adapter | github_releases, maven_central | 4 | unpinned_actions | — | [publishing](publishing.md#apachecasbin-jcasbin-mongo-adapter) · [security](security.md#apachecasbin-jcasbin-mongo-adapter) |
+| apache/casbin-jcasbin-redis-watcher | github_releases, maven_central | 4 | unpinned_actions | — | [publishing](publishing.md#apachecasbin-jcasbin-redis-watcher) · [security](security.md#apachecasbin-jcasbin-redis-watcher) |
+| apache/casbin-jcasbin-shiro-casbin | github_releases, maven_central | 4 | unpinned_actions | — | [publishing](publishing.md#apachecasbin-jcasbin-shiro-casbin) · [security](security.md#apachecasbin-jcasbin-shiro-casbin) |
+| apache/casbin-node-casbin-expression-eval | github_releases, npm | 4 | unpinned_actions | migrate | [publishing](publishing.md#apachecasbin-node-casbin-expression-eval) · [security](security.md#apachecasbin-node-casbin-expression-eval) |
+| apache/casbin-node-casbin-file-adapter | github_releases, npm | 4 | unpinned_actions | migrate | [publishing](publishing.md#apachecasbin-node-casbin-file-adapter) · [security](security.md#apachecasbin-node-casbin-file-adapter) |
+| apache/casbin-node-casbin-node-redis-adapter | github_releases, npm | 4 | unpinned_actions | migrate | [publishing](publishing.md#apachecasbin-node-casbin-node-redis-adapter) · [security](security.md#apachecasbin-node-casbin-node-redis-adapter) |
+| apache/casbin-node-casbin-prisma-adapter | github_releases, npm | 4 | unpinned_actions | migrate | [publishing](publishing.md#apachecasbin-node-casbin-prisma-adapter) · [security](security.md#apachecasbin-node-casbin-prisma-adapter) |
+| apache/casbin-pycasbin | github_releases, pypi | 4 | unpinned_actions | migrate | [publishing](publishing.md#apachecasbin-pycasbin) · [security](security.md#apachecasbin-pycasbin) |
+| apache/casbin-python-fastapi-casbin-auth | github_releases, pypi | 4 | unpinned_actions | migrate | [publishing](publishing.md#apachecasbin-python-fastapi-casbin-auth) · [security](security.md#apachecasbin-python-fastapi-casbin-auth) |
+| apache/casbin-python-pymongo-adapter | github_releases, pypi | 4 | unpinned_actions | migrate | [publishing](publishing.md#apachecasbin-python-pymongo-adapter) · [security](security.md#apachecasbin-python-pymongo-adapter) |
+| apache/casbin-rust-actix-casbin | crates_io, github_releases | 4 | run_block_injection | migrate | [publishing](publishing.md#apachecasbin-rust-actix-casbin) · [security](security.md#apachecasbin-rust-actix-casbin) |
+| apache/casbin-rust-diesel-adapter | crates_io, github_releases | 4 | run_block_injection | migrate | [publishing](publishing.md#apachecasbin-rust-diesel-adapter) · [security](security.md#apachecasbin-rust-diesel-adapter) |
+| apache/casbin-rust-rocket-authz | crates_io, github_releases | 4 | unpinned_actions | migrate | [publishing](publishing.md#apachecasbin-rust-rocket-authz) · [security](security.md#apachecasbin-rust-rocket-authz) |
+| apache/casbin-vscode-plugin | github_releases, npm | 4 | unpinned_actions | migrate | [publishing](publishing.md#apachecasbin-vscode-plugin) · [security](security.md#apachecasbin-vscode-plugin) |
+| apache/cassandra-sidecar | ghcr, github_releases | 4 | run_block_injection | — | [publishing](publishing.md#apachecassandra-sidecar) · [security](security.md#apachecassandra-sidecar) |
+| apache/daffodil-sbt | apache_dist, maven_central | 4 | unpinned_actions | — | [publishing](publishing.md#apachedaffodil-sbt) · [security](security.md#apachedaffodil-sbt) |
+| apache/doris-operator | docker_hub, helm | 4 | unpinned_actions | — | [publishing](publishing.md#apachedoris-operator) · [security](security.md#apachedoris-operator) |
+| apache/hudi-rs | crates_io, pypi | 4 | unpinned_actions | migrate | [publishing](publishing.md#apachehudi-rs) · [security](security.md#apachehudi-rs) |
+| apache/incubator-devlake-helm-chart | ghcr, helm | 4 | unpinned_actions | — | [publishing](publishing.md#apacheincubator-devlake-helm-chart) · [security](security.md#apacheincubator-devlake-helm-chart) |
+| apache/casbin-jcasbin | github_releases, maven_central | 3 | unpinned_actions | — | [publishing](publishing.md#apachecasbin-jcasbin) · [security](security.md#apachecasbin-jcasbin) |
+| apache/casbin-jcasbin-dynamodb-adapter | github_releases, maven_central | 3 | unpinned_actions | — | [publishing](publishing.md#apachecasbin-jcasbin-dynamodb-adapter) · [security](security.md#apachecasbin-jcasbin-dynamodb-adapter) |
+| apache/casbin-jcasbin-hibernate-adapter | github_releases, maven_central | 3 | unpinned_actions | — | [publishing](publishing.md#apachecasbin-jcasbin-hibernate-adapter) · [security](security.md#apachecasbin-jcasbin-hibernate-adapter) |
+| apache/casbin-jcasbin-jdbc-adapter | github_releases, maven_central | 3 | unpinned_actions | — | [publishing](publishing.md#apachecasbin-jcasbin-jdbc-adapter) · [security](security.md#apachecasbin-jcasbin-jdbc-adapter) |
+| apache/casbin-jcasbin-jfinal-authz | github_releases, maven_central | 3 | unpinned_actions | — | [publishing](publishing.md#apachecasbin-jcasbin-jfinal-authz) · [security](security.md#apachecasbin-jcasbin-jfinal-authz) |
+| apache/casbin-jcasbin-kafka-casbin | github_releases, maven_central | 3 | unpinned_actions | — | [publishing](publishing.md#apachecasbin-jcasbin-kafka-casbin) · [security](security.md#apachecasbin-jcasbin-kafka-casbin) |
+| apache/casbin-jcasbin-mybatis-adapter | github_releases, maven_central | 3 | unpinned_actions | — | [publishing](publishing.md#apachecasbin-jcasbin-mybatis-adapter) · [security](security.md#apachecasbin-jcasbin-mybatis-adapter) |
+| apache/casbin-jcasbin-mybatisplus-adapter | github_releases, maven_central | 3 | unpinned_actions | — | [publishing](publishing.md#apachecasbin-jcasbin-mybatisplus-adapter) · [security](security.md#apachecasbin-jcasbin-mybatisplus-adapter) |
+| apache/casbin-jcasbin-nutz-authz | github_releases, maven_central | 3 | unpinned_actions | — | [publishing](publishing.md#apachecasbin-jcasbin-nutz-authz) · [security](security.md#apachecasbin-jcasbin-nutz-authz) |
+| apache/casbin-jcasbin-play-authz | github_releases, maven_central | 3 | unpinned_actions | — | [publishing](publishing.md#apachecasbin-jcasbin-play-authz) · [security](security.md#apachecasbin-jcasbin-play-authz) |
+| apache/casbin-jcasbin-rabbitmq-watcher | github_releases, maven_central | 3 | unpinned_actions | — | [publishing](publishing.md#apachecasbin-jcasbin-rabbitmq-watcher) · [security](security.md#apachecasbin-jcasbin-rabbitmq-watcher) |
+| apache/casbin-jcasbin-redis-adapter | github_releases, maven_central | 3 | unpinned_actions | — | [publishing](publishing.md#apachecasbin-jcasbin-redis-adapter) · [security](security.md#apachecasbin-jcasbin-redis-adapter) |
+| apache/casbin-jcasbin-redis-watcher-ex | github_releases, maven_central | 3 | unpinned_actions | — | [publishing](publishing.md#apachecasbin-jcasbin-redis-watcher-ex) · [security](security.md#apachecasbin-jcasbin-redis-watcher-ex) |
+| apache/casbin-jcasbin-spring-security-starter | github_releases, maven_central | 3 | unpinned_actions | — | [publishing](publishing.md#apachecasbin-jcasbin-spring-security-starter) · [security](security.md#apachecasbin-jcasbin-spring-security-starter) |
+| apache/casbin-jcasbin-string-adapter | github_releases, maven_central | 3 | unpinned_actions | — | [publishing](publishing.md#apachecasbin-jcasbin-string-adapter) · [security](security.md#apachecasbin-jcasbin-string-adapter) |
+| apache/casbin-jcasbin-vertx-authz | github_releases, maven_central | 3 | unpinned_actions | — | [publishing](publishing.md#apachecasbin-jcasbin-vertx-authz) · [security](security.md#apachecasbin-jcasbin-vertx-authz) |
+| apache/casbin-jcasbin-zookeeper-watcher | github_releases, maven_central | 3 | unpinned_actions | — | [publishing](publishing.md#apachecasbin-jcasbin-zookeeper-watcher) · [security](security.md#apachecasbin-jcasbin-zookeeper-watcher) |
+| apache/casbin-js-vue-authz | github_releases, npm | 3 | unpinned_actions | migrate | [publishing](publishing.md#apachecasbin-js-vue-authz) · [security](security.md#apachecasbin-js-vue-authz) |
+| apache/casbin-nest-authz | github_releases, npm | 3 | unpinned_actions | migrate | [publishing](publishing.md#apachecasbin-nest-authz) · [security](security.md#apachecasbin-nest-authz) |
+| apache/casbin-rust-postgres-adapter | crates_io, github_releases | 3 | unpinned_actions | migrate | [publishing](publishing.md#apachecasbin-rust-postgres-adapter) · [security](security.md#apachecasbin-rust-postgres-adapter) |
+| apache/casbin-rust-semantic-release-action-rust | crates_io, github_releases | 3 | unpinned_actions | migrate | [publishing](publishing.md#apachecasbin-rust-semantic-release-action-rust) · [security](security.md#apachecasbin-rust-semantic-release-action-rust) |
+| apache/fluss-rust | crates_io, pypi | 3 | unpinned_actions | migrate | [publishing](publishing.md#apachefluss-rust) · [security](security.md#apachefluss-rust) |
+| apache/hamilton | docker_hub, pypi | 3 | unpinned_actions | — | [publishing](publishing.md#apachehamilton) · [security](security.md#apachehamilton) |
+| apache/arrow-flight-sql-postgresql | ghcr, github_releases | 2 | unpinned_actions | — | [publishing](publishing.md#apachearrow-flight-sql-postgresql) · [security](security.md#apachearrow-flight-sql-postgresql) |
+| apache/cassandra-easy-stress | ghcr, github_releases | 2 | unpinned_actions | — | [publishing](publishing.md#apachecassandra-easy-stress) · [security](security.md#apachecassandra-easy-stress) |
+| apache/arrow-nanoarrow | pypi | 11 | self_hosted_runner | migrate | [publishing](publishing.md#apachearrow-nanoarrow) · [security](security.md#apachearrow-nanoarrow) |
+| apache/celeborn | docker_hub | 8 | run_block_injection | — | [publishing](publishing.md#apacheceleborn) · [security](security.md#apacheceleborn) |
+| apache/gravitino | docker_hub | 8 | run_block_injection | — | [publishing](publishing.md#apachegravitino) · [security](security.md#apachegravitino) |
+| apache/casbin-rs | crates_io | 7 | run_block_injection | migrate | [publishing](publishing.md#apachecasbin-rs) · [security](security.md#apachecasbin-rs) |
+| apache/cloudstack | docker_hub | 6 | run_block_injection | — | [publishing](publishing.md#apachecloudstack) · [security](security.md#apachecloudstack) |
+| apache/datafusion-ballista | ghcr | 6 | unpinned_actions | — | [publishing](publishing.md#apachedatafusion-ballista) · [security](security.md#apachedatafusion-ballista) |
+| apache/dubbo-go-pixiu | github_releases | 6 | prt_checkout | — | [publishing](publishing.md#apachedubbo-go-pixiu) · [security](security.md#apachedubbo-go-pixiu) |
+| apache/dubbo-go-pixiu-samples | github_releases | 6 | prt_checkout | — | [publishing](publishing.md#apachedubbo-go-pixiu-samples) · [security](security.md#apachedubbo-go-pixiu-samples) |
+| apache/flink-kubernetes-operator | maven_central | 6 | run_block_injection | — | [publishing](publishing.md#apacheflink-kubernetes-operator) · [security](security.md#apacheflink-kubernetes-operator) |
+| apache/hive | docker_hub | 6 | run_block_injection | — | [publishing](publishing.md#apachehive) · [security](security.md#apachehive) |
+| apache/arrow-go | github_releases | 5 | unpinned_actions | — | [publishing](publishing.md#apachearrow-go) · [security](security.md#apachearrow-go) |
+| apache/camel-k-runtime | maven_central | 5 | unpinned_actions | — | [publishing](publishing.md#apachecamel-k-runtime) · [security](security.md#apachecamel-k-runtime) |
+| apache/cloudstack-kubernetes-provider | docker_hub | 5 | run_block_injection | — | [publishing](publishing.md#apachecloudstack-kubernetes-provider) · [security](security.md#apachecloudstack-kubernetes-provider) |
+| apache/datafusion-ray | ghcr | 5 | unpinned_actions | — | [publishing](publishing.md#apachedatafusion-ray) · [security](security.md#apachedatafusion-ray) |
+| apache/hertzbeat | docker_hub | 5 | unpinned_actions | — | [publishing](publishing.md#apachehertzbeat) · [security](security.md#apachehertzbeat) |
+| apache/kvrocks | docker_hub | 5 | unpinned_actions | — | [publishing](publishing.md#apachekvrocks) · [security](security.md#apachekvrocks) |
+| apache/apisix-ingress-controller | docker_hub | 4 | unpinned_actions | — | [publishing](publishing.md#apacheapisix-ingress-controller) · [security](security.md#apacheapisix-ingress-controller) |
+| apache/bifromq | docker_hub | 4 | run_block_injection | — | [publishing](publishing.md#apachebifromq) · [security](security.md#apachebifromq) |
+| apache/casbin-core | npm | 4 | unpinned_actions | migrate | [publishing](publishing.md#apachecasbin-core) · [security](security.md#apachecasbin-core) |
+| apache/casbin-docker_auth | docker_hub | 4 | unpinned_actions | — | [publishing](publishing.md#apachecasbin-docker_auth) · [security](security.md#apachecasbin-docker_auth) |
+| apache/casbin-gateway | docker_hub | 4 | unpinned_actions | — | [publishing](publishing.md#apachecasbin-gateway) · [security](security.md#apachecasbin-gateway) |
+| apache/casbin-go-cli | github_releases | 4 | unpinned_actions | — | [publishing](publishing.md#apachecasbin-go-cli) · [security](security.md#apachecasbin-go-cli) |
+| apache/casbin-mcp-gateway | github_releases | 4 | unpinned_actions | — | [publishing](publishing.md#apachecasbin-mcp-gateway) · [security](security.md#apachecasbin-mcp-gateway) |
+| apache/casbin-node-casbin | npm | 4 | unpinned_actions | migrate | [publishing](publishing.md#apachecasbin-node-casbin) · [security](security.md#apachecasbin-node-casbin) |
+| apache/casbin-node-casbin-couchdb-adapter | npm | 4 | unpinned_actions | migrate | [publishing](publishing.md#apachecasbin-node-casbin-couchdb-adapter) · [security](security.md#apachecasbin-node-casbin-couchdb-adapter) |
+| apache/casbin-node-casbin-drizzle-adapter | npm | 4 | unpinned_actions | migrate | [publishing](publishing.md#apachecasbin-node-casbin-drizzle-adapter) · [security](security.md#apachecasbin-node-casbin-drizzle-adapter) |
+| apache/casbin-node-casbin-mongo-changestream-watcher | npm | 4 | unpinned_actions | migrate | [publishing](publishing.md#apachecasbin-node-casbin-mongo-changestream-watcher) · [security](security.md#apachecasbin-node-casbin-mongo-changestream-watcher) |
+| apache/casbin-node-casbin-mongoose-adapter | npm | 4 | unpinned_actions | migrate | [publishing](publishing.md#apachecasbin-node-casbin-mongoose-adapter) · [security](security.md#apachecasbin-node-casbin-mongoose-adapter) |
+| apache/casbin-node-casbin-redis-watcher | npm | 4 | unpinned_actions | migrate | [publishing](publishing.md#apachecasbin-node-casbin-redis-watcher) · [security](security.md#apachecasbin-node-casbin-redis-watcher) |
+| apache/casbin-python-graphql-authz | pypi | 4 | unpinned_actions | migrate | [publishing](publishing.md#apachecasbin-python-graphql-authz) · [security](security.md#apachecasbin-python-graphql-authz) |
+| apache/casbin-python-rabbitmq-watcher | pypi | 4 | unpinned_actions | migrate | [publishing](publishing.md#apachecasbin-python-rabbitmq-watcher) · [security](security.md#apachecasbin-python-rabbitmq-watcher) |
+| apache/casbin-python-redis-adapter | pypi | 4 | unpinned_actions | migrate | [publishing](publishing.md#apachecasbin-python-redis-adapter) · [security](security.md#apachecasbin-python-redis-adapter) |
+| apache/casbin-rust-casbin-rust-cli | crates_io | 4 | unpinned_actions | migrate | [publishing](publishing.md#apachecasbin-rust-casbin-rust-cli) · [security](security.md#apachecasbin-rust-casbin-rust-cli) |
+| apache/casbin-rust-redis-watcher | crates_io | 4 | unpinned_actions | migrate | [publishing](publishing.md#apachecasbin-rust-redis-watcher) · [security](security.md#apachecasbin-rust-redis-watcher) |
+| apache/casbin-sequelize-adapter | npm | 4 | unpinned_actions | migrate | [publishing](publishing.md#apachecasbin-sequelize-adapter) · [security](security.md#apachecasbin-sequelize-adapter) |
+| apache/casbin-server | docker_hub | 4 | unpinned_actions | — | [publishing](publishing.md#apachecasbin-server) · [security](security.md#apachecasbin-server) |
+| apache/casbin-sqlx-adapter | crates_io | 4 | run_block_injection | migrate | [publishing](publishing.md#apachecasbin-sqlx-adapter) · [security](security.md#apachecasbin-sqlx-adapter) |
+| apache/casbin-typeorm-adapter | npm | 4 | unpinned_actions | migrate | [publishing](publishing.md#apachecasbin-typeorm-adapter) · [security](security.md#apachecasbin-typeorm-adapter) |
+| apache/causeway | github_packages | 4 | unpinned_actions | — | [publishing](publishing.md#apachecauseway) · [security](security.md#apachecauseway) |
+| apache/couchdb-mochiweb | hex | 4 | unpinned_actions | — | [publishing](publishing.md#apachecouchdb-mochiweb) · [security](security.md#apachecouchdb-mochiweb) |
+| apache/doris-thirdparty | github_releases | 4 | run_block_injection | — | [publishing](publishing.md#apachedoris-thirdparty) · [security](security.md#apachedoris-thirdparty) |
+| apache/gobblin | docker_hub | 4 | unpinned_actions | — | [publishing](publishing.md#apachegobblin) · [security](security.md#apachegobblin) |
+| apache/knox | docker_hub | 4 | run_block_injection | — | [publishing](publishing.md#apacheknox) · [security](security.md#apacheknox) |
+| apache/airavata | docker_hub | 3 | unpinned_actions | — | [publishing](publishing.md#apacheairavata) · [security](security.md#apacheairavata) |
+| apache/airflow-publish | pypi | 3 | unpinned_actions | — | [publishing](publishing.md#apacheairflow-publish) · [security](security.md#apacheairflow-publish) |
+| apache/amoro | docker_hub | 3 | unpinned_actions | — | [publishing](publishing.md#apacheamoro) · [security](security.md#apacheamoro) |
+| apache/apisix-docker | docker_hub | 3 | unpinned_actions | — | [publishing](publishing.md#apacheapisix-docker) · [security](security.md#apacheapisix-docker) |
+| apache/casbin-editor | github_releases | 3 | unpinned_actions | — | [publishing](publishing.md#apachecasbin-editor) · [security](security.md#apachecasbin-editor) |
+| apache/casbin-mesh | ghcr | 3 | unpinned_actions | — | [publishing](publishing.md#apachecasbin-mesh) · [security](security.md#apachecasbin-mesh) |
+| apache/dubbo-initializer | docker_hub | 3 | unpinned_actions | — | [publishing](publishing.md#apachedubbo-initializer) · [security](security.md#apachedubbo-initializer) |
+| apache/dubbo-kubernetes | github_releases | 3 | unpinned_actions | — | [publishing](publishing.md#apachedubbo-kubernetes) · [security](security.md#apachedubbo-kubernetes) |
+| apache/eventmesh | docker_hub | 3 | unpinned_actions | — | [publishing](publishing.md#apacheeventmesh) · [security](security.md#apacheeventmesh) |
+| apache/eventmesh-dashboard | docker_hub | 3 | unpinned_actions | — | [publishing](publishing.md#apacheeventmesh-dashboard) · [security](security.md#apacheeventmesh-dashboard) |
+| apache/flink-docker | ghcr | 3 | unpinned_actions | — | [publishing](publishing.md#apacheflink-docker) · [security](security.md#apacheflink-docker) |
+| apache/kyuubi-docker | docker_hub | 3 | unpinned_actions | — | [publishing](publishing.md#apachekyuubi-docker) · [security](security.md#apachekyuubi-docker) |
+| apache/activemq | maven_central | 2 | unpinned_actions | — | [publishing](publishing.md#apacheactivemq) · [security](security.md#apacheactivemq) |
+| apache/camel-kafka-connector | maven_central | 2 | unpinned_actions | — | [publishing](publishing.md#apachecamel-kafka-connector) · [security](security.md#apachecamel-kafka-connector) |
+| apache/grails-forge-ui | github_releases | 2 | unpinned_actions | — | [publishing](publishing.md#apachegrails-forge-ui) · [security](security.md#apachegrails-forge-ui) |
 
 ## Low Risk: Publishing Repos
 
@@ -415,76 +415,76 @@ These repos publish packages and have MEDIUM-severity findings (typically unpinn
 <details>
 <summary>Show 70 repos</summary>
 
-- **apache/arrow-adbc** — maven_central, npm, pypi — 11 findings ([publishing](apache-github-publishing.md#apachearrow-adbc) · [security](apache-github-security.md#apachearrow-adbc))
-- **apache/grails-quartz** — apache_dist, github_pages, github_releases, maven_central — 4 findings ([publishing](apache-github-publishing.md#apachegrails-quartz) · [security](apache-github-security.md#apachegrails-quartz))
-- **apache/grails-redis** — apache_dist, github_pages, github_releases, maven_central — 4 findings ([publishing](apache-github-publishing.md#apachegrails-redis) · [security](apache-github-security.md#apachegrails-redis))
-- **apache/grails-spring-security** — apache_dist, github_pages, github_releases, maven_central — 4 findings ([publishing](apache-github-publishing.md#apachegrails-spring-security) · [security](apache-github-security.md#apachegrails-spring-security))
-- **apache/fineract** — docker_hub, maven_central — 9 findings ([publishing](apache-github-publishing.md#apachefineract) · [security](apache-github-security.md#apachefineract))
-- **apache/incubator-baremaps** — apache_dist, github_releases, maven_central — 5 findings ([publishing](apache-github-publishing.md#apacheincubator-baremaps) · [security](apache-github-security.md#apacheincubator-baremaps))
-- **apache/arrow-java** — github_pages, github_releases — 5 findings ([publishing](apache-github-publishing.md#apachearrow-java) · [security](apache-github-security.md#apachearrow-java))
-- **apache/apisix** — docker_hub — 6 findings ([publishing](apache-github-publishing.md#apacheapisix) · [security](apache-github-security.md#apacheapisix))
-- **apache/buildstream** — github_releases, pypi — 3 findings ([publishing](apache-github-publishing.md#apachebuildstream) · [security](apache-github-security.md#apachebuildstream))
-- **apache/camel-karavan** — ghcr — 6 findings ([publishing](apache-github-publishing.md#apachecamel-karavan) · [security](apache-github-security.md#apachecamel-karavan))
-- **apache/casbin-node-casbin-session-role-manager** — github_releases, npm — 3 findings ([publishing](apache-github-publishing.md#apachecasbin-node-casbin-session-role-manager) · [security](apache-github-security.md#apachecasbin-node-casbin-session-role-manager))
-- **apache/casbin-rust-yaml-adapter** — crates_io, github_releases — 3 findings ([publishing](apache-github-publishing.md#apachecasbin-rust-yaml-adapter) · [security](apache-github-security.md#apachecasbin-rust-yaml-adapter))
-- **apache/casbin-website-v3** — github_releases, npm — 3 findings ([publishing](apache-github-publishing.md#apachecasbin-website-v3) · [security](apache-github-security.md#apachecasbin-website-v3))
-- **apache/daffodil** — apache_dist, maven_central — 3 findings ([publishing](apache-github-publishing.md#apachedaffodil) · [security](apache-github-security.md#apachedaffodil))
-- **apache/grails-github-actions** — apache_dist, github_releases — 3 findings ([publishing](apache-github-publishing.md#apachegrails-github-actions) · [security](apache-github-security.md#apachegrails-github-actions))
-- **apache/apisix-helm-chart** — github_releases, helm — 2 findings ([publishing](apache-github-publishing.md#apacheapisix-helm-chart) · [security](apache-github-security.md#apacheapisix-helm-chart))
-- **apache/arrow-dotnet** — github_releases, nuget — 2 findings ([publishing](apache-github-publishing.md#apachearrow-dotnet) · [security](apache-github-security.md#apachearrow-dotnet))
-- **apache/casbin-Casbin.NET-redis-watcher** — github_packages, nuget — 2 findings ([publishing](apache-github-publishing.md#apachecasbin-casbinnet-redis-watcher) · [security](apache-github-security.md#apachecasbin-casbinnet-redis-watcher))
-- **apache/casbin-aspnetcore** — github_packages, nuget — 2 findings ([publishing](apache-github-publishing.md#apachecasbin-aspnetcore) · [security](apache-github-security.md#apachecasbin-aspnetcore))
-- **apache/casbin-efcore-adapter** — github_packages, nuget — 2 findings ([publishing](apache-github-publishing.md#apachecasbin-efcore-adapter) · [security](apache-github-security.md#apachecasbin-efcore-adapter))
-- **apache/casbin-jcasbin-kafka-watcher** — github_releases, maven_central — 2 findings ([publishing](apache-github-publishing.md#apachecasbin-jcasbin-kafka-watcher) · [security](apache-github-security.md#apachecasbin-jcasbin-kafka-watcher))
-- **apache/casbin-jcasbin-postgres-watcher** — github_releases, maven_central — 2 findings ([publishing](apache-github-publishing.md#apachecasbin-jcasbin-postgres-watcher) · [security](apache-github-security.md#apachecasbin-jcasbin-postgres-watcher))
-- **apache/casbin-jcasbin-pulsar-authz** — github_releases, maven_central — 2 findings ([publishing](apache-github-publishing.md#apachecasbin-jcasbin-pulsar-authz) · [security](apache-github-security.md#apachecasbin-jcasbin-pulsar-authz))
-- **apache/casbin-node-casbin-etcd-watcher** — github_releases, npm — 2 findings ([publishing](apache-github-publishing.md#apachecasbin-node-casbin-etcd-watcher) · [security](apache-github-security.md#apachecasbin-node-casbin-etcd-watcher))
-- **apache/casbin-python-async-django-orm-adapter** — github_releases, pypi — 2 findings ([publishing](apache-github-publishing.md#apachecasbin-python-async-django-orm-adapter) · [security](apache-github-security.md#apachecasbin-python-async-django-orm-adapter))
-- **apache/casbin-python-async-postgres-watcher** — github_releases, pypi — 2 findings ([publishing](apache-github-publishing.md#apachecasbin-python-async-postgres-watcher) · [security](apache-github-security.md#apachecasbin-python-async-postgres-watcher))
-- **apache/casbin-python-casbin-databases-adapter** — github_releases, pypi — 2 findings ([publishing](apache-github-publishing.md#apachecasbin-python-casbin-databases-adapter) · [security](apache-github-security.md#apachecasbin-python-casbin-databases-adapter))
-- **apache/casbin-python-django-casbin-auth** — github_releases, pypi — 2 findings ([publishing](apache-github-publishing.md#apachecasbin-python-django-casbin-auth) · [security](apache-github-security.md#apachecasbin-python-django-casbin-auth))
-- **apache/casbin-python-django-orm-adapter** — github_releases, pypi — 2 findings ([publishing](apache-github-publishing.md#apachecasbin-python-django-orm-adapter) · [security](apache-github-security.md#apachecasbin-python-django-orm-adapter))
-- **apache/casbin-python-etcd-watcher** — github_releases, pypi — 2 findings ([publishing](apache-github-publishing.md#apachecasbin-python-etcd-watcher) · [security](apache-github-security.md#apachecasbin-python-etcd-watcher))
-- **apache/casbin-python-postgresql-watcher** — github_releases, pypi — 2 findings ([publishing](apache-github-publishing.md#apachecasbin-python-postgresql-watcher) · [security](apache-github-security.md#apachecasbin-python-postgresql-watcher))
-- **apache/casbin-python-redis-watcher** — github_releases, pypi — 2 findings ([publishing](apache-github-publishing.md#apachecasbin-python-redis-watcher) · [security](apache-github-security.md#apachecasbin-python-redis-watcher))
-- **apache/casbin-python-sanic-authz** — github_releases, pypi — 2 findings ([publishing](apache-github-publishing.md#apachecasbin-python-sanic-authz) · [security](apache-github-security.md#apachecasbin-python-sanic-authz))
-- **apache/casbin-spring-boot-starter** — github_releases, maven_central — 2 findings ([publishing](apache-github-publishing.md#apachecasbin-spring-boot-starter) · [security](apache-github-security.md#apachecasbin-spring-boot-starter))
-- **apache/daffodil-vscode** — apache_dist, maven_central — 2 findings ([publishing](apache-github-publishing.md#apachedaffodil-vscode) · [security](apache-github-security.md#apachedaffodil-vscode))
-- **apache/directory-scimple** — apache_dist, maven_central — 2 findings ([publishing](apache-github-publishing.md#apachedirectory-scimple) · [security](apache-github-security.md#apachedirectory-scimple))
-- **apache/commons-crypto** — maven_central — 4 findings ([publishing](apache-github-publishing.md#apachecommons-crypto) · [security](apache-github-security.md#apachecommons-crypto))
-- **apache/commons-io** — maven_central — 4 findings ([publishing](apache-github-publishing.md#apachecommons-io) · [security](apache-github-security.md#apachecommons-io))
-- **apache/commons-net** — maven_central — 4 findings ([publishing](apache-github-publishing.md#apachecommons-net) · [security](apache-github-security.md#apachecommons-net))
-- **apache/couchdb-helm** — github_pages, helm — 1 findings ([publishing](apache-github-publishing.md#apachecouchdb-helm) · [security](apache-github-security.md#apachecouchdb-helm))
-- **apache/echarts** — npm — 4 findings ([publishing](apache-github-publishing.md#apacheecharts) · [security](apache-github-security.md#apacheecharts))
-- **apache/kafka** — docker_hub — 4 findings ([publishing](apache-github-publishing.md#apachekafka) · [security](apache-github-security.md#apachekafka))
-- **apache/airflow** — docker_hub — 3 findings ([publishing](apache-github-publishing.md#apacheairflow) · [security](apache-github-security.md#apacheairflow))
-- **apache/arrow-swift** — github_releases — 3 findings ([publishing](apache-github-publishing.md#apachearrow-swift) · [security](apache-github-security.md#apachearrow-swift))
-- **apache/camel-kameleon** — ghcr — 3 findings ([publishing](apache-github-publishing.md#apachecamel-kameleon) · [security](apache-github-security.md#apachecamel-kameleon))
-- **apache/carbondata** — github_packages — 3 findings ([publishing](apache-github-publishing.md#apachecarbondata) · [security](apache-github-security.md#apachecarbondata))
-- **apache/commons-numbers** — maven_central — 3 findings ([publishing](apache-github-publishing.md#apachecommons-numbers) · [security](apache-github-security.md#apachecommons-numbers))
-- **apache/cordova-android** — apache_dist — 3 findings ([publishing](apache-github-publishing.md#apachecordova-android) · [security](apache-github-security.md#apachecordova-android))
-- **apache/cordova-coho** — npm — 3 findings ([publishing](apache-github-publishing.md#apachecordova-coho) · [security](apache-github-security.md#apachecordova-coho))
-- **apache/cordova-eslint** — apache_dist — 3 findings ([publishing](apache-github-publishing.md#apachecordova-eslint) · [security](apache-github-security.md#apachecordova-eslint))
-- **apache/cordova-ios** — apache_dist — 3 findings ([publishing](apache-github-publishing.md#apachecordova-ios) · [security](apache-github-security.md#apachecordova-ios))
-- **apache/cordova-plugin-camera** — apache_dist — 3 findings ([publishing](apache-github-publishing.md#apachecordova-plugin-camera) · [security](apache-github-security.md#apachecordova-plugin-camera))
-- **apache/drill** — maven_central — 3 findings ([publishing](apache-github-publishing.md#apachedrill) · [security](apache-github-security.md#apachedrill))
-- **apache/dubbo-admin** — github_releases — 3 findings ([publishing](apache-github-publishing.md#apachedubbo-admin) · [security](apache-github-security.md#apachedubbo-admin))
-- **apache/airavata-mft** — github_releases — 2 findings ([publishing](apache-github-publishing.md#apacheairavata-mft) · [security](apache-github-security.md#apacheairavata-mft))
-- **apache/arrow-js** — github_releases — 2 findings ([publishing](apache-github-publishing.md#apachearrow-js) · [security](apache-github-security.md#apachearrow-js))
-- **apache/axis-axis2-java-core** — maven_central — 2 findings ([publishing](apache-github-publishing.md#apacheaxis-axis2-java-core) · [security](apache-github-security.md#apacheaxis-axis2-java-core))
-- **apache/casbin-Casbin.NET-dotnet-cli** — github_releases — 2 findings ([publishing](apache-github-publishing.md#apachecasbin-casbinnet-dotnet-cli) · [security](apache-github-security.md#apachecasbin-casbinnet-dotnet-cli))
-- **apache/casbin-Casbin.NET-ef-adapter** — nuget — 2 findings ([publishing](apache-github-publishing.md#apachecasbin-casbinnet-ef-adapter) · [security](apache-github-security.md#apachecasbin-casbinnet-ef-adapter))
-- **apache/casbin-casbin.js** — npm — 2 findings ([publishing](apache-github-publishing.md#apachecasbin-casbinjs) · [security](apache-github-security.md#apachecasbin-casbinjs))
-- **apache/casbin-node-casbin-basic-adapter** — npm — 2 findings ([publishing](apache-github-publishing.md#apachecasbin-node-casbin-basic-adapter) · [security](apache-github-security.md#apachecasbin-node-casbin-basic-adapter))
-- **apache/casbin-python-async-sqlalchemy-adapter** — pypi — 2 findings ([publishing](apache-github-publishing.md#apachecasbin-python-async-sqlalchemy-adapter) · [security](apache-github-security.md#apachecasbin-python-async-sqlalchemy-adapter))
-- **apache/casbin-python-flask-authz** — pypi — 2 findings ([publishing](apache-github-publishing.md#apachecasbin-python-flask-authz) · [security](apache-github-security.md#apachecasbin-python-flask-authz))
-- **apache/casbin-python-sqlalchemy-adapter** — pypi — 2 findings ([publishing](apache-github-publishing.md#apachecasbin-python-sqlalchemy-adapter) · [security](apache-github-security.md#apachecasbin-python-sqlalchemy-adapter))
-- **apache/casbin-python-sqlobject-adapter** — pypi — 2 findings ([publishing](apache-github-publishing.md#apachecasbin-python-sqlobject-adapter) · [security](apache-github-security.md#apachecasbin-python-sqlobject-adapter))
-- **apache/cayenne** — maven_central — 2 findings ([publishing](apache-github-publishing.md#apachecayenne) · [security](apache-github-security.md#apachecayenne))
-- **apache/echarts-examples** — npm — 2 findings ([publishing](apache-github-publishing.md#apacheecharts-examples) · [security](apache-github-security.md#apacheecharts-examples))
-- **apache/karaf-minho** — maven_central — 2 findings ([publishing](apache-github-publishing.md#apachekaraf-minho) · [security](apache-github-security.md#apachekaraf-minho))
-- **apache/kyuubi-shaded** — maven_central — 2 findings ([publishing](apache-github-publishing.md#apachekyuubi-shaded) · [security](apache-github-security.md#apachekyuubi-shaded))
-- **apache/camel-kamelets** — maven_central — 1 findings ([publishing](apache-github-publishing.md#apachecamel-kamelets) · [security](apache-github-security.md#apachecamel-kamelets))
+- **apache/arrow-adbc** — maven_central, npm, pypi — 11 findings ([publishing](publishing.md#apachearrow-adbc) · [security](security.md#apachearrow-adbc))
+- **apache/grails-quartz** — apache_dist, github_pages, github_releases, maven_central — 4 findings ([publishing](publishing.md#apachegrails-quartz) · [security](security.md#apachegrails-quartz))
+- **apache/grails-redis** — apache_dist, github_pages, github_releases, maven_central — 4 findings ([publishing](publishing.md#apachegrails-redis) · [security](security.md#apachegrails-redis))
+- **apache/grails-spring-security** — apache_dist, github_pages, github_releases, maven_central — 4 findings ([publishing](publishing.md#apachegrails-spring-security) · [security](security.md#apachegrails-spring-security))
+- **apache/fineract** — docker_hub, maven_central — 9 findings ([publishing](publishing.md#apachefineract) · [security](security.md#apachefineract))
+- **apache/incubator-baremaps** — apache_dist, github_releases, maven_central — 5 findings ([publishing](publishing.md#apacheincubator-baremaps) · [security](security.md#apacheincubator-baremaps))
+- **apache/arrow-java** — github_pages, github_releases — 5 findings ([publishing](publishing.md#apachearrow-java) · [security](security.md#apachearrow-java))
+- **apache/apisix** — docker_hub — 6 findings ([publishing](publishing.md#apacheapisix) · [security](security.md#apacheapisix))
+- **apache/buildstream** — github_releases, pypi — 3 findings ([publishing](publishing.md#apachebuildstream) · [security](security.md#apachebuildstream))
+- **apache/camel-karavan** — ghcr — 6 findings ([publishing](publishing.md#apachecamel-karavan) · [security](security.md#apachecamel-karavan))
+- **apache/casbin-node-casbin-session-role-manager** — github_releases, npm — 3 findings ([publishing](publishing.md#apachecasbin-node-casbin-session-role-manager) · [security](security.md#apachecasbin-node-casbin-session-role-manager))
+- **apache/casbin-rust-yaml-adapter** — crates_io, github_releases — 3 findings ([publishing](publishing.md#apachecasbin-rust-yaml-adapter) · [security](security.md#apachecasbin-rust-yaml-adapter))
+- **apache/casbin-website-v3** — github_releases, npm — 3 findings ([publishing](publishing.md#apachecasbin-website-v3) · [security](security.md#apachecasbin-website-v3))
+- **apache/daffodil** — apache_dist, maven_central — 3 findings ([publishing](publishing.md#apachedaffodil) · [security](security.md#apachedaffodil))
+- **apache/grails-github-actions** — apache_dist, github_releases — 3 findings ([publishing](publishing.md#apachegrails-github-actions) · [security](security.md#apachegrails-github-actions))
+- **apache/apisix-helm-chart** — github_releases, helm — 2 findings ([publishing](publishing.md#apacheapisix-helm-chart) · [security](security.md#apacheapisix-helm-chart))
+- **apache/arrow-dotnet** — github_releases, nuget — 2 findings ([publishing](publishing.md#apachearrow-dotnet) · [security](security.md#apachearrow-dotnet))
+- **apache/casbin-Casbin.NET-redis-watcher** — github_packages, nuget — 2 findings ([publishing](publishing.md#apachecasbin-casbinnet-redis-watcher) · [security](security.md#apachecasbin-casbinnet-redis-watcher))
+- **apache/casbin-aspnetcore** — github_packages, nuget — 2 findings ([publishing](publishing.md#apachecasbin-aspnetcore) · [security](security.md#apachecasbin-aspnetcore))
+- **apache/casbin-efcore-adapter** — github_packages, nuget — 2 findings ([publishing](publishing.md#apachecasbin-efcore-adapter) · [security](security.md#apachecasbin-efcore-adapter))
+- **apache/casbin-jcasbin-kafka-watcher** — github_releases, maven_central — 2 findings ([publishing](publishing.md#apachecasbin-jcasbin-kafka-watcher) · [security](security.md#apachecasbin-jcasbin-kafka-watcher))
+- **apache/casbin-jcasbin-postgres-watcher** — github_releases, maven_central — 2 findings ([publishing](publishing.md#apachecasbin-jcasbin-postgres-watcher) · [security](security.md#apachecasbin-jcasbin-postgres-watcher))
+- **apache/casbin-jcasbin-pulsar-authz** — github_releases, maven_central — 2 findings ([publishing](publishing.md#apachecasbin-jcasbin-pulsar-authz) · [security](security.md#apachecasbin-jcasbin-pulsar-authz))
+- **apache/casbin-node-casbin-etcd-watcher** — github_releases, npm — 2 findings ([publishing](publishing.md#apachecasbin-node-casbin-etcd-watcher) · [security](security.md#apachecasbin-node-casbin-etcd-watcher))
+- **apache/casbin-python-async-django-orm-adapter** — github_releases, pypi — 2 findings ([publishing](publishing.md#apachecasbin-python-async-django-orm-adapter) · [security](security.md#apachecasbin-python-async-django-orm-adapter))
+- **apache/casbin-python-async-postgres-watcher** — github_releases, pypi — 2 findings ([publishing](publishing.md#apachecasbin-python-async-postgres-watcher) · [security](security.md#apachecasbin-python-async-postgres-watcher))
+- **apache/casbin-python-casbin-databases-adapter** — github_releases, pypi — 2 findings ([publishing](publishing.md#apachecasbin-python-casbin-databases-adapter) · [security](security.md#apachecasbin-python-casbin-databases-adapter))
+- **apache/casbin-python-django-casbin-auth** — github_releases, pypi — 2 findings ([publishing](publishing.md#apachecasbin-python-django-casbin-auth) · [security](security.md#apachecasbin-python-django-casbin-auth))
+- **apache/casbin-python-django-orm-adapter** — github_releases, pypi — 2 findings ([publishing](publishing.md#apachecasbin-python-django-orm-adapter) · [security](security.md#apachecasbin-python-django-orm-adapter))
+- **apache/casbin-python-etcd-watcher** — github_releases, pypi — 2 findings ([publishing](publishing.md#apachecasbin-python-etcd-watcher) · [security](security.md#apachecasbin-python-etcd-watcher))
+- **apache/casbin-python-postgresql-watcher** — github_releases, pypi — 2 findings ([publishing](publishing.md#apachecasbin-python-postgresql-watcher) · [security](security.md#apachecasbin-python-postgresql-watcher))
+- **apache/casbin-python-redis-watcher** — github_releases, pypi — 2 findings ([publishing](publishing.md#apachecasbin-python-redis-watcher) · [security](security.md#apachecasbin-python-redis-watcher))
+- **apache/casbin-python-sanic-authz** — github_releases, pypi — 2 findings ([publishing](publishing.md#apachecasbin-python-sanic-authz) · [security](security.md#apachecasbin-python-sanic-authz))
+- **apache/casbin-spring-boot-starter** — github_releases, maven_central — 2 findings ([publishing](publishing.md#apachecasbin-spring-boot-starter) · [security](security.md#apachecasbin-spring-boot-starter))
+- **apache/daffodil-vscode** — apache_dist, maven_central — 2 findings ([publishing](publishing.md#apachedaffodil-vscode) · [security](security.md#apachedaffodil-vscode))
+- **apache/directory-scimple** — apache_dist, maven_central — 2 findings ([publishing](publishing.md#apachedirectory-scimple) · [security](security.md#apachedirectory-scimple))
+- **apache/commons-crypto** — maven_central — 4 findings ([publishing](publishing.md#apachecommons-crypto) · [security](security.md#apachecommons-crypto))
+- **apache/commons-io** — maven_central — 4 findings ([publishing](publishing.md#apachecommons-io) · [security](security.md#apachecommons-io))
+- **apache/commons-net** — maven_central — 4 findings ([publishing](publishing.md#apachecommons-net) · [security](security.md#apachecommons-net))
+- **apache/couchdb-helm** — github_pages, helm — 1 findings ([publishing](publishing.md#apachecouchdb-helm) · [security](security.md#apachecouchdb-helm))
+- **apache/echarts** — npm — 4 findings ([publishing](publishing.md#apacheecharts) · [security](security.md#apacheecharts))
+- **apache/kafka** — docker_hub — 4 findings ([publishing](publishing.md#apachekafka) · [security](security.md#apachekafka))
+- **apache/airflow** — docker_hub — 3 findings ([publishing](publishing.md#apacheairflow) · [security](security.md#apacheairflow))
+- **apache/arrow-swift** — github_releases — 3 findings ([publishing](publishing.md#apachearrow-swift) · [security](security.md#apachearrow-swift))
+- **apache/camel-kameleon** — ghcr — 3 findings ([publishing](publishing.md#apachecamel-kameleon) · [security](security.md#apachecamel-kameleon))
+- **apache/carbondata** — github_packages — 3 findings ([publishing](publishing.md#apachecarbondata) · [security](security.md#apachecarbondata))
+- **apache/commons-numbers** — maven_central — 3 findings ([publishing](publishing.md#apachecommons-numbers) · [security](security.md#apachecommons-numbers))
+- **apache/cordova-android** — apache_dist — 3 findings ([publishing](publishing.md#apachecordova-android) · [security](security.md#apachecordova-android))
+- **apache/cordova-coho** — npm — 3 findings ([publishing](publishing.md#apachecordova-coho) · [security](security.md#apachecordova-coho))
+- **apache/cordova-eslint** — apache_dist — 3 findings ([publishing](publishing.md#apachecordova-eslint) · [security](security.md#apachecordova-eslint))
+- **apache/cordova-ios** — apache_dist — 3 findings ([publishing](publishing.md#apachecordova-ios) · [security](security.md#apachecordova-ios))
+- **apache/cordova-plugin-camera** — apache_dist — 3 findings ([publishing](publishing.md#apachecordova-plugin-camera) · [security](security.md#apachecordova-plugin-camera))
+- **apache/drill** — maven_central — 3 findings ([publishing](publishing.md#apachedrill) · [security](security.md#apachedrill))
+- **apache/dubbo-admin** — github_releases — 3 findings ([publishing](publishing.md#apachedubbo-admin) · [security](security.md#apachedubbo-admin))
+- **apache/airavata-mft** — github_releases — 2 findings ([publishing](publishing.md#apacheairavata-mft) · [security](security.md#apacheairavata-mft))
+- **apache/arrow-js** — github_releases — 2 findings ([publishing](publishing.md#apachearrow-js) · [security](security.md#apachearrow-js))
+- **apache/axis-axis2-java-core** — maven_central — 2 findings ([publishing](publishing.md#apacheaxis-axis2-java-core) · [security](security.md#apacheaxis-axis2-java-core))
+- **apache/casbin-Casbin.NET-dotnet-cli** — github_releases — 2 findings ([publishing](publishing.md#apachecasbin-casbinnet-dotnet-cli) · [security](security.md#apachecasbin-casbinnet-dotnet-cli))
+- **apache/casbin-Casbin.NET-ef-adapter** — nuget — 2 findings ([publishing](publishing.md#apachecasbin-casbinnet-ef-adapter) · [security](security.md#apachecasbin-casbinnet-ef-adapter))
+- **apache/casbin-casbin.js** — npm — 2 findings ([publishing](publishing.md#apachecasbin-casbinjs) · [security](security.md#apachecasbin-casbinjs))
+- **apache/casbin-node-casbin-basic-adapter** — npm — 2 findings ([publishing](publishing.md#apachecasbin-node-casbin-basic-adapter) · [security](security.md#apachecasbin-node-casbin-basic-adapter))
+- **apache/casbin-python-async-sqlalchemy-adapter** — pypi — 2 findings ([publishing](publishing.md#apachecasbin-python-async-sqlalchemy-adapter) · [security](security.md#apachecasbin-python-async-sqlalchemy-adapter))
+- **apache/casbin-python-flask-authz** — pypi — 2 findings ([publishing](publishing.md#apachecasbin-python-flask-authz) · [security](security.md#apachecasbin-python-flask-authz))
+- **apache/casbin-python-sqlalchemy-adapter** — pypi — 2 findings ([publishing](publishing.md#apachecasbin-python-sqlalchemy-adapter) · [security](security.md#apachecasbin-python-sqlalchemy-adapter))
+- **apache/casbin-python-sqlobject-adapter** — pypi — 2 findings ([publishing](publishing.md#apachecasbin-python-sqlobject-adapter) · [security](security.md#apachecasbin-python-sqlobject-adapter))
+- **apache/cayenne** — maven_central — 2 findings ([publishing](publishing.md#apachecayenne) · [security](security.md#apachecayenne))
+- **apache/echarts-examples** — npm — 2 findings ([publishing](publishing.md#apacheecharts-examples) · [security](security.md#apacheecharts-examples))
+- **apache/karaf-minho** — maven_central — 2 findings ([publishing](publishing.md#apachekaraf-minho) · [security](security.md#apachekaraf-minho))
+- **apache/kyuubi-shaded** — maven_central — 2 findings ([publishing](publishing.md#apachekyuubi-shaded) · [security](security.md#apachekyuubi-shaded))
+- **apache/camel-kamelets** — maven_central — 1 findings ([publishing](publishing.md#apachecamel-kamelets) · [security](security.md#apachecamel-kamelets))
 
 </details>
 
@@ -492,7 +492,7 @@ These repos publish packages and have MEDIUM-severity findings (typically unpinn
 
 **70** repos use long-lived tokens to publish to ecosystems that support OIDC trusted publishing. Migrating eliminates stored secrets.
 
-Full details: [apache-github-publishing.md → Trusted Publishing](apache-github-publishing.md#trusted-publishing-migration-opportunities)
+Full details: [publishing.md → Trusted Publishing](publishing.md#trusted-publishing-migration-opportunities)
 
 - **NuGet**: arrow-dotnet, casbin-Casbin.NET, casbin-Casbin.NET-ef-adapter, casbin-Casbin.NET-redis-adapter, casbin-Casbin.NET-redis-watcher, casbin-aspnetcore, casbin-efcore-adapter
 - **PyPI**: airflow-publish, arrow-adbc, arrow-nanoarrow, beam, buildstream, casbin-pycasbin, casbin-python-async-django-orm-adapter, casbin-python-async-postgres-watcher, casbin-python-async-sqlalchemy-adapter, casbin-python-casbin-databases-adapter, casbin-python-django-casbin-auth, casbin-python-django-orm-adapter, casbin-python-etcd-watcher, casbin-python-fastapi-casbin-auth, casbin-python-flask-authz, casbin-python-graphql-authz, casbin-python-postgresql-watcher, casbin-python-pymongo-adapter, casbin-python-rabbitmq-watcher, casbin-python-redis-adapter, casbin-python-redis-watcher, casbin-python-sanic-authz, casbin-python-sqlalchemy-adapter, casbin-python-sqlobject-adapter, fluss-rust, fory, hamilton, hudi-rs
@@ -501,12 +501,12 @@ Full details: [apache-github-publishing.md → Trusted Publishing](apache-github
 
 ## Key Recommendations
 
-1. **Migrate to trusted publishing.** 70 repos can eliminate long-lived secrets by adopting OIDC. Start with repos publishing to PyPI and npm — [migration guide](apache-github-publishing.md#trusted-publishing-migration-opportunities).
-2. **Review HIGH-severity findings.** 11 repos have HIGH findings that need investigation ([details](apache-github-security.md#high-findings)).
+1. **Migrate to trusted publishing.** 70 repos can eliminate long-lived secrets by adopting OIDC. Start with repos publishing to PyPI and npm — [migration guide](publishing.md#trusted-publishing-migration-opportunities).
+2. **Review HIGH-severity findings.** 11 repos have HIGH findings that need investigation ([details](security.md#high-findings)).
 3. **Audit composite action callers.** 30 repos have composite actions that interpolate `inputs.*` in shell blocks. Not exploitable today if callers pass trusted values only — verify no workflow passes PR titles, branch names, or comment bodies.
-4. **Pin actions to SHA hashes.** All 1205 repos use mutable tag refs. See the [unpinned actions findings](apache-github-security.md#medium-findings) for per-repo counts.
+4. **Pin actions to SHA hashes.** All 1205 repos use mutable tag refs. See the [unpinned actions findings](security.md#medium-findings) for per-repo counts.
 5. **Add CODEOWNERS with `.github/` coverage.** 1193 repos have no CODEOWNERS file. Workflow changes can bypass security review.
 
 ---
 
-*Generated from [apache-github-publishing.md](apache-github-publishing.md) and [apache-github-security.md](apache-github-security.md).*
+*Generated from [publishing.md](publishing.md) and [security.md](security.md).*

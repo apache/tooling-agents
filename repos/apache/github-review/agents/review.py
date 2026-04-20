@@ -190,8 +190,8 @@ async def run(input_dict, tools):
         low_repos = [r for r in repo_rows if r["worst"] in ("LOW", "INFO", "—") and r["publishes"]]
 
         # --- Generate report ---
-        PUB = "apache-github-publishing.md"
-        SEC = "apache-github-security.md"
+        PUB = "publishing.md"
+        SEC = "security.md"
 
         def anchor(text):
             a = text.lower().strip()
