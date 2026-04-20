@@ -7,14 +7,13 @@ async def run(input_dict, tools):
     mcpc = { url : RemoteMCPClient(remote_url = url) for url in tools.keys() }
     http_client = httpx.AsyncClient()
     try:
-        owner = input_dict.get("owner", "apache")
-        repos_str = input_dict.get("repos", "").strip()
-        repo_filter = set(r.strip() for r in repos_str.split(",") if r.strip()) if repos_str else None
-        print(f"Review starting for owner={owner}" +
-              (f" (filtered to {len(repo_filter)} repos)" if repo_filter else ""), flush=True)
+        github_owner = input_dict.get("github_owner", "apache")
+        redacted_severity = input_dict.get("redacted_severity", "").strip().upper()
+        print(f"Review starting for github_owner={github_owner}" +
+              (f" (redacting {redacted_severity})" if redacted_severity else ""), flush=True)
 
-        report_ns = data_store.use_namespace(f"ci-report:{owner}")
-        security_ns = data_store.use_namespace(f"ci-security:{owner}")
+        report_ns = data_store.use_namespace(f"ci-report:{github_owner}")
+        security_ns = data_store.use_namespace(f"ci-security:{github_owner}")
 
         pub_stats = report_ns.get("latest_stats")
         sec_stats = security_ns.get("latest_stats")
@@ -22,7 +21,7 @@ async def run(input_dict, tools):
         sec_report = security_ns.get("latest_report")
 
         if not pub_stats or not sec_stats:
-            return {"outputText": "Error: Run Publishing and Security agents first."}
+            return {"outputText": "Error: Run Agent 1 and Agent 2 first."}
 
         print(f"Publishing report: {len(pub_report or '')} chars", flush=True)
         print(f"Security report: {len(sec_report or '')} chars", flush=True)
@@ -32,13 +31,11 @@ async def run(input_dict, tools):
         repo_categories = {}
         if pub_report:
             header_pattern = re.compile(
-                r'### ' + re.escape(f'{owner}/') + r'(\S+)\s*\n+'
+                r'### ' + re.escape(f'{github_owner}/') + r'(\S+)\s*\n+'
                 r'\*\*(\d+)\*\* release/snapshot workflows \| Ecosystems: \*\*([^*]+)\*\*'
                 r' \|(.+)')
             for m in header_pattern.finditer(pub_report):
                 repo = m.group(1)
-                if repo_filter and repo not in repo_filter:
-                    continue
                 ecosystems = [e.strip() for e in m.group(3).split(",")]
                 repo_ecosystems[repo] = ecosystems
                 cats_str = m.group(4)
@@ -55,8 +52,6 @@ async def run(input_dict, tools):
         # --- Read per-repo security findings ---
         all_sec_keys = security_ns.list_keys()
         finding_keys = [k for k in all_sec_keys if k.startswith("findings:")]
-        if repo_filter:
-            finding_keys = [k for k in finding_keys if k.replace("findings:", "") in repo_filter]
 
         repo_security = {}
 
@@ -65,6 +60,11 @@ async def run(input_dict, tools):
             findings = security_ns.get(k)
             if not findings or not isinstance(findings, list):
                 continue
+
+            if redacted_severity:
+                findings = [f for f in findings if f.get("severity", "INFO") != redacted_severity]
+                if not findings:
+                    continue
 
             sev_counts = {}
             check_counts = {}
@@ -112,7 +112,7 @@ async def run(input_dict, tools):
                 if tp_section and "| " in line and "`" in line:
                     parts = line.split("|")
                     if len(parts) > 1:
-                        repo_name = parts[1].strip().strip("`").strip()
+                        repo_name = parts[1].strip()
                         if repo_name and repo_name != "Repository":
                             tp_repos.add(repo_name)
 
@@ -120,8 +120,6 @@ async def run(input_dict, tools):
 
         # --- Build combined risk table ---
         publishing_repos = set(pub_stats.get("publishing_repos", []))
-        if repo_filter:
-            publishing_repos = publishing_repos & repo_filter
         all_repos = publishing_repos | set(repo_security.keys())
 
         repo_rows = []
@@ -164,8 +162,8 @@ async def run(input_dict, tools):
         low_repos = [r for r in repo_rows if r["worst"] in ("LOW", "INFO", "—") and r["publishes"]]
 
         # --- Generate report ---
-        PUB = "publishing.md"
-        SEC = "security.md"
+        PUB = "apache-github-publishing.md"
+        SEC = "apache-github-security.md"
 
         def anchor(text):
             a = text.lower().strip()
@@ -175,10 +173,10 @@ async def run(input_dict, tools):
             return a.strip('-')
 
         def repo_pub_link(repo):
-            return f"[publishing]({PUB}#{anchor(f'{owner}/{repo}')})"
+            return f"[publishing]({PUB}#{anchor(f'{github_owner}/{repo}')})"
 
         def repo_sec_link(repo):
-            return f"[security]({SEC}#{anchor(f'{owner}/{repo}')})"
+            return f"[security]({SEC}#{anchor(f'{github_owner}/{repo}')})"
 
         def eco_str(ecosystems):
             if not ecosystems:
@@ -245,7 +243,9 @@ async def run(input_dict, tools):
 
         # --- Findings by Vulnerability Type ---
         check_counts = sec_stats.get("check_counts", {})
-        vuln_checks = {k: v for k, v in check_counts.items() if v > 0}
+        # Filter out informational-only checks
+        info_checks = {"composite_actions_scanned"}
+        vuln_checks = {k: v for k, v in check_counts.items() if k not in info_checks and v > 0}
 
         ATTACK_SCENARIOS = {
             "prt_checkout": {
@@ -299,8 +299,8 @@ async def run(input_dict, tools):
             "unpinned_actions": {
                 "label": "Unpinned Action Tags",
                 "severity": "MEDIUM",
-                "description": "Third-party actions referenced by mutable version tags instead of SHA-pinned commits. ASF policy exempts actions/*, github/*, and apache/* from pinning requirements.",
-                "attack": ("An attacker compromises a third-party action's repository (or a maintainer account) and pushes "
+                "description": "Third-party actions (outside `actions/*`, `github/*`, `apache/*`) referenced by mutable version tags instead of SHA-pinned commits.",
+                "attack": ("An attacker compromises an action's repository (or a maintainer account) and pushes "
                            "malicious code to an existing tag. Every workflow referencing that tag "
                            "immediately runs the compromised code. This happened in the real-world `tj-actions/changed-files` "
                            "supply chain attack (March 2025)."),
@@ -312,7 +312,7 @@ async def run(input_dict, tools):
             "composite_action_unpinned": {
                 "label": "Unpinned Actions in Composite Actions",
                 "severity": "MEDIUM",
-                "description": "Composite actions reference third-party actions by mutable tags. ASF policy exempts actions/*, github/*, and apache/*.",
+                "description": "Composite actions reference third-party actions (outside `actions/*`, `github/*`, `apache/*`) by mutable tags.",
                 "attack": ("Same supply chain risk as unpinned workflow actions, but harder to audit. "
                            "Reviewers checking `.github/workflows/` won't see the unpinned refs buried "
                            "inside `.github/actions/*/action.yml`. A compromised dependency action affects "
@@ -388,7 +388,7 @@ async def run(input_dict, tools):
             "third_party_actions": {
                 "label": "Third-Party Actions",
                 "severity": "INFO",
-                "description": "Workflow uses actions from outside the `actions/` and `github/` organizations.",
+                "description": "Workflow uses actions from outside the `actions/*`, `github/*`, and `apache/*` namespaces.",
                 "attack": ("Third-party actions run with full access to the workflow's GITHUB_TOKEN and secrets. "
                            "A compromised maintainer account, repo transfer, or typosquat can turn a "
                            "trusted action into a supply chain attack vector."),
@@ -412,10 +412,9 @@ async def run(input_dict, tools):
             "missing_dependency_updates": {
                 "label": "No Automated Dependency Updates",
                 "severity": "LOW",
-                "description": "No dependabot.yml or renovate.json for automated dependency updates. ASF policy requires automated dependency management for all repos using GitHub Actions.",
+                "description": "No dependabot.yml or renovate.json. ASF policy requires automated dependency management.",
                 "attack": ("Without automated dependency updates, vulnerable transitive dependencies and "
-                           "SHA-pinned actions persist indefinitely. Security fixes for actions and libraries "
-                           "are not surfaced as PRs, leaving known vulnerabilities unpatched."),
+                           "SHA-pinned actions persist indefinitely. Security fixes are not surfaced as PRs."),
                 "example": ("1. Repository uses `actions/checkout@abc123` (pinned to SHA)\n"
                             "2. A security vulnerability is found in that version\n"
                             "3. No Dependabot or Renovate config to create update PRs\n"
@@ -462,7 +461,7 @@ async def run(input_dict, tools):
 
             for r in immediate:
                 repo = r["repo"]
-                lines.append(f"### {owner}/{repo}\n")
+                lines.append(f"### {github_owner}/{repo}\n")
 
                 eco_display = eco_str(r["ecosystems"])
                 cat_parts = []
@@ -503,7 +502,7 @@ async def run(input_dict, tools):
 
             for r in high_nonpublishing:
                 repo = r["repo"]
-                lines.append(f"### {owner}/{repo}\n")
+                lines.append(f"### {github_owner}/{repo}\n")
 
                 details = []
                 details.append(f"**Security:** {r['total']} findings — {sev_summary(r['sev_counts'])}")
@@ -529,7 +528,7 @@ async def run(input_dict, tools):
                 top = r["top_checks"][0][0] if r["top_checks"] else "unpinned_actions"
                 tp = "migrate" if r["has_tp"] else "—"
                 links = f"{repo_pub_link(repo)} · {repo_sec_link(repo)}"
-                lines.append(f"| {owner}/{repo} | {eco} | {r['total']} | {top} | {tp} | {links} |")
+                lines.append(f"| {github_owner}/{repo} | {eco} | {r['total']} | {top} | {tp} | {links} |")
 
             lines.append("")
 
@@ -543,7 +542,7 @@ async def run(input_dict, tools):
             for r in low_repos:
                 repo = r["repo"]
                 eco = eco_str(r["ecosystems"]) if r["ecosystems"] else "—"
-                lines.append(f"- **{owner}/{repo}** — {eco} — {r['total']} findings "
+                lines.append(f"- **{github_owner}/{repo}** — {eco} — {r['total']} findings "
                              f"({repo_pub_link(repo)} · {repo_sec_link(repo)})")
             lines.append(f"\n</details>\n")
 
@@ -558,29 +557,20 @@ async def run(input_dict, tools):
 
             tp_ecosystems = {}
             if pub_report:
-                in_migration_section = False
                 current_eco = None
                 for line in pub_report.split("\n"):
-                    # Only parse ecosystems within the Migration Opportunities section
-                    if "Trusted Publishing Migration" in line and line.startswith("## "):
-                        in_migration_section = True
-                        continue
-                    if not in_migration_section:
-                        continue
-                    # Stop at the next ## heading that isn't about TP
-                    if line.startswith("## ") and "Trusted Publishing" not in line:
-                        break
                     if line.startswith("### ") and "Trusted Publishing" not in line:
                         eco_name = line[4:].strip()
                         if eco_name in ("crates.io", "npm", "NuGet", "PyPI", "RubyGems"):
                             current_eco = eco_name
                             continue
-                        else:
-                            current_eco = None
+                    if current_eco and line.startswith("## "):
+                        current_eco = None
+                        continue
                     if current_eco and "| " in line and "`" in line:
                         parts = [p.strip() for p in line.split("|")]
                         if len(parts) > 2 and parts[1] and parts[1] != "Repository":
-                            tp_ecosystems.setdefault(current_eco, []).append(parts[1].strip("`"))
+                            tp_ecosystems.setdefault(current_eco, []).append(parts[1])
 
             for eco, repos in sorted(tp_ecosystems.items()):
                 unique = sorted(set(repos))
@@ -668,8 +658,9 @@ async def run(input_dict, tools):
         full_report = "\n".join(lines)
         print(f"Report length: {len(full_report)} chars", flush=True)
 
-        combined_ns = data_store.use_namespace(f"ci-combined:{owner}")
-        combined_ns.set("latest_report", full_report)
+        if not redacted_severity:
+            combined_ns = data_store.use_namespace(f"ci-combined:{github_owner}")
+            combined_ns.set("latest_report", full_report)
 
         return {"outputText": full_report}
 

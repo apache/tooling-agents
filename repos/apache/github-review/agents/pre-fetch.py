@@ -6,31 +6,20 @@ async def run(input_dict, tools):
     mcpc = { url : RemoteMCPClient(remote_url = url) for url in tools.keys() }
     http_client = httpx.AsyncClient()
     try:
-        owner = input_dict.get("owner", "apache")
-        all_repos_raw = input_dict.get("all_repos", "false")
-        repos_str = input_dict.get("repos", "").strip()
-        github_pat = input_dict.get("github_pat", "").strip()
-        clear_cache_raw = input_dict.get("clear_cache", "false")
+        github_owner = input_dict.get("github_owner", "apache")
+        read_pat = input_dict.get("read_pat", "").strip()
 
-        all_repos = str(all_repos_raw).lower().strip() in ("true", "1", "yes")
-        clear_cache = str(clear_cache_raw).lower().strip() in ("true", "1", "yes")
-
-        if not github_pat:
-            return {"outputText": "Error: `github_pat` is required.\n"
+        if not read_pat:
+            return {"outputText": "Error: `read_pat` is required.\n"
                     "Create a fine-grained PAT with **Contents: read** at https://github.com/settings/tokens"}
-
-        if not all_repos and not repos_str:
-            return {"outputText": "Error: provide `repos` or set `all_repos` to `true`."}
 
         GITHUB_API = "https://api.github.com"
         gh_headers = {"Accept": "application/vnd.github.v3+json",
-                      "Authorization": f"token {github_pat}"}
+                      "Authorization": f"token {read_pat}"}
 
-        workflow_cache = data_store.use_namespace(f"ci-workflows:{owner}")
-        classification_cache = data_store.use_namespace(f"ci-classification:{owner}")
+        workflow_cache = data_store.use_namespace(f"ci-workflows:{github_owner}")
 
-        if clear_cache:
-            print("Clear cache requested — will re-fetch all workflows and composites.", flush=True)
+        print(f"Prefetch starting for github_owner={github_owner} (always rescans)", flush=True)
 
         # --- Preflight ---
         preflight_resp = await http_client.get(f"{GITHUB_API}/rate_limit", headers=gh_headers, timeout=15.0)
@@ -79,65 +68,37 @@ async def run(input_dict, tools):
                 return resp
             return None
 
-        # --- Step 1: Get repo list ---
-        if all_repos:
-            print(f"Fetching all repos for {owner}...", flush=True)
-            repo_names = []
-            skipped = 0
-            page = 1
-            while True:
-                resp = await github_get(
-                    f"{GITHUB_API}/orgs/{owner}/repos",
-                    params={"per_page": 100, "page": page, "sort": "pushed", "type": "public"})
-                if resp is None or resp.status_code != 200:
-                    break
-                data = resp.json()
-                if not data or not isinstance(data, list):
-                    break
-                for r in data:
-                    if isinstance(r, dict) and "name" in r:
-                        if r.get("archived"):
-                            skipped += 1
-                        else:
-                            repo_names.append(r["name"])
-                if 'rel="next"' not in resp.headers.get("Link", ""):
-                    break
-                page += 1
-                await asyncio.sleep(0.3)
-            print(f"Found {len(repo_names)} active repos ({skipped} archived skipped)", flush=True)
-        else:
-            repo_names = [r.strip() for r in repos_str.split(",") if r.strip()]
-            print(f"Using provided list of {len(repo_names)} repos", flush=True)
+        # --- Step 1: Get all repos ---
+        print(f"Fetching all repos for {github_owner}...", flush=True)
+        repo_names = []
+        skipped = 0
+        page = 1
+        while True:
+            resp = await github_get(
+                f"{GITHUB_API}/orgs/{github_owner}/repos",
+                params={"per_page": 100, "page": page, "sort": "pushed", "type": "public"})
+            if resp is None or resp.status_code != 200:
+                break
+            data = resp.json()
+            if not data or not isinstance(data, list):
+                break
+            for r in data:
+                if isinstance(r, dict) and "name" in r:
+                    if r.get("archived"):
+                        skipped += 1
+                    else:
+                        repo_names.append(r["name"])
+            if 'rel="next"' not in resp.headers.get("Link", ""):
+                break
+            page += 1
+            await asyncio.sleep(0.3)
+        print(f"Found {len(repo_names)} active repos ({skipped} archived skipped)", flush=True)
 
         if not repo_names:
             return {"outputText": "No repositories found."}
 
-        # --- Build index of what's already cached ---
-        print("Building cache index...", flush=True)
-        if clear_cache:
-            all_cached_keys = set()
-            print("  Cache bypassed (clear_cache=true)", flush=True)
-        else:
-            all_cached_keys = set(workflow_cache.list_keys())
-            print(f"  {len(all_cached_keys)} keys in workflow cache", flush=True)
-
-        def has_prefetch(repo_name):
-            if clear_cache:
-                return False
-            meta = workflow_cache.get(f"__prefetch__:{repo_name}")
-            return meta and meta.get("complete")
-
-        def has_composites(repo_name):
-            if clear_cache:
-                return False
-            meta = workflow_cache.get(f"__composites__:{repo_name}")
-            return meta and meta.get("complete")
-
-        def is_classified(repo_name):
-            if clear_cache:
-                return False
-            meta = classification_cache.get(f"__meta__:{repo_name}")
-            return meta and meta.get("complete")
+        # Always rescan — no cache checks
+        all_cached_keys = set()
 
         # --- Semaphore for concurrent fetches ---
         api_sem = asyncio.Semaphore(10)
@@ -174,12 +135,12 @@ async def run(input_dict, tools):
                       f"{stats['wf_yaml_cached']} YAMLs, "
                       f"{stats['ca_total']} composites)", flush=True)
 
-            # ---- Workflows ----
-            if is_classified(repo_name) or has_prefetch(repo_name):
+            # ---- Workflows (always rescan) ----
+            if False:
                 stats["wf_skipped"] += 1
             else:
                 resp = await github_get(
-                    f"{GITHUB_API}/repos/{owner}/{repo_name}/contents/.github/workflows")
+                    f"{GITHUB_API}/repos/{github_owner}/{repo_name}/contents/.github/workflows")
 
                 if resp is None:
                     stats["errors"] += 1
@@ -235,12 +196,12 @@ async def run(input_dict, tools):
                                                {"complete": True, "workflows": wf_names})
                             stats["wf_fetched"] += 1
 
-            # ---- Composite actions ----
-            if has_composites(repo_name):
+            # ---- Composite actions (always rescan) ----
+            if False:
                 stats["ca_skipped"] += 1
             else:
                 resp = await github_get(
-                    f"{GITHUB_API}/repos/{owner}/{repo_name}/git/trees/HEAD?recursive=1")
+                    f"{GITHUB_API}/repos/{github_owner}/{repo_name}/git/trees/HEAD?recursive=1")
 
                 composite_names = []
                 if resp and resp.status_code == 200:
@@ -266,7 +227,7 @@ async def run(input_dict, tools):
                             # Fetch it
                             async with api_sem:
                                 aresp = await github_get(
-                                    f"{GITHUB_API}/repos/{owner}/{repo_name}/contents/{action_path}")
+                                    f"{GITHUB_API}/repos/{github_owner}/{repo_name}/contents/{action_path}")
                                 if aresp and aresp.status_code == 200:
                                     try:
                                         dl_url = aresp.json().get("download_url")
@@ -292,6 +253,31 @@ async def run(input_dict, tools):
                     "actions": composite_names,
                 })
                 stats["ca_fetched"] += 1
+
+            # ---- Extras: CODEOWNERS + dependabot ----
+            extras = {"codeowners": None, "has_dependency_updates": False}
+
+            resp = await github_get(
+                f"{GITHUB_API}/repos/{github_owner}/{repo_name}/contents/.github/CODEOWNERS")
+            if resp and resp.status_code == 200:
+                try:
+                    co_url = resp.json().get("download_url")
+                    if co_url:
+                        co_resp = await http_client.get(co_url, follow_redirects=True, timeout=10.0)
+                        if co_resp.status_code == 200:
+                            extras["codeowners"] = co_resp.text
+                except Exception:
+                    pass
+
+            for dep_path in [".github/dependabot.yml", ".github/dependabot.yaml",
+                         "renovate.json", ".github/renovate.json", ".renovaterc.json"]:
+                resp = await github_get(
+                    f"{GITHUB_API}/repos/{github_owner}/{repo_name}/contents/{dep_path}")
+                if resp and resp.status_code == 200:
+                    extras["has_dependency_updates"] = True
+                    break
+
+            workflow_cache.set(f"__extras__:{repo_name}", extras)
 
         print(f"\n{'=' * 60}", flush=True)
         print(f"Prefetch complete!", flush=True)

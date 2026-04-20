@@ -13,6 +13,7 @@ Reports are documented separately — see the README bundled with each report ru
 ├── review.py                  Combined risk assessment report (markdown)
 ├── brief.py                   One-page executive action plan (markdown)
 ├── json-export.py             Machine-readable structured export (JSON)
+├── orchestrator.py            Runs full pipeline, splits private/public output
 ├── README.md                  ← you are here
 └── tests/
     ├── README.md              Test suite docs
@@ -25,75 +26,128 @@ Reports are documented separately — see the README bundled with each report ru
 
 ## Architecture
 
-Six agents share data via CouchDB namespaces:
+Seven agents share data via CouchDB namespaces:
 
 ```
-Pre-fetch ──→   ci-workflows:{owner}        (YAML cache + composite actions)
+Pre-fetch ──→   ci-workflows:{github_owner}   (YAML cache + composites + extras)
        │
-Publishing ──→  ci-classification:{owner}   (LLM classifications)
-       │        ci-report:{owner}           (report + stats)
+Publishing ──→  ci-classification:{github_owner}   (LLM classifications)
+       │        ci-report:{github_owner}           (report + stats)
        │
-Security ──→    ci-security:{owner}         (findings + stats)
+Security ──→    ci-security:{github_owner}         (findings + stats)
        │
-Review ──→      ci-combined:{owner}         (combined report)
+Review ──→      ci-combined:{github_owner}         (combined report)
        │
-Brief ──→       ci-combined:{owner}         (executive brief)
+Brief ──→       ci-combined:{github_owner}         (executive brief)
        │
-JSON Export ──→ ci-combined:{owner}         (JSON export)
+JSON Export ──→ ci-combined:{github_owner}         (JSON export)
+
+Orchestrator    Runs all of the above, pushes private + public reports to GitHub
 ```
 
 **Run order:** Pre-fetch → Publishing → Security → then any of: Review, Brief, JSON Export
 
-The last three are independent — they read directly from Publishing and Security data, not from each other.
+Only Pre-fetch hits the GitHub API. All other agents are pure CouchDB readers.
 
 ## How to run
 
 All agents run inside gofannon. Input fields are all type `"string"`.
 
-### Full org scan
+### Orchestrator (recommended)
+
+The orchestrator runs the full pipeline and pushes reports to private and public GitHub repos:
 
 ```
-1. Pre-fetch     owner: apache    github_pat: ghp_...    all_repos: true
-2. Publishing    owner: apache    github_pat: ghp_...    all_repos: true
-3. Security      owner: apache    github_pat: ghp_...    clear_cache: true
-4. Brief         owner: apache
-5. Review        owner: apache
-6. JSON Export   owner: apache
+Orchestrator    github_owner: apache
+                read_pat: ghp_...
+                write_private_repo: apache/tooling-agents-private
+                write_private_directory: repos/apache/github-review
+                write_private_pat: ghp_...
+                write_public_repo: apache/tooling-agents
+                write_public_directory: repos/apache/github-review
+                write_public_pat: ghp_...
+                redacted_severity: CRITICAL
 ```
 
-Pre-fetch takes ~30-60 min for ~2,500 repos. Publishing takes hours (LLM calls). Security takes ~30-60 min (CouchDB reads). Steps 4-6 take seconds each.
-
-### Subset scan
+This runs three phases automatically:
 
 ```
-1. Pre-fetch     owner: apache    github_pat: ghp_...    repos: beam,opendal,kafka
-2. Publishing    owner: apache    github_pat: ghp_...    repos: beam,opendal,kafka
-3. Security      owner: apache    github_pat: ghp_...    repos: beam,opendal,kafka
-4. Brief         owner: apache
+Phase 1: Prefetch (hits GitHub API, caches all workflow YAML)
+Phase 2: Private reports (5 agents, no redaction, pushed immediately)
+Phase 3: Public reports (same 5 agents with redacted_severity, pushed immediately)
 ```
 
-Pre-fetch skips repos already cached. Publishing skips workflows already classified. Only new/changed repos hit GitHub or the LLM.
+### Manual run
+
+```
+1. Pre-fetch     github_owner: apache    read_pat: ghp_...
+2. Publishing    github_owner: apache
+3. Security      github_owner: apache
+4. Review        github_owner: apache
+5. Brief         github_owner: apache
+6. JSON Export   github_owner: apache
+```
+
+Pre-fetch takes ~30-60 min for ~2,500 repos. Publishing takes hours (LLM calls). Security takes ~30-60 min. Steps 4-6 take seconds each.
+
+### Manual private + public split
+
+```
+# Phase 1: Prefetch (once)
+1. Pre-fetch     github_owner: apache    read_pat: ghp_...
+
+# Phase 2: Private reports (full)
+2. Publishing    github_owner: apache
+3. Security      github_owner: apache
+4. Review        github_owner: apache
+5. Brief         github_owner: apache
+6. JSON Export   github_owner: apache
+
+# Phase 3: Public reports (redacted)
+7. Publishing    github_owner: apache    redacted_severity: CRITICAL
+8. Security      github_owner: apache    redacted_severity: CRITICAL
+9. Review        github_owner: apache    redacted_severity: CRITICAL
+10. Brief        github_owner: apache    redacted_severity: CRITICAL
+11. JSON Export  github_owner: apache    redacted_severity: CRITICAL
+```
 
 ### Input schemas
 
-| Agent | Inputs |
-|-------|--------|
-| Pre-fetch | `owner`, `github_pat`, `all_repos` or `repos` (comma-separated), `clear_cache` |
-| Publishing | `owner`, `github_pat`, `all_repos` or `repos` (comma-separated), `clear_cache` |
-| Security | `owner`, `github_pat`, `repos` (optional, comma-separated), `clear_cache` |
-| Review | `owner`, `repos` (optional, comma-separated) |
-| Brief | `owner`, `repos` (optional, comma-separated) |
-| JSON Export | `owner`, `repos` (optional, comma-separated) |
+| Agent | Inputs | Purpose |
+|-------|--------|---------|
+| Pre-fetch | `github_owner`, `read_pat` | Cache workflow YAML from GitHub |
+| Publishing | `github_owner`, `redacted_severity` | LLM-classify workflows |
+| Security | `github_owner`, `redacted_severity` | Pattern-match security checks |
+| Review | `github_owner`, `redacted_severity` | Combined risk assessment |
+| Brief | `github_owner`, `redacted_severity` | Executive action plan |
+| JSON Export | `github_owner`, `redacted_severity` | Machine-readable export |
+| Orchestrator | `github_owner`, `read_pat`, `write_private_repo`, `write_private_directory`, `write_private_pat`, `write_public_repo`, `write_public_directory`, `write_public_pat`, `redacted_severity` | Full pipeline |
+
+All orchestrator inputs are required. `redacted_severity` defaults to `CRITICAL` on the orchestrator; defaults to empty (no filtering) on individual agents.
+
+### redacted_severity
+
+When set (e.g., `redacted_severity: CRITICAL`), agents exclude findings at that severity before counting and rendering. Everything is consistent by construction — no post-processing.
+
+- **Publishing**: filters `[CRITICAL]` security_notes, strips vulnerability sentences from LLM summaries
+- **Security**: reads cached findings, filters, re-renders report without overwriting CouchDB
+- **Review**: omits CRITICAL findings from all sections, adjusts counts and rankings
+- **Brief**: omits the "Exploitable Now" section and CRITICAL recommendation
+- **JSON Export**: filters CRITICAL findings from all repos, adjusts severity counts and worst_severity
+
+When empty (default), all findings are included. When set, agents skip CouchDB writes to preserve the full Phase 2 data.
 
 ## Caching
 
 All data persists in CouchDB across runs.
 
-- **Pre-fetch** writes `__prefetch__:{repo}` and `__composites__:{repo}` meta keys plus individual YAML content. Skips repos that already have these keys.
-- **Publishing** writes `__meta__:{repo}` plus per-workflow classification keys. Skips repos/workflows that already have them.
-- **Security** writes `findings:{repo}` per repo. Reads cached findings unless `clear_cache: true`.
+- **Pre-fetch** writes `__prefetch__:{repo}`, `__composites__:{repo}`, and `__extras__:{repo}` meta keys plus individual YAML content. Always rescans — overwrites on every run.
+- **Publishing** writes `__meta__:{repo}` plus per-workflow classification keys. Skips workflows already classified (100% cache hit rate on Phase 3 redacted runs).
+- **Security** writes `findings:{repo}` per repo. When `redacted_severity` is set, reads cached findings and filters — does not rescan or overwrite.
 
-`clear_cache: true` **does not delete documents** — it skips cache reads and overwrites on write. No slow bulk-delete step. Pre-fetch data (`ci-workflows`) is never cleared by any agent.
+The `__extras__:{repo}` key stores CODEOWNERS content and dependabot/renovate existence, so the Security agent never needs to call the GitHub API.
+
+When `redacted_severity` is set, no agent overwrites CouchDB data. Phase 3 reads the full data written by Phase 2 and filters in memory.
 
 ### Useful CouchDB queries
 

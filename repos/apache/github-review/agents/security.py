@@ -6,27 +6,17 @@ async def run(input_dict, tools):
     mcpc = { url : RemoteMCPClient(remote_url = url) for url in tools.keys() }
     http_client = httpx.AsyncClient()
     try:
-        owner = input_dict.get("owner", "apache")
-        github_pat = input_dict.get("github_pat", "").strip()
-        clear_cache_raw = input_dict.get("clear_cache", "false")
-        clear_cache = str(clear_cache_raw).lower().strip() in ("true", "1", "yes")
-        repos_filter_str = input_dict.get("repos", "").strip()
+        github_owner = input_dict.get("github_owner", "apache")
+        redacted_severity = input_dict.get("redacted_severity", "").strip().upper()
+        print(f"Security scan starting for github_owner={github_owner}" +
+              (f" (redacting {redacted_severity})" if redacted_severity else ""), flush=True)
 
-        if not github_pat:
-            return {"outputText": "Error: `github_pat` is required."}
-
-        GITHUB_API = "https://api.github.com"
-        gh_headers = {"Accept": "application/vnd.github.v3+json", "Authorization": f"token {github_pat}"}
-
-        workflow_ns = data_store.use_namespace(f"ci-workflows:{owner}")
-        security_ns = data_store.use_namespace(f"ci-security:{owner}")
-
-        if clear_cache:
-            print("Clear cache requested — will re-scan all repos (no deletions needed).", flush=True)
+        workflow_ns = data_store.use_namespace(f"ci-workflows:{github_owner}")
+        security_ns = data_store.use_namespace(f"ci-security:{github_owner}")
 
         all_wf_keys = workflow_ns.list_keys()
         if not all_wf_keys:
-            return {"outputText": "Error: no cached workflows found in `ci-workflows:" + owner + "`. "
+            return {"outputText": "Error: no cached workflows found in `ci-workflows:" + github_owner + "`. "
                     "Run the Publishing Analyzer agent first."}
 
         repos = {}
@@ -35,27 +25,7 @@ async def run(input_dict, tools):
                 repo, wf_name = key.split("/", 1)
                 repos.setdefault(repo, []).append(wf_name)
 
-        # Filter to specific repos if provided
-        if repos_filter_str:
-            repo_filter = set(r.strip() for r in repos_filter_str.split(",") if r.strip())
-            repos = {r: wfs for r, wfs in repos.items() if r in repo_filter}
-            print(f"Filtered to {len(repos)} repos: {', '.join(sorted(repos.keys()))}\n", flush=True)
-        else:
-            print(f"Found {len(all_wf_keys)} cached workflows across {len(repos)} repos\n", flush=True)
-
-        async def github_get(url, max_retries=3):
-            for attempt in range(max_retries):
-                try:
-                    resp = await http_client.get(url, headers=gh_headers, timeout=15.0)
-                    if resp.status_code == 429 or (resp.status_code == 403 and
-                            resp.headers.get("X-RateLimit-Remaining", "1") == "0"):
-                        await asyncio.sleep(30)
-                        continue
-                    return resp
-                except Exception:
-                    if attempt < max_retries - 1:
-                        await asyncio.sleep(2)
-            return None
+        print(f"Found {len(all_wf_keys)} cached workflows across {len(repos)} repos\n", flush=True)
 
         TRUSTED_ORGS = {
             "actions", "github", "docker", "google-github-actions", "aws-actions",
@@ -629,10 +599,13 @@ async def run(input_dict, tools):
             if repos_scanned % 10 == 1:
                 print(f"[{repos_scanned}/{len(repos)}] Scanning {repo_name}...", flush=True)
 
-            cached = security_ns.get(f"findings:{repo_name}")
-            if cached is not None and not clear_cache:
+            # When redacting: read cached findings, filter, don't rescan
+            if redacted_severity:
+                cached = security_ns.get(f"findings:{repo_name}")
                 if cached:
-                    all_findings[repo_name] = cached
+                    filtered = [f for f in cached if f.get("severity", "INFO") != redacted_severity]
+                    if filtered:
+                        all_findings[repo_name] = filtered
                 continue
 
             repo_findings = []
@@ -732,50 +705,36 @@ async def run(input_dict, tools):
                     "count": len(unique),
                 })
 
-            # --- Fetch extra files from GitHub ---
+            # --- Read extra files from prefetch cache ---
 
-            # Check 7: CODEOWNERS
-            resp = await github_get(f"{GITHUB_API}/repos/{owner}/{repo_name}/contents/.github/CODEOWNERS")
-            if resp and resp.status_code == 200:
-                try:
-                    co_url = resp.json().get("download_url")
-                    if co_url:
-                        co_resp = await http_client.get(co_url, follow_redirects=True, timeout=10.0)
-                        if co_resp.status_code == 200:
-                            co_content = co_resp.text
-                            has_github_rule = any(".github" in line and not line.strip().startswith("#")
-                                                  for line in co_content.split("\n"))
-                            if not has_github_rule:
-                                repo_findings.append({
-                                    "check": "codeowners_gap", "severity": "LOW",
-                                    "file": "CODEOWNERS",
-                                    "detail": "CODEOWNERS exists but has no rule covering `.github/`. "
-                                              "Workflow changes can bypass security-focused review.",
-                                })
-                except Exception:
-                    pass
-            elif resp and resp.status_code == 404:
-                repo_findings.append({
-                    "check": "missing_codeowners", "severity": "LOW",
-                    "file": "(missing)",
-                    "detail": "No CODEOWNERS file. Workflow changes have no mandatory review.",
-                })
+            # Check 7: CODEOWNERS (from prefetch __extras__)
+            extras = workflow_ns.get(f"__extras__:{repo_name}")
+            if extras:
+                co_content = extras.get("codeowners")
+                if co_content is None:
+                    repo_findings.append({
+                        "check": "missing_codeowners", "severity": "LOW",
+                        "file": "(missing)",
+                        "detail": "No CODEOWNERS file. Workflow changes have no mandatory review.",
+                    })
+                elif co_content:
+                    has_github_rule = any(".github" in line and not line.strip().startswith("#")
+                                          for line in co_content.split("\n"))
+                    if not has_github_rule:
+                        repo_findings.append({
+                            "check": "codeowners_gap", "severity": "LOW",
+                            "file": "CODEOWNERS",
+                            "detail": "CODEOWNERS exists but has no rule covering `.github/`. "
+                                      "Workflow changes can bypass security-focused review.",
+                        })
 
-            # Check 8: Dependabot / Renovate
-            has_deps = False
-            for path in [".github/dependabot.yml", ".github/dependabot.yaml",
-                         "renovate.json", ".github/renovate.json", ".renovaterc.json"]:
-                resp = await github_get(f"{GITHUB_API}/repos/{owner}/{repo_name}/contents/{path}")
-                if resp and resp.status_code == 200:
-                    has_deps = True
-                    break
-
-            if not has_deps:
-                repo_findings.append({
-                    "check": "missing_dependency_updates", "severity": "LOW",
-                    "file": "(missing)",
-                    "detail": "No dependabot.yml or renovate.json found. ASF policy requires automated dependency management.",
-                })
+                # Check 8: Dependabot / Renovate (from prefetch __extras__)
+                if not extras.get("has_dependency_updates"):
+                    repo_findings.append({
+                        "check": "missing_dependency_updates", "severity": "LOW",
+                        "file": "(missing)",
+                        "detail": "No dependabot.yml or renovate.json found. ASF policy requires automated dependency management.",
+                    })
 
             # Check 9: Composite actions — read from prefetch cache or fall back to GitHub
             composite_findings = []
@@ -787,47 +746,12 @@ async def run(input_dict, tools):
 
             composites_meta = workflow_ns.get(f"__composites__:{repo_name}")
             if composites_meta and composites_meta.get("complete"):
-                # Read from prefetch cache
                 cached_actions = composites_meta.get("actions", [])
                 for short_path in cached_actions:
                     action_content = workflow_ns.get(f"{repo_name}/{short_path}")
                     if action_content:
                         action_name = short_path.replace(".github/actions/", "").rsplit("/", 1)[0]
                         composite_items.append((action_name, short_path, action_content))
-            else:
-                # Fall back to GitHub API
-                resp = await github_get(
-                    f"{GITHUB_API}/repos/{owner}/{repo_name}/git/trees/HEAD?recursive=1")
-                if resp and resp.status_code == 200:
-                    try:
-                        tree = resp.json().get("tree", [])
-                        action_files = [
-                            item["path"] for item in tree
-                            if item.get("path", "").startswith(".github/actions/")
-                            and item.get("path", "").endswith(("/action.yml", "/action.yaml"))
-                            and item.get("type") == "blob"
-                        ]
-                        for action_path in action_files:
-                            action_name = action_path.replace(".github/actions/", "").rsplit("/", 1)[0]
-                            aresp = await github_get(
-                                f"{GITHUB_API}/repos/{owner}/{repo_name}/contents/{action_path}")
-                            if not aresp or aresp.status_code != 200:
-                                continue
-                            try:
-                                dl_url = aresp.json().get("download_url")
-                                if not dl_url:
-                                    continue
-                                dl_resp = await http_client.get(dl_url, follow_redirects=True, timeout=10.0)
-                                if dl_resp.status_code != 200:
-                                    continue
-                                action_content = dl_resp.text
-                                short_path = f".github/actions/{action_name}/action.yml"
-                                workflow_ns.set(f"{repo_name}/{short_path}", action_content)
-                                composite_items.append((action_name, short_path, action_content))
-                            except Exception:
-                                continue
-                    except Exception as e:
-                        print(f"  Error scanning composite actions for {repo_name}: {str(e)[:100]}", flush=True)
 
             composite_total = len(composite_items)
 
@@ -999,34 +923,34 @@ async def run(input_dict, tools):
             lines.append("## CRITICAL Findings\n")
             lines.append("Untrusted external input directly interpolated in shell execution contexts.\n")
             for repo, f in sorted(by_severity["CRITICAL"], key=lambda x: (x[0], x[1].get("file", ""))):
-                lines.append(f"- **{owner}/{repo}** (`{file_ref(f)}`): [{f['check']}] {f['detail']}")
+                lines.append(f"- **{github_owner}/{repo}** (`{file_ref(f)}`): [{f['check']}] {f['detail']}")
             lines.append("")
 
         if by_severity["HIGH"]:
             lines.append("## HIGH Findings\n")
             for repo, f in sorted(by_severity["HIGH"], key=lambda x: (x[0], x[1].get("file", ""))):
-                lines.append(f"- **{owner}/{repo}** (`{file_ref(f)}`): [{f['check']}] {f['detail']}")
+                lines.append(f"- **{github_owner}/{repo}** (`{file_ref(f)}`): [{f['check']}] {f['detail']}")
             lines.append("")
 
         if by_severity["MEDIUM"]:
             lines.append("## MEDIUM Findings\n")
             lines.append(f"<details>\n<summary>Show {len(by_severity['MEDIUM'])} medium findings</summary>\n")
             for repo, f in sorted(by_severity["MEDIUM"], key=lambda x: (x[0], x[1].get("file", ""))):
-                lines.append(f"- **{owner}/{repo}** (`{file_ref(f)}`): [{f['check']}] {f['detail']}")
+                lines.append(f"- **{github_owner}/{repo}** (`{file_ref(f)}`): [{f['check']}] {f['detail']}")
             lines.append(f"\n</details>\n")
 
         if by_severity["LOW"]:
             lines.append("## LOW Findings\n")
             lines.append(f"<details>\n<summary>Show {len(by_severity['LOW'])} low findings</summary>\n")
             for repo, f in sorted(by_severity["LOW"], key=lambda x: (x[0], x[1].get("file", ""))):
-                lines.append(f"- **{owner}/{repo}** (`{file_ref(f)}`): [{f['check']}] {f['detail']}")
+                lines.append(f"- **{github_owner}/{repo}** (`{file_ref(f)}`): [{f['check']}] {f['detail']}")
             lines.append(f"\n</details>\n")
 
         if by_severity["INFO"]:
             lines.append("## INFO Findings\n")
             lines.append(f"<details>\n<summary>Show {len(by_severity['INFO'])} info findings</summary>\n")
             for repo, f in sorted(by_severity["INFO"], key=lambda x: (x[0], x[1].get("file", ""))):
-                lines.append(f"- **{owner}/{repo}** (`{file_ref(f)}`): [{f['check']}] {f['detail']}")
+                lines.append(f"- **{github_owner}/{repo}** (`{file_ref(f)}`): [{f['check']}] {f['detail']}")
             lines.append(f"\n</details>\n")
 
         lines.append("## Detailed Results by Repository\n")
@@ -1039,7 +963,7 @@ async def run(input_dict, tools):
                 sev_summary[f["severity"]] = sev_summary.get(f["severity"], 0) + 1
             sev_str = ", ".join(f"{s}: {c}" for s, c in sorted(sev_summary.items()))
 
-            lines.append(f"### {owner}/{repo}\n")
+            lines.append(f"### {github_owner}/{repo}\n")
             lines.append(f"**{len(findings)}** findings | {sev_str}\n")
 
             sev_order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "INFO": 4}
@@ -1068,19 +992,20 @@ async def run(input_dict, tools):
                 toc_lines.append(f"- [{sev} Findings](#{to_anchor(f'{sev} Findings')}) ({len(by_severity[sev])})")
         toc_lines.append(f"- [Detailed Results](#{to_anchor('Detailed Results by Repository')})")
         for repo in sorted(all_findings.keys()):
-            toc_lines.append(f"  - [{owner}/{repo}](#{to_anchor(f'{owner}/{repo}')})")
+            toc_lines.append(f"  - [{github_owner}/{repo}](#{to_anchor(f'{github_owner}/{repo}')})")
 
         toc = "\n".join(toc_lines)
         full_report = toc + "\n\n---\n\n" + report_body
 
-        security_ns.set("latest_report", full_report)
-        security_ns.set("latest_stats", {
-            "repos_scanned": repos_scanned,
-            "repos_with_findings": len(all_findings),
-            "total_findings": total_findings,
-            "severity_counts": severity_counts,
-            "check_counts": check_counts,
-        })
+        if not redacted_severity:
+            security_ns.set("latest_report", full_report)
+            security_ns.set("latest_stats", {
+                "repos_scanned": repos_scanned,
+                "repos_with_findings": len(all_findings),
+                "total_findings": total_findings,
+                "severity_counts": severity_counts,
+                "check_counts": check_counts,
+            })
 
         return {"outputText": full_report}
 

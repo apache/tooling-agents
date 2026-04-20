@@ -7,32 +7,27 @@ async def run(input_dict, tools):
     mcpc = { url : RemoteMCPClient(remote_url = url) for url in tools.keys() }
     http_client = httpx.AsyncClient()
     try:
-        owner = input_dict.get("owner", "apache")
-        repos_str = input_dict.get("repos", "").strip()
-        repo_filter = set(r.strip() for r in repos_str.split(",") if r.strip()) if repos_str else None
-        print(f"JSON export starting for owner={owner}" +
-              (f" (filtered to {len(repo_filter)} repos)" if repo_filter else ""), flush=True)
+        github_owner = input_dict.get("github_owner", "apache")
+        redacted_severity = input_dict.get("redacted_severity", "").strip().upper()
+        print(f"JSON export starting for github_owner={github_owner}" +
+              (f" (redacting {redacted_severity})" if redacted_severity else ""), flush=True)
 
-        report_ns = data_store.use_namespace(f"ci-report:{owner}")
-        security_ns = data_store.use_namespace(f"ci-security:{owner}")
-        classification_ns = data_store.use_namespace(f"ci-classification:{owner}")
+        report_ns = data_store.use_namespace(f"ci-report:{github_owner}")
+        security_ns = data_store.use_namespace(f"ci-security:{github_owner}")
+        classification_ns = data_store.use_namespace(f"ci-classification:{github_owner}")
 
         pub_stats = report_ns.get("latest_stats")
         sec_stats = security_ns.get("latest_stats")
 
         if not pub_stats or not sec_stats:
-            return {"outputText": "Error: Run Publishing and Security agents first."}
+            return {"outputText": "Error: Run Agent 1 and Agent 2 first."}
 
         # --- Collect all repos ---
         publishing_repos = set(pub_stats.get("publishing_repos", []))
-        if repo_filter:
-            publishing_repos = publishing_repos & repo_filter
 
-        # --- Read per-repo classifications from Publishing cache ---
+        # --- Read per-repo classifications from Agent 1 cache ---
         all_cls_keys = classification_ns.list_keys()
         meta_keys = [k for k in all_cls_keys if k.startswith("__meta__:")]
-        if repo_filter:
-            meta_keys = [k for k in meta_keys if k.replace("__meta__:", "") in repo_filter]
 
         repo_workflows = {}  # repo -> [workflow classifications]
         for mk in meta_keys:
@@ -53,18 +48,19 @@ async def run(input_dict, tools):
 
         print(f"Read classifications for {len(repo_workflows)} repos", flush=True)
 
-        # --- Read per-repo security findings from Security cache ---
+        # --- Read per-repo security findings from Agent 2 cache ---
         all_sec_keys = security_ns.list_keys()
         finding_keys = [k for k in all_sec_keys if k.startswith("findings:")]
-        if repo_filter:
-            finding_keys = [k for k in finding_keys if k.replace("findings:", "") in repo_filter]
 
         repo_findings = {}
         for k in finding_keys:
             repo = k.replace("findings:", "")
             findings = security_ns.get(k)
             if findings and isinstance(findings, list):
-                repo_findings[repo] = findings
+                if redacted_severity:
+                    findings = [f for f in findings if f.get("severity", "INFO") != redacted_severity]
+                if findings:
+                    repo_findings[repo] = findings
 
         print(f"Read findings for {len(repo_findings)} repos", flush=True)
 
@@ -165,6 +161,15 @@ async def run(input_dict, tools):
                     cat_counts[wr["category"]] = cat_counts.get(wr["category"], 0) + 1
                     eco_set.update(wr["ecosystems"])
 
+            # Filter redacted security notes from workflows
+            if redacted_severity:
+                for wr in workflow_records:
+                    wr["security_notes"] = [n for n in wr["security_notes"]
+                                            if not n.startswith(f"[{redacted_severity}]")]
+                # Drop non-publishing workflows with no remaining notes
+                workflow_records = [wr for wr in workflow_records
+                                   if wr["publishes"] or wr["security_notes"]]
+
             # Finding records
             finding_records = [classify_finding(f) for f in findings]
             sev_counts = summarize_severities(finding_records)
@@ -197,7 +202,7 @@ async def run(input_dict, tools):
                                 tp_ecosystems.append(eco)
 
             repos_json.append({
-                "repo": f"{owner}/{repo}",
+                "repo": f"{github_owner}/{repo}",
                 "has_workflows": len(wfs) > 0,
                 "total_workflows": len(wfs),
                 "publishes_to_registry": publishes,
@@ -244,7 +249,7 @@ async def run(input_dict, tools):
                 "label": "Unpinned Action Tags",
                 "severity": "MEDIUM",
                 "description": "Third-party actions (outside actions/*, github/*, apache/*) referenced by mutable version tags instead of SHA-pinned commits. ASF policy exempts actions in those namespaces.",
-                "attack": "An attacker compromises a third-party action's repository and pushes malicious code to an existing tag. Every workflow referencing that tag immediately runs the compromised code. This happened in the tj-actions/changed-files attack (March 2025).",
+                "attack": "An attacker compromises an action's repository and pushes malicious code to an existing tag. Every workflow referencing that tag immediately runs the compromised code. This happened in the tj-actions/changed-files attack (March 2025).",
                 "example": "1. Workflow uses cool-org/deploy-action@v2 (mutable tag, outside exempt namespaces)\n2. Attacker compromises the action repo and force-pushes to the v2 tag\n3. Next workflow run executes attacker's code with full repo access\n4. Fix: pin to SHA — cool-org/deploy-action@8843d7f92416211de9eb",
             },
             "composite_action_unpinned": {
@@ -298,24 +303,17 @@ async def run(input_dict, tools):
             },
             "self_hosted_runner": {
                 "label": "Self-Hosted Runner Exposure",
-                "severity": "HIGH",
-                "description": "Workflow runs on self-hosted runners with PR triggers. Severity depends on permissions and trigger type.",
-                "attack": "Self-hosted runners persist state between jobs. An attacker's PR can execute arbitrary code on the runner, install backdoors, steal credentials cached on disk, or pivot to internal networks.",
+                "severity": "MEDIUM",
+                "description": "Workflow runs on self-hosted runners with PR triggers.",
+                "attack": "Self-hosted runners persist state between jobs. An attacker's PR can execute arbitrary code on the runner, install backdoors, or steal credentials cached on disk.",
                 "example": "1. Workflow runs on self-hosted runner and triggers on pull_request\n2. Attacker's PR executes: curl http://169.254.169.254/latest/meta-data/\n3. AWS instance credentials are exfiltrated\n4. Attacker gains access to internal infrastructure",
-            },
-            "missing_dependency_updates": {
-                "label": "No Dependency Update Configuration",
-                "severity": "LOW",
-                "description": "Repository has no dependabot.yml or renovate.json for automated dependency updates. ASF policy requires automated dependency management for all repos using GitHub Actions.",
-                "attack": "Without automated dependency updates, vulnerable transitive dependencies may persist indefinitely. Actions pinned to SHA are not automatically updated when security fixes are released.",
-                "example": "1. Repository uses actions/checkout@abc123 (pinned to SHA)\n2. A security vulnerability is found in that version\n3. No Dependabot or Renovate config to create update PRs\n4. Vulnerable action version persists until manually updated",
             },
         }
 
         # --- Build top-level summary ---
         output = {
             "schema_version": "1.0",
-            "owner": owner,
+            "owner": github_owner,
             "generated_at": __import__("datetime").datetime.utcnow().isoformat() + "Z",
             "check_definitions": check_definitions,
             "summary": {
@@ -339,9 +337,10 @@ async def run(input_dict, tools):
         output_json = json.dumps(output, indent=2, ensure_ascii=False)
         print(f"JSON report: {len(output_json)} chars, {len(repos_json)} repos", flush=True)
 
-        # Store in data store
-        combined_ns = data_store.use_namespace(f"ci-combined:{owner}")
-        combined_ns.set("latest_json", output)
+        # Store in data store (skip when redacting to preserve full data)
+        if not redacted_severity:
+            combined_ns = data_store.use_namespace(f"ci-combined:{github_owner}")
+            combined_ns.set("latest_json", output)
 
         return {"outputText": output_json}
 

@@ -6,72 +6,20 @@ async def run(input_dict, tools):
     mcpc = { url : RemoteMCPClient(remote_url = url) for url in tools.keys() }
     http_client = httpx.AsyncClient()
     try:
-        owner = input_dict.get("owner", "apache")
-        all_repos_raw = input_dict.get("all_repos", "false")
-        repos_str = input_dict.get("repos", "").strip()
-        github_pat = input_dict.get("github_pat", "").strip()
-        clear_cache_raw = input_dict.get("clear_cache", "false")
-
-        all_repos = str(all_repos_raw).lower().strip() in ("true", "1", "yes")
-        clear_cache = str(clear_cache_raw).lower().strip() in ("true", "1", "yes")
-
-        if not github_pat and (all_repos or not repos_str):
-            return {"outputText": "Error: `github_pat` is required for org-wide scanning. "
-                    "Unauthenticated GitHub API limit is 60 req/hr — too low for this agent.\n\n"
-                    "Create a fine-grained PAT with **Contents: read** at https://github.com/settings/tokens"}
-
-        if not all_repos and not repos_str:
-            return {"outputText": "Error: provide a comma-separated repo list in `repos`, "
-                    "or set `all_repos` to `true` to scan the entire org."}
+        github_owner = input_dict.get("github_owner", "apache")
+        redacted_severity = input_dict.get("redacted_severity", "").strip().upper()
+        print(f"Publishing agent starting for github_owner={github_owner}" +
+              (f" (redacting {redacted_severity})" if redacted_severity else ""), flush=True)
 
         provider = "bedrock"
         model = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
         configured_params = {"temperature": 0, "reasoning_effort": "disable", "max_tokens": 2048}
 
-        GITHUB_API = "https://api.github.com"
-        gh_headers = {"Accept": "application/vnd.github.v3+json"}
-        if github_pat:
-            gh_headers["Authorization"] = f"token {github_pat}"
+        classification_cache = data_store.use_namespace(f"ci-classification:{github_owner}")
+        workflow_content_cache = data_store.use_namespace(f"ci-workflows:{github_owner}")
+        report_ns = data_store.use_namespace(f"ci-report:{github_owner}")
 
-        classification_cache = data_store.use_namespace(f"ci-classification:{owner}")
-        workflow_content_cache = data_store.use_namespace(f"ci-workflows:{owner}")
-        report_ns = data_store.use_namespace(f"ci-report:{owner}")
 
-        if clear_cache:
-            print("Clear cache requested — will re-classify all workflows (prefetch data preserved).", flush=True)
-
-        # --- Preflight ---
-        print("Running preflight checks...", flush=True)
-        preflight_resp = await http_client.get(f"{GITHUB_API}/rate_limit", headers=gh_headers, timeout=15.0)
-
-        if preflight_resp.status_code == 401:
-            return {"outputText": "Error: GitHub PAT is invalid or expired (HTTP 401).\n"
-                    "Check your token at https://github.com/settings/tokens"}
-
-        if preflight_resp.status_code == 200:
-            rate_data = preflight_resp.json()
-            core = rate_data.get("resources", {}).get("core", {})
-            remaining = core.get("remaining", "?")
-            limit = core.get("limit", "?")
-            print(f"  GitHub API: {remaining}/{limit} requests remaining", flush=True)
-            if isinstance(remaining, int) and remaining < 50:
-                print(f"  WARNING: Very low rate limit remaining!", flush=True)
-
-        if repos_str:
-            test_repo = repos_str.split(",")[0].strip()
-            test_url = f"{GITHUB_API}/repos/{owner}/{test_repo}/contents/.github/workflows"
-            print(f"  Testing access: {test_url}", flush=True)
-            test_resp = await http_client.get(test_url, headers=gh_headers, timeout=15.0)
-            print(f"  Response: HTTP {test_resp.status_code}", flush=True)
-            if test_resp.status_code == 404:
-                root_resp = await http_client.get(
-                    f"{GITHUB_API}/repos/{owner}/{test_repo}", headers=gh_headers, timeout=15.0)
-                if root_resp.status_code == 404:
-                    return {"outputText": f"Error: repo `{owner}/{test_repo}` not found (HTTP 404)."}
-            elif test_resp.status_code == 403:
-                return {"outputText": f"Error: HTTP 403 accessing `{owner}/{test_repo}`.\n{test_resp.text[:300]}"}
-
-        print("Preflight complete.\n", flush=True)
 
 
         CLASSIFICATION_PROMPT = (
@@ -341,6 +289,15 @@ async def run(input_dict, tools):
                 return "N/A"
             return str(value).replace("|", "∣").replace("\n", " ").strip()
 
+        def redact_summary_text(text):
+            """Strip sentences mentioning redacted severity from LLM summaries."""
+            if not redacted_severity or not text:
+                return text
+            sev_lower = redacted_severity.lower()
+            text = re.sub(rf'[^.]*{sev_lower}\s+security[^.]*\.?\s*', '', text, flags=re.IGNORECASE)
+            text = re.sub(rf'[^.]*has\s+{sev_lower}[^.]*\.?\s*', '', text, flags=re.IGNORECASE)
+            return text.strip()
+
 
         def truncate_yaml(content):
             yaml_tokens = count_tokens(content, provider, model)
@@ -368,40 +325,19 @@ async def run(input_dict, tools):
         }
 
 
-        # ===== STEP 1: Get repo list =====
-        if all_repos:
-            print(f"Fetching all repos for {owner}...", flush=True)
-            repo_names = []
-            skipped_archived = 0
-            page = 1
-            while True:
-                resp = await github_get(
-                    f"{GITHUB_API}/orgs/{owner}/repos",
-                    params={"per_page": 100, "page": page, "sort": "pushed", "type": "public"})
-                if resp is None or resp.status_code != 200:
-                    break
-                page_data = resp.json()
-                if not page_data or not isinstance(page_data, list):
-                    break
-                for r in page_data:
-                    if isinstance(r, dict) and "name" in r:
-                        if r.get("archived"):
-                            skipped_archived += 1
-                        else:
-                            repo_names.append(r["name"])
-                if 'rel="next"' not in resp.headers.get("Link", ""):
-                    break
-                page += 1
-                await asyncio.sleep(0.3)
-            print(f"Found {len(repo_names)} active repos ({skipped_archived} archived skipped)", flush=True)
-        else:
-            repo_names = [r.strip() for r in repos_str.split(",") if r.strip()]
-            print(f"Using provided list of {len(repo_names)} repos", flush=True)
+        # ===== STEP 1: Discover repos from prefetch cache =====
+        all_wf_keys = workflow_content_cache.list_keys()
+        repo_names_set = set()
+        for key in all_wf_keys:
+            if "/" in key and not key.startswith("__"):
+                repo_name = key.split("/", 1)[0]
+                repo_names_set.add(repo_name)
+        repo_names = sorted(repo_names_set)
 
         if not repo_names:
-            return {"outputText": f"# CI Registry Publishing Analysis: {owner}\n\nNo repositories found."}
+            return {"outputText": f"# CI Registry Publishing Analysis: {github_owner}\n\nNo cached workflows found."}
 
-        print(f"\nStarting workflow scan of {len(repo_names)} repos...\n", flush=True)
+        print(f"Found {len(repo_names)} repos in workflow cache\n", flush=True)
 
         # ===== STEP 2: Fetch workflows and classify (parallel) =====
         all_results = {}
@@ -424,7 +360,7 @@ async def run(input_dict, tools):
             meta_key = f"__meta__:{repo_name}"
             cached_meta = classification_cache.get(meta_key)
 
-            if cached_meta and cached_meta.get("complete") and not clear_cache:
+            if cached_meta and cached_meta.get("complete") :
                 wf_names = cached_meta.get("workflows", [])
                 if wf_names:
                     repo_results = []
@@ -450,51 +386,9 @@ async def run(input_dict, tools):
                     classification_cache.set(meta_key, {"complete": True, "workflows": []})
                     continue
 
-            # If no prefetch data, fetch from GitHub API
+            # If no prefetch data, skip this repo
             if wf_names_list is None:
-                resp = await github_get(f"{GITHUB_API}/repos/{owner}/{repo_name}/contents/.github/workflows")
-
-                if resp is None:
-                    stats["errors"].append(f"{owner}/{repo_name}: network error")
-                    continue
-                if resp.status_code == 404:
-                    classification_cache.set(meta_key, {"complete": True, "workflows": []})
-                    continue
-                if resp.status_code != 200:
-                    stats["errors"].append(f"{owner}/{repo_name}: HTTP {resp.status_code}")
-                    continue
-
-                try:
-                    dir_listing = resp.json()
-                except Exception:
-                    classification_cache.set(meta_key, {"complete": True, "workflows": []})
-                    continue
-
-                if not isinstance(dir_listing, list):
-                    classification_cache.set(meta_key, {"complete": True, "workflows": []})
-                    continue
-
-                yaml_files = [f for f in dir_listing
-                              if isinstance(f, dict) and f.get("name", "").endswith((".yml", ".yaml"))]
-                wf_names_list = [f.get("name", "unknown") for f in yaml_files]
-
-                if not wf_names_list:
-                    classification_cache.set(meta_key, {"complete": True, "workflows": []})
-                    continue
-
-                # Fetch YAML for any not already in content cache
-                for wf_file in yaml_files:
-                    wf_name = wf_file.get("name", "unknown")
-                    cache_key = f"{repo_name}/{wf_name}"
-                    if not workflow_content_cache.get(cache_key):
-                        raw_url = wf_file.get("download_url")
-                        if raw_url:
-                            try:
-                                content_resp = await http_client.get(raw_url, follow_redirects=True, timeout=30.0)
-                                if content_resp.status_code == 200:
-                                    workflow_content_cache.set(cache_key, content_resp.text)
-                            except Exception:
-                                pass
+                continue
 
             stats["repos_with_workflows"] += 1
             stats["total_workflows"] += len(wf_names_list)
@@ -503,7 +397,7 @@ async def run(input_dict, tools):
             # Check each workflow: cached classification or needs LLM?
             for wf_name in wf_names_list:
                 cached_cls = classification_cache.get(f"{repo_name}:{wf_name}")
-                if cached_cls and not clear_cache:
+                if cached_cls :
                     all_results.setdefault(repo_name, []).append(cached_cls)
                     stats["cache_hits"] += 1
                     stats["total_classified"] += 1
@@ -531,7 +425,7 @@ async def run(input_dict, tools):
                 yaml_truncated = truncate_yaml(yaml_content)
                 messages = [{"role": "user", "content": (
                     f"{CLASSIFICATION_PROMPT}\n\n---\n"
-                    f"File: {owner}/{repo_name}/.github/workflows/{wf_name}\n---\n\n{yaml_truncated}"
+                    f"File: {github_owner}/{repo_name}/.github/workflows/{wf_name}\n---\n\n{yaml_truncated}"
                 )}]
 
                 async with llm_sem:
@@ -556,13 +450,13 @@ async def run(input_dict, tools):
                                         "raw_response": (llm_response or "")[:300],
                                         "publishes_to_registry": None}
                         return repo_name, wf_name, error_result, \
-                            f"{owner}/{repo_name}/.github/workflows/{wf_name}: JSON parse error"
+                            f"{github_owner}/{repo_name}/.github/workflows/{wf_name}: JSON parse error"
 
                     except Exception as e:
                         error_result = {"file": wf_name, "error": str(e)[:200],
                                         "publishes_to_registry": None}
                         return repo_name, wf_name, error_result, \
-                            f"{owner}/{repo_name}/.github/workflows/{wf_name}: {str(e)[:80]}"
+                            f"{github_owner}/{repo_name}/.github/workflows/{wf_name}: {str(e)[:80]}"
 
             print(f"Starting parallel classification of {len(pending_llm)} workflows "
                   f"(concurrency=5)...\n", flush=True)
@@ -593,7 +487,7 @@ async def run(input_dict, tools):
 
         # ===== STEP 3: Build report =====
 
-        report_title = (f"CI Registry Publishing Analysis: {owner}/{repo_names[0]}"
+        report_title = (f"CI Registry Publishing Analysis: {github_owner}/{repo_names[0]}"
                         if len(repo_names) == 1
                         else f"CI Registry Publishing Analysis: {owner}")
 
@@ -636,7 +530,7 @@ async def run(input_dict, tools):
 
                 for raw_note in (w.get("security_notes") or []):
                     note = downgrade_contradictions(normalize_note(raw_note)) if raw_note else ""
-                    if note:
+                    if note and not (redacted_severity and note.startswith(f"[{redacted_severity}]")):
                         security_notes_all.append({"repo": repo, "file": w.get("file", "?"), "note": note, "category": cat})
 
         release_wfs = by_category["release_artifact"]
@@ -797,7 +691,7 @@ async def run(input_dict, tools):
             lines.append("|------------|----------|--------|---------|")
             for w in sorted(ci_wfs, key=lambda x: (x["repo"], x.get("file", ""))):
                 eco_str = ", ".join(w.get("ecosystems", [])) or "—"
-                lines.append(f"| {w['repo']} | `{w.get('file', '?')}` | {sanitize_md(eco_str)} | {sanitize_md(safe_str(w.get('summary')))} |")
+                lines.append(f"| {w['repo']} | `{w.get('file', '?')}` | {sanitize_md(eco_str)} | {sanitize_md(redact_summary_text(safe_str(w.get('summary'))))} |")
             lines.append(f"\n</details>\n")
 
         # --- Documentation (collapsed) ---
@@ -808,7 +702,7 @@ async def run(input_dict, tools):
             lines.append("|------------|----------|--------|---------|")
             for w in sorted(doc_wfs, key=lambda x: (x["repo"], x.get("file", ""))):
                 eco_str = ", ".join(w.get("ecosystems", [])) or "—"
-                lines.append(f"| {w['repo']} | `{w.get('file', '?')}` | {sanitize_md(eco_str)} | {sanitize_md(safe_str(w.get('summary')))} |")
+                lines.append(f"| {w['repo']} | `{w.get('file', '?')}` | {sanitize_md(eco_str)} | {sanitize_md(redact_summary_text(safe_str(w.get('summary'))))} |")
             lines.append(f"\n</details>\n")
 
         # --- Security Notes by severity ---
@@ -818,12 +712,12 @@ async def run(input_dict, tools):
         downgraded_notes = [sn for sn in security_notes_all if "[INFO-DOWNGRADED]" in sn["note"]]
         low_notes = [sn for sn in security_notes_all if sn["note"].startswith("[LOW]")]
 
-        if critical_notes:
+        if critical_notes and not (redacted_severity and redacted_severity == "CRITICAL"):
             lines.append("## Security: Critical — Untrusted Input Injection\n")
             lines.append("Direct `${{ }}` interpolation of **untrusted external input** in `run:` blocks. "
                          "These are real script injection vectors exploitable by external contributors.\n")
             for sn in critical_notes:
-                lines.append(f"- **{owner}/{sn['repo']}** (`{sn['file']}`): {sn['note']}")
+                lines.append(f"- **{github_owner}/{sn['repo']}** (`{sn['file']}`): {sn['note']}")
             lines.append("")
 
         if leakage_notes:
@@ -833,7 +727,7 @@ async def run(input_dict, tools):
                          "GitHub's automatic masking is bypassed. Best practice: pass through `env:` block.\n")
             lines.append(f"<details>\n<summary>Show {len(leakage_notes)} credential leakage findings</summary>\n")
             for sn in leakage_notes:
-                lines.append(f"- **{owner}/{sn['repo']}** (`{sn['file']}`): {sn['note']}")
+                lines.append(f"- **{github_owner}/{sn['repo']}** (`{sn['file']}`): {sn['note']}")
             lines.append(f"\n</details>\n")
 
         if trusted_input_notes:
@@ -843,7 +737,7 @@ async def run(input_dict, tools):
                          "but could cause issues with malformed input values.\n")
             lines.append(f"<details>\n<summary>Show {len(trusted_input_notes)} trusted input findings</summary>\n")
             for sn in trusted_input_notes:
-                lines.append(f"- **{owner}/{sn['repo']}** (`{sn['file']}`): {sn['note']}")
+                lines.append(f"- **{github_owner}/{sn['repo']}** (`{sn['file']}`): {sn['note']}")
             lines.append(f"\n</details>\n")
 
         if downgraded_notes:
@@ -851,7 +745,7 @@ async def run(input_dict, tools):
             lines.append("Initially flagged but the note describes an env-mediated pattern (safe). Verify manually.\n")
             lines.append(f"<details>\n<summary>Show {len(downgraded_notes)} downgraded findings</summary>\n")
             for sn in downgraded_notes:
-                lines.append(f"- **{owner}/{sn['repo']}** (`{sn['file']}`): {sn['note']}")
+                lines.append(f"- **{github_owner}/{sn['repo']}** (`{sn['file']}`): {sn['note']}")
             lines.append(f"\n</details>\n")
 
         if low_notes:
@@ -859,7 +753,7 @@ async def run(input_dict, tools):
             lines.append("GitHub-controlled values used directly in `run:` blocks.\n")
             lines.append(f"<details>\n<summary>Show {len(low_notes)} low-risk findings</summary>\n")
             for sn in low_notes:
-                lines.append(f"- **{owner}/{sn['repo']}** (`{sn['file']}`): {sn['note']}")
+                lines.append(f"- **{github_owner}/{sn['repo']}** (`{sn['file']}`): {sn['note']}")
             lines.append(f"\n</details>\n")
 
         # --- Detailed Results (release + snapshot) ---
@@ -882,7 +776,7 @@ async def run(input_dict, tools):
                 cat_counts[c] = cat_counts.get(c, 0) + 1
             cat_summary = ", ".join(f"{CATEGORY_LABELS.get(c, c)}: {n}" for c, n in cat_counts.items())
 
-            lines.append(f"### {owner}/{repo}\n")
+            lines.append(f"### {github_owner}/{repo}\n")
             lines.append(f"**{len(repo_release)}** release/snapshot workflows | "
                          f"Ecosystems: **{', '.join(sorted(repo_ecosystems)) if repo_ecosystems else 'none'}** | "
                          f"{cat_summary}\n")
@@ -891,7 +785,7 @@ async def run(input_dict, tools):
                 display_name = safe_str(w.get("workflow_name")) or w.get("file", "unknown")
                 cat_label = CATEGORY_LABELS.get(safe_str(w.get("category")), "Unknown")
                 lines.append(f"**`{w.get('file', '?')}`** — {sanitize_md(display_name)} [{cat_label}]")
-                lines.append(f"- **Summary**: {sanitize_md(safe_str(w.get('summary')))}")
+                lines.append(f"- **Summary**: {sanitize_md(redact_summary_text(safe_str(w.get('summary'))))}")
                 lines.append(f"- **Ecosystems**: {', '.join(w.get('ecosystems', [])) or 'N/A'}")
                 lines.append(f"- **Trigger**: {sanitize_md(safe_str(w.get('trigger')))}")
                 lines.append(f"- **Auth**: {sanitize_md(safe_str(w.get('auth_method')))}")
@@ -902,7 +796,8 @@ async def run(input_dict, tools):
                     lines.append(f"- **Commands**: {', '.join(f'`{c}`' for c in w['publish_commands'])}")
                 sec_notes = w.get("security_notes") or []
                 notable = [downgrade_contradictions(normalize_note(n)) for n in sec_notes
-                           if n and any(tag in downgrade_contradictions(normalize_note(n))
+                           if n and not (redacted_severity and normalize_note(n).startswith(f"[{redacted_severity}]"))
+                           and any(tag in downgrade_contradictions(normalize_note(n))
                                         for tag in ["[CRITICAL]", "[LOW-LEAKAGE]", "[LOW-TRUSTED-INPUT]"])]
                 if notable:
                     lines.append(f"- **Security**: {'; '.join(notable)}")
@@ -967,7 +862,7 @@ async def run(input_dict, tools):
             toc_lines.append(f"- [CI Infrastructure Workflows](#{to_anchor('CI Infrastructure Image Workflows')}) ({len(ci_wfs)})")
         if doc_wfs:
             toc_lines.append(f"- [Documentation Workflows](#{to_anchor('Documentation Website Workflows')}) ({len(doc_wfs)})")
-        if critical_notes:
+        if critical_notes and not (redacted_severity and redacted_severity == "CRITICAL"):
             toc_lines.append(f"- [Security: Critical](#{to_anchor('Security Critical Untrusted Input Injection')}) ({len(critical_notes)})")
         if leakage_notes:
             toc_lines.append(f"- [Security: Credential Leakage](#{to_anchor('Security Credential Leakage Risk')}) ({len(leakage_notes)})")
@@ -980,7 +875,7 @@ async def run(input_dict, tools):
         toc_lines.append(f"- [Detailed Results](#{to_anchor('Detailed Results Release Snapshot Workflows')})")
         for repo in sorted(all_results.keys()):
             if any(w.get("repo") == repo for w in (release_wfs + snapshot_wfs)):
-                toc_lines.append(f"  - [{owner}/{repo}](#{to_anchor(f'{owner}/{repo}')})")
+                toc_lines.append(f"  - [{github_owner}/{repo}](#{to_anchor(f'{github_owner}/{repo}')})")
         if non_publishing:
             toc_lines.append(f"- [Non-publishing Repos](#{to_anchor('Repositories with Workflows No Publishing Detected')})")
         if stats["errors"]:
@@ -989,22 +884,23 @@ async def run(input_dict, tools):
         toc = "\n".join(toc_lines)
         full_report = toc + "\n\n---\n\n" + report_body
 
-        report_ns.set("latest_report", full_report)
-        report_ns.set("latest_stats", {
-            "repos_scanned": stats["repos_scanned"],
-            "repos_with_workflows": stats["repos_with_workflows"],
-            "total_workflows": stats["total_workflows"],
-            "publishing_repos": sorted(publishing_repos),
-            "by_category": {k: len(v) for k, v in by_category.items()},
-            "ecosystem_counts": ecosystem_counts,
-            "security_notes_count": len(security_notes_all),
-            "critical_count": len(critical_notes),
-            "leakage_count": len(leakage_notes),
-            "trusted_input_count": len(trusted_input_notes),
-            "downgraded_count": len(downgraded_notes),
-            "trusted_publishing_opportunities": len(tp_opportunities),
-            "trusted_publishing_already": len(tp_already),
-        })
+        if not redacted_severity:
+            report_ns.set("latest_report", full_report)
+            report_ns.set("latest_stats", {
+                "repos_scanned": stats["repos_scanned"],
+                "repos_with_workflows": stats["repos_with_workflows"],
+                "total_workflows": stats["total_workflows"],
+                "publishing_repos": sorted(publishing_repos),
+                "by_category": {k: len(v) for k, v in by_category.items()},
+                "ecosystem_counts": ecosystem_counts,
+                "security_notes_count": len(security_notes_all),
+                "critical_count": len(critical_notes),
+                "leakage_count": len(leakage_notes),
+                "trusted_input_count": len(trusted_input_notes),
+                "downgraded_count": len(downgraded_notes),
+                "trusted_publishing_opportunities": len(tp_opportunities),
+                "trusted_publishing_already": len(tp_already),
+            })
 
         return {"outputText": full_report}
 

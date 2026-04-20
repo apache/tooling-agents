@@ -7,14 +7,13 @@ async def run(input_dict, tools):
     mcpc = { url : RemoteMCPClient(remote_url = url) for url in tools.keys() }
     http_client = httpx.AsyncClient()
     try:
-        owner = input_dict.get("owner", "apache")
-        repos_str = input_dict.get("repos", "").strip()
-        repo_filter = set(r.strip() for r in repos_str.split(",") if r.strip()) if repos_str else None
-        print(f"Executive brief starting for owner={owner}" +
-              (f" (filtered to {len(repo_filter)} repos)" if repo_filter else ""), flush=True)
+        github_owner = input_dict.get("github_owner", "apache")
+        redacted_severity = input_dict.get("redacted_severity", "").strip().upper()
+        print(f"Executive brief starting for github_owner={github_owner}" +
+              (f" (redacting {redacted_severity})" if redacted_severity else ""), flush=True)
 
-        report_ns = data_store.use_namespace(f"ci-report:{owner}")
-        security_ns = data_store.use_namespace(f"ci-security:{owner}")
+        report_ns = data_store.use_namespace(f"ci-report:{github_owner}")
+        security_ns = data_store.use_namespace(f"ci-security:{github_owner}")
 
         pub_stats = report_ns.get("latest_stats")
         sec_stats = security_ns.get("latest_stats")
@@ -23,35 +22,9 @@ async def run(input_dict, tools):
             return {"outputText": "Error: Run Publishing and Security agents first."}
 
         publishing_repos = set(pub_stats.get("publishing_repos", []))
-        if repo_filter:
-            publishing_repos = publishing_repos & repo_filter
-        repos_scanned = len(repo_filter) if repo_filter else pub_stats.get("repos_scanned", 0)
+        repos_scanned = pub_stats.get("repos_scanned", 0)
         total_workflows = pub_stats.get("total_workflows", 0)
-        tp_workflow_count = pub_stats.get("trusted_publishing_opportunities", 0)
-        pub_report = report_ns.get("latest_report")
-
-        # Count unique repos needing TP migration (not workflows — one repo can have multiple)
-        tp_repo_set = set()
-        if pub_report:
-            in_tp_section = False
-            for line in pub_report.split("\n"):
-                stripped = line.strip()
-                if "Trusted Publishing Migration" in stripped and stripped.startswith("#"):
-                    in_tp_section = True
-                    continue
-                if in_tp_section:
-                    # Stop at the next ## heading (but not ### subheadings within TP section)
-                    if stripped.startswith("## ") and "Trusted Publishing" not in stripped:
-                        break
-                    # Parse table rows
-                    if stripped.startswith("|") and "|" in stripped[1:]:
-                        parts = [p.strip() for p in stripped.split("|")]
-                        if len(parts) >= 3 and parts[1] and parts[1] not in ("Repository", ""):
-                            repo_name = parts[1].strip().strip("`").strip()
-                            if repo_name and not repo_name.startswith("-"):
-                                if repo_filter is None or repo_name in repo_filter:
-                                    tp_repo_set.add(repo_name)
-        tp_count = len(tp_repo_set) if tp_repo_set else tp_workflow_count
+        tp_count = pub_stats.get("trusted_publishing_opportunities", 0)
         eco_counts = pub_stats.get("ecosystem_counts", {})
 
         sev_counts = sec_stats.get("severity_counts", {})
@@ -61,8 +34,6 @@ async def run(input_dict, tools):
         # --- Read per-repo findings to build specifics ---
         all_sec_keys = security_ns.list_keys()
         finding_keys = [k for k in all_sec_keys if k.startswith("findings:")]
-        if repo_filter:
-            finding_keys = [k for k in finding_keys if k.replace("findings:", "") in repo_filter]
 
         # Collect CRITICAL, HIGH, and composite injection findings with repo context
         critical_findings = []  # (repo, file, check, detail)
@@ -79,6 +50,11 @@ async def run(input_dict, tools):
             findings = security_ns.get(k)
             if not findings or not isinstance(findings, list):
                 continue
+
+            if redacted_severity:
+                findings = [f for f in findings if f.get("severity", "INFO") != redacted_severity]
+                if not findings:
+                    continue
 
             has_unpinned = False
             for f in findings:
@@ -111,10 +87,11 @@ async def run(input_dict, tools):
         high_nonpub_repos = sorted(set(r for r, _, _, _ in high_nonpublishing))
 
         # --- Parse per-repo ecosystems from pub_report for context ---
+        pub_report = report_ns.get("latest_report")
         repo_ecosystems = {}
         if pub_report:
             header_pattern = re.compile(
-                r'### ' + re.escape(f'{owner}/') + r'(\S+)\s*\n+'
+                r'### ' + re.escape(f'{github_owner}/') + r'(\S+)\s*\n+'
                 r'\*\*(\d+)\*\* release/snapshot workflows \| Ecosystems: \*\*([^*]+)\*\*')
             for m in header_pattern.finditer(pub_report):
                 repo_ecosystems[m.group(1)] = [e.strip() for e in m.group(3).split(",")]
@@ -166,7 +143,7 @@ async def run(input_dict, tools):
                 for repo, file, detail in sorted(items):
                     eco = repo_ecosystems.get(repo)
                     eco_str = f" — publishes to **{', '.join(eco)}**" if eco else ""
-                    lines.append(f"- **{owner}/{repo}** `{file}`: {label}{eco_str}")
+                    lines.append(f"- **{github_owner}/{repo}** `{file}`: {label}{eco_str}")
 
             lines.append("")
 
@@ -174,12 +151,12 @@ async def run(input_dict, tools):
         if high_pub_repos:
             n_high = len(high_pub_repos)
             lines.append("## High Risk: Publishing Repos\n")
-            lines.append(f"**{n_high}** {plural(n_high, 'repo')} that publish packages have HIGH-severity findings.\n")
+            lines.append(f"**{n_high}** {plural(n_high, 'repo')} that {plural(n_high, 'publishes', 'publish')} packages {plural(n_high, 'has', 'have')} HIGH-severity findings.\n")
 
             for repo in high_pub_repos:
                 eco = repo_ecosystems.get(repo)
                 eco_str = f" ({', '.join(eco)})" if eco else ""
-                lines.append(f"- **{owner}/{repo}**{eco_str}")
+                lines.append(f"- **{github_owner}/{repo}**{eco_str}")
 
             lines.append("")
 
@@ -189,14 +166,14 @@ async def run(input_dict, tools):
         if ca_pub_only:
             n_ca = len(ca_pub_only)
             lines.append("## Latent Risk: Composite Action Injection in Publishing Repos\n")
-            lines.append(f"**{n_ca}** {plural(n_ca, 'repo')} that publish packages have composite actions that "
+            lines.append(f"**{n_ca}** {plural(n_ca, 'repo')} that {plural(n_ca, 'publishes', 'publish')} packages {plural(n_ca, 'has', 'have')} composite actions that "
                          f"interpolate `inputs.*` in shell blocks. Not exploitable today — callers pass "
                          f"trusted values — but one unsafe caller away from shell injection.\n")
 
             for repo in ca_pub_only:
                 eco = repo_ecosystems.get(repo)
                 eco_str = f" ({', '.join(eco)})" if eco else ""
-                lines.append(f"- **{owner}/{repo}**{eco_str}")
+                lines.append(f"- **{github_owner}/{repo}**{eco_str}")
 
             lines.append("")
 
@@ -280,8 +257,9 @@ async def run(input_dict, tools):
         full_brief = "\n".join(lines)
         print(f"Brief: {len(full_brief)} chars", flush=True)
 
-        combined_ns = data_store.use_namespace(f"ci-combined:{owner}")
-        combined_ns.set("latest_brief", full_brief)
+        if not redacted_severity:
+            combined_ns = data_store.use_namespace(f"ci-combined:{github_owner}")
+            combined_ns.set("latest_brief", full_brief)
 
         return {"outputText": full_brief}
 
