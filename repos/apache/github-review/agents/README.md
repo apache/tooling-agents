@@ -7,13 +7,13 @@ Reports are documented separately — see the README bundled with each report ru
 ## Project structure
 
 ```
+├── orchestrator.py            Runs full pipeline, splits private/public output
 ├── pre-fetch.py               Caches workflow YAML + composite actions from GitHub
 ├── publishing.py              LLM-classifies workflows (release, snapshot, CI, docs)
 ├── security.py                Pattern-matching security checks on cached YAML
 ├── review.py                  Combined risk assessment report (markdown)
 ├── brief.py                   One-page executive action plan (markdown)
 ├── json-export.py             Machine-readable structured export (JSON)
-├── orchestrator.py            Runs full pipeline, splits private/public output
 ├── README.md                  ← you are here
 └── tests/
     ├── README.md              Test suite docs
@@ -29,6 +29,8 @@ Reports are documented separately — see the README bundled with each report ru
 Seven agents share data via CouchDB namespaces:
 
 ```
+Orchestrator    Runs all of the agents below, pushes private + public reports to GitHub
+       |
 Pre-fetch ──→   ci-workflows:{github_owner}   (YAML cache + composites + extras)
        │
 Publishing ──→  ci-classification:{github_owner}   (LLM classifications)
@@ -41,8 +43,6 @@ Review ──→      ci-combined:{github_owner}         (combined report)
 Brief ──→       ci-combined:{github_owner}         (executive brief)
        │
 JSON Export ──→ ci-combined:{github_owner}         (JSON export)
-
-Orchestrator    Runs all of the above, pushes private + public reports to GitHub
 ```
 
 **Run order:** Pre-fetch → Publishing → Security → then any of: Review, Brief, JSON Export
@@ -67,15 +67,19 @@ Orchestrator    github_owner: apache
                 write_public_directory: repos/apache/github-review
                 write_public_pat: ghp_...
                 redacted_severity: CRITICAL
+                skip_prefetch: false
 ```
 
 This runs three phases automatically:
 
 ```
 Phase 1: Prefetch (hits GitHub API, caches all workflow YAML)
+         Skipped when skip_prefetch is true.
 Phase 2: Private reports (5 agents, no redaction, pushed immediately)
 Phase 3: Public reports (same 5 agents with redacted_severity, pushed immediately)
 ```
+
+Each report file is pushed to its target GitHub repo immediately after generation — you can watch progress in the repo as the orchestrator runs.
 
 ### Manual run
 
@@ -115,37 +119,52 @@ Pre-fetch takes ~30-60 min for ~2,500 repos. Publishing takes hours (LLM calls).
 
 | Agent | Inputs | Purpose |
 |-------|--------|---------|
-| Pre-fetch | `github_owner`, `read_pat` | Cache workflow YAML from GitHub |
+| Pre-fetch | `github_owner`, `read_pat`, `rescan` | Cache workflow YAML from GitHub |
 | Publishing | `github_owner`, `redacted_severity` | LLM-classify workflows |
 | Security | `github_owner`, `redacted_severity` | Pattern-match security checks |
 | Review | `github_owner`, `redacted_severity` | Combined risk assessment |
 | Brief | `github_owner`, `redacted_severity` | Executive action plan |
 | JSON Export | `github_owner`, `redacted_severity` | Machine-readable export |
-| Orchestrator | `github_owner`, `read_pat`, `write_private_repo`, `write_private_directory`, `write_private_pat`, `write_public_repo`, `write_public_directory`, `write_public_pat`, `redacted_severity` | Full pipeline |
+| Orchestrator | `github_owner`, `read_pat`, `write_private_repo`, `write_private_directory`, `write_private_pat`, `write_public_repo`, `write_public_directory`, `write_public_pat`, `redacted_severity`, `skip_prefetch` | Full pipeline |
 
-All orchestrator inputs are required. `redacted_severity` defaults to `CRITICAL` on the orchestrator; defaults to empty (no filtering) on individual agents.
+All orchestrator inputs except `skip_prefetch` are required. `redacted_severity` defaults to `CRITICAL` on the orchestrator; defaults to empty (no filtering) on individual agents. `skip_prefetch` defaults to `false`.
 
 ### redacted_severity
 
-When set (e.g., `redacted_severity: CRITICAL`), agents exclude findings at that severity before counting and rendering. Everything is consistent by construction — no post-processing.
+`redacted_severity` is a **threshold** — it removes findings at that severity **and above**. Examples:
 
-- **Publishing**: filters `[CRITICAL]` security_notes, strips vulnerability sentences from LLM summaries
-- **Security**: reads cached findings, filters, re-renders report without overwriting CouchDB
-- **Review**: omits CRITICAL findings from all sections, adjusts counts and rankings
-- **Brief**: omits the "Exploitable Now" section and CRITICAL recommendation
-- **JSON Export**: filters CRITICAL findings from all repos, adjusts severity counts and worst_severity
+- `redacted_severity: CRITICAL` → removes CRITICAL only (public gets HIGH + MEDIUM + LOW + INFO)
+- `redacted_severity: HIGH` → removes HIGH and CRITICAL (public gets MEDIUM + LOW + INFO)
+- `redacted_severity: MEDIUM` → removes MEDIUM, HIGH, and CRITICAL
+- Empty (default) → all findings included
 
-When empty (default), all findings are included. When set, agents skip CouchDB writes to preserve the full Phase 2 data.
+Every agent uses the same `is_severity_redacted(sev)` function that compares against `SEV_ORDER = ["INFO", "LOW", "MEDIUM", "HIGH", "CRITICAL"]`. Agents filter before counting and rendering — all numbers, sections, and cross-references are consistent by construction.
+
+What gets filtered per agent:
+
+- **Publishing**: filters security_notes at or above threshold, strips vulnerability sentences from LLM summaries, skips affected Security sections and TOC entries
+- **Security**: reads cached findings, filters by threshold, re-renders report without overwriting CouchDB
+- **Review**: omits findings at or above threshold from all sections. Recomputes org-level stats from filtered per-repo data (does not trust `latest_stats` from CouchDB, which contains unredacted counts)
+- **Brief**: omits findings at or above threshold. Recomputes `total_findings` and `check_counts` from filtered data
+- **JSON Export**: filters findings and security_notes by threshold. Recomputes top-level `security` summary from filtered per-repo data
+
+When `redacted_severity` is set, all agents skip CouchDB writes to preserve the full Phase 2 data.
+
+### rescan (prefetch only)
+
+When `rescan: true`, prefetch ignores all cache keys and re-fetches everything from GitHub. When `false` (default), it skips repos that already have `__prefetch__`, `__composites__`, and `__extras__` cache keys — a fully cached repo costs zero API calls.
+
+The orchestrator does not pass `rescan` to prefetch, so it always uses cache-skip mode. Run prefetch manually with `rescan: true` when you need a full refresh.
 
 ## Caching
 
 All data persists in CouchDB across runs.
 
-- **Pre-fetch** writes `__prefetch__:{repo}`, `__composites__:{repo}`, and `__extras__:{repo}` meta keys plus individual YAML content. Always rescans — overwrites on every run.
+- **Pre-fetch** writes `__prefetch__:{repo}`, `__composites__:{repo}`, and `__extras__:{repo}` meta keys plus individual YAML content. Skips repos already cached unless `rescan: true`.
 - **Publishing** writes `__meta__:{repo}` plus per-workflow classification keys. Skips workflows already classified (100% cache hit rate on Phase 3 redacted runs).
 - **Security** writes `findings:{repo}` per repo. When `redacted_severity` is set, reads cached findings and filters — does not rescan or overwrite.
 
-The `__extras__:{repo}` key stores CODEOWNERS content and dependabot/renovate existence, so the Security agent never needs to call the GitHub API.
+The `__extras__:{repo}` key stores two booleans — `has_codeowners` and `has_dependency_updates` — extracted from the repo's file tree during prefetch (zero extra API calls, reuses the tree response already fetched for composite action discovery). The Security agent reads these to generate `missing_codeowners` and `missing_dependency_updates` findings without calling the GitHub API.
 
 When `redacted_severity` is set, no agent overwrites CouchDB data. Phase 3 reads the full data written by Phase 2 and filters in memory.
 
@@ -195,7 +214,7 @@ Two material policy integrations:
 
 ## Security checks reference
 
-The Security agent runs 13 checks. When adding a new check, also update `ATTACK_SCENARIOS` in `review.py` and `check_definitions` in `json-export.py`.
+The Security agent runs 12 checks. When adding a new check, also update `ATTACK_SCENARIOS` in `review.py` and `check_definitions` in `json-export.py`.
 
 | Check | Severity | What It Detects |
 |-------|----------|-----------------|
@@ -208,7 +227,6 @@ The Security agent runs 13 checks. When adding a new check, also update `ATTACK_
 | `composite_action_injection` | LOW | Interpolation in composite action run blocks |
 | `broad_permissions` | LOW–HIGH | GITHUB_TOKEN with excessive scopes |
 | `missing_codeowners` | LOW | No CODEOWNERS file |
-| `codeowners_gap` | LOW | CODEOWNERS missing `.github/` coverage |
 | `missing_dependency_updates` | LOW | No dependabot.yml or renovate.json (ASF policy violation) |
 | `cache_poisoning` | INFO | `actions/cache` with PR trigger |
 | `third_party_actions` | INFO | Actions from outside `actions/*`, `github/*`, `apache/*` namespaces |
