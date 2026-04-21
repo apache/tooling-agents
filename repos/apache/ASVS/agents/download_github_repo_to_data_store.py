@@ -63,7 +63,8 @@ async def run(input_dict, tools):
             files_to_fetch = [item for item in files_to_fetch if item.get("path", "").startswith(path_prefix + "/") or item.get("path", "") == path_prefix]
             print(f"Path prefix '{path_prefix}': {len(files_to_fetch)} files match", flush=True)
 
-        files_ns = data_store.use_namespace(f"files:{repo}")
+        ns_name = f"files:{repo}/{path_prefix}" if path_prefix else f"files:{repo}"
+        files_ns = data_store.use_namespace(ns_name)
 
         # Clear stale data from previous runs
         existing_keys = files_ns.list_keys()
@@ -142,7 +143,7 @@ async def run(input_dict, tools):
             f"Skipped (>1MB): {skipped_large}",
             f"Errors: {error_count}",
             f"",
-            f"Data stored in namespace: files:{repo}",
+            f"Data stored in namespace: {ns_name}",
         ]
 
         if errors:

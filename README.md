@@ -34,7 +34,7 @@ Automated scan of GitHub Actions workflows across an organization to identify se
 │   ├── agents/            # Pipeline agent code (6 agents)
 │   ├── audit_guidance/    # Project-specific false positive guidance
 │   └── reports/           # Audit output organized by project and commit
-├── gha-review/         # GitHub Actions security review
+├── gha-review/            # GitHub Actions security review
 │   ├── agents/            # Review pipeline agents (7 agents + tests)
 │   └── reports/           # Review output
 ├── docs/                  # Platform documentation

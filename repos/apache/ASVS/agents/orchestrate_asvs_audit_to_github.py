@@ -64,12 +64,12 @@ async def run(input_dict, tools):
             repo_short_name = source_parts[1]
             source_path_prefix = "/".join(source_parts[2:]) if len(source_parts) > 2 else ""
 
-        code_namespace = f"files:{repo_owner_name}"
-
         # Reconstruct the download input: owner/repo/path (short form for the download agent)
         download_source = repo_owner_name
         if source_path_prefix:
             download_source += f"/{source_path_prefix}"
+
+        code_namespace = f"files:{download_source}"
 
         # Build namespace list: code namespace + any supplemental
         namespaces = [code_namespace]
