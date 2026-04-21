@@ -95,7 +95,7 @@ The main entry point. Calls all other agents.
 | `outputToken` | yes | PAT with write access to output repo |
 | `outputDirectory` | yes | Base directory — repo name and commit hash are appended automatically |
 | `discover` | no | `"true"` or `"false"` (default `"true"`) |
-| `level` | no | `"L1"`, `"L2"`, or `"L3"` |
+| `level` | no | `"L1"`, `"L2"`, or `"L3"` (default `"L3"` — use `"L1"` for a quick baseline audit) |
 | `severityThreshold` | no | `"CRITICAL"`, `"HIGH"`, `"MEDIUM"`, or empty |
 | `consolidate` | no | `"true"` or `"false"` (default `"true"`) |
 
@@ -169,7 +169,8 @@ Reads per-section reports from GitHub, deduplicates, produces consolidated repor
 |---|---|---|
 | `inputText` | yes | Multi-line: `repo:`, `pat:`, `directories:`, `output:` |
 | `domainGroups` | no | JSON string mapping domain names to ASVS section arrays |
-| `level` | no | `"L1"`, `"L2"`, or `"L3"` (default `"L3"`) |
+| `level` | no | `"L1"`, `"L2"`, or `"L3"` (default `"L3"` — use `"L1"` for a quick baseline audit) |
+| `severityThreshold` | no | Included in report metadata when provided |
 
 **Output:** `outputText` — summary. Pushes `consolidated.md` and `issues.md` to GitHub.
 

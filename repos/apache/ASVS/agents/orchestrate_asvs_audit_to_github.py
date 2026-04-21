@@ -288,6 +288,7 @@ async def run(input_dict, tools):
                             ]),
                             "domainGroups": json.dumps(domain_groups),
                             "level": level or "L3",
+                            "severityThreshold": severity_threshold,
                         }
                     )
                     print(f"  Consolidation done", flush=True)

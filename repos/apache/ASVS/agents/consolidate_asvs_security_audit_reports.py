@@ -1,5 +1,4 @@
 # consolidate_asvs_security_audit_reports
-
 from agent_factory.remote_mcp_client import RemoteMCPClient
 from services.llm_service import call_llm
 import httpx
@@ -43,6 +42,7 @@ async def run(input_dict, tools):
         input_text = input_dict.get("inputText", "")
         domain_groups_raw = input_dict.get("domainGroups", "")
         level = input_dict.get("level", "L3")
+        severity_threshold = input_dict.get("severityThreshold", "")
 
         # Normalize level
         level = level.strip().upper()
@@ -796,13 +796,17 @@ If no duplicates: {"merges": []}"""
 
         # Executive summary (Opus)
         print(f"Generating executive summary...")
+        severity_scope = f"Severity threshold: {severity_threshold} and above" if severity_threshold else "Severity threshold: none (all findings included)"
+
         exec_summary_prompt = f"""Generate the opening sections of a security audit consolidated report in Markdown.
 
 Audit scope: up to {level}
+{severity_scope}
 
 Repository: {owner}/{repo}
 Directories: {', '.join(directories)}
 ASVS Level: {level}
+{severity_scope}
 Commit: {commit_info}
 Date: {audit_date}
 Auditor: Tooling Agents
@@ -821,7 +825,7 @@ Finding titles:
 Positive controls: {json.dumps(all_positive_controls[:50], indent=2, default=str)}
 
 Generate ONLY:
-1. Report Metadata table (Repository, ASVS Level, Commit, Date, Auditor, Source Reports, Total Findings)
+1. Report Metadata table (Repository, ASVS Level, Severity Threshold, Commit, Date, Auditor, Source Reports, Total Findings)
 2. Executive Summary with severity distribution, level coverage, top 5 risks, positive controls
 
 End with ---."""
@@ -873,6 +877,8 @@ End with ---."""
 
         # Section 7: Level Coverage (deterministic)
         s7 = ["\n\n## 7. Level Coverage Analysis\n", f"\n**Audit scope:** up to {level}\n"]
+        if severity_threshold:
+            s7.append(f"**Severity threshold:** {severity_threshold} and above\n")
         s7.append("| Level | Sections Audited | Findings Found |")
         s7.append("|-------|-----------------|----------------|")
         for lv_name, lv_num in [("L1", 1), ("L2", 2), ("L3", 3)]:
