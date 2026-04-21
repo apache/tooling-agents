@@ -1,5 +1,4 @@
 # download_github_repo_to_datastore
-
 from agent_factory.remote_mcp_client import RemoteMCPClient
 from services.llm_service import call_llm
 import httpx
@@ -65,6 +64,13 @@ async def run(input_dict, tools):
 
         files_ns = data_store.use_namespace(f"files:{repo}")
 
+        # Clear stale data from previous runs
+        existing_keys = files_ns.list_keys()
+        if existing_keys:
+            print(f"Clearing {len(existing_keys)} existing files from namespace", flush=True)
+            for key in existing_keys:
+                files_ns.delete(key)
+
         fetched_count = 0
         skipped_binary = 0
         skipped_vendor = 0
@@ -127,6 +133,7 @@ async def run(input_dict, tools):
         if path_prefix:
             summary_lines.append(f"Path prefix: {path_prefix}")
         summary_lines += [
+            f"Previous files cleared: {len(existing_keys)}",
             f"Total files in scope: {len(files_to_fetch)}",
             f"Files fetched and stored: {fetched_count}",
             f"Skipped (binary): {skipped_binary}",
