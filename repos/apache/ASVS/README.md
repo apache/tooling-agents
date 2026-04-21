@@ -1,5 +1,9 @@
 # ASVS Security Audit Pipeline
 
+Automated [OWASP ASVS v5.0.0](https://github.com/OWASP/ASVS/blob/v5.0.0/5.0/OWASP_Application_Security_Verification_Standard_5.0.0_en.pdf) compliance auditing for any GitHub-hosted codebase. The pipeline downloads source code, auto-discovers the architecture, runs per-requirement security analysis with Claude, and produces a consolidated report with deduplicated findings and ready-to-file GitHub issues.
+
+Built on [Gofannon](https://github.com/The-AI-Alliance/gofannon) — see [docs/gofannon](../docs/gofannon/) for platform setup.
+
 ## Pipeline Flow
 
 ```
@@ -26,16 +30,13 @@ Run `orchestrate_asvs_audit_to_github` with:
 | Input | Value |
 |---|---|
 | `sourceRepo` | `apache/airflow` |
-| `outputRepo` | `apache/tooling-runbooks` |
+| `outputRepo` | `apache/tooling-agents` |
 | `outputToken` | `ghp_...` |
 | `outputDirectory` | `ASVS/reports` |
 | `level` | `L2` |
 | `severityThreshold` | `HIGH` |
 
-That's it. The orchestrator downloads the code, fetches the latest commit
-hash, discovers the architecture, runs all audits, pushes reports, and
-consolidates. The output directory is automatically extended with the
-repo name and commit hash: `ASVS/reports/airflow/da901ba`.
+That's it. The orchestrator downloads the code, fetches the latest commit hash, discovers the architecture, runs all audits, pushes reports, and consolidates. The output directory is automatically extended with the repo name and commit hash: `ASVS/reports/airflow/da901ba`.
 
 To audit a subdirectory of a large repo:
 
@@ -45,17 +46,26 @@ To audit a subdirectory of a large repo:
 
 This downloads only files under `airflow-core/src/`.
 
-## Reports Location
+## Reports
+
+Reports are organized by project, path (if scoped), and commit hash:
 
 ```
-ASVS/reports/airflow/da901ba/       ← auto-generated from repo + HEAD commit
-├── auth_identity/                  ← per-domain subdirectories
-│   ├── 6.1.1.md
-│   └── 7.1.1.md
-├── secrets_crypto/
-│   └── 9.1.1.md
-├── consolidated.md                 ← THE REPORT
-└── issues.md                       ← GitHub issues, one per finding
+reports/
+├── tooling-trusted-releases/
+│   └── da901ba/
+│       ├── consolidated-L1-L2.md
+│       └── issues-L1-L2.md
+└── steve/
+    └── v3/
+        └── d0aa7e9/
+            ├── auth_identity/
+            │   ├── 6.1.1.md
+            │   └── 7.1.1.md
+            ├── secrets_crypto/
+            │   └── 9.1.1.md
+            ├── consolidated.md       ← THE REPORT
+            └── issues.md             ← GitHub issues, one per finding
 ```
 
 ## Level System
@@ -75,6 +85,14 @@ ASVS/reports/airflow/da901ba/       ← auto-generated from repo + HEAD commit
 | `HIGH` | Critical + High |
 | `MEDIUM` | Critical + High + Medium |
 | (empty) | All findings |
+
+## Architecture
+
+The pipeline uses Claude Sonnet for high-throughput parallel work (relevance filtering, code inventory, formatting, extraction, consolidation) and Claude Opus for deep security analysis where reasoning quality matters most.
+
+The discovery agent scans the codebase architecture and generates security domains — groupings of ASVS requirements by the code area they test (e.g., `auth_identity`, `secrets_crypto`, `web_input_validation`). Each domain gets its own file list, so the audit agent only analyzes relevant code. ASVS sections not assigned by discovery are caught by a fallback that groups them by ASVS chapter.
+
+The consolidation agent reads all per-section reports from GitHub, extracts findings into structured JSON, deduplicates within and across domains, generates deterministic cross-references, and produces the final consolidated report with executive summary and issues file.
 
 ---
 
