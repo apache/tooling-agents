@@ -65,6 +65,7 @@ ASVS/reports/airflow/da901ba/       ← auto-generated from repo + HEAD commit
 | `L1` | L1 only |
 | `L2` | L1 + L2 |
 | `L3` | L1 + L2 + L3 (all) |
+| (empty) | L1 + L2 + L3 (all) |
 
 ## Severity Threshold
 
