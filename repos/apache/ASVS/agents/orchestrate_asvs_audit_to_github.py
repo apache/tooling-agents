@@ -1,5 +1,4 @@
 # orchestrate_asvs_audit_to_github
-
 from agent_factory.remote_mcp_client import RemoteMCPClient
 from services.llm_service import call_llm
 import httpx
@@ -94,7 +93,10 @@ async def run(input_dict, tools):
             print(f"  WARNING: Could not fetch commit hash ({e}), using 'latest'", flush=True)
             commit_hash = "latest"
 
-        output_directory = f"{output_directory.strip('/')}/{repo_short_name}/{commit_hash}"
+        repo_path_segment = repo_short_name
+        if source_path_prefix:
+            repo_path_segment += f"/{source_path_prefix}"
+        output_directory = f"{output_directory.strip('/')}/{repo_path_segment}/{commit_hash}"
         print(f"  Output directory: {output_directory}", flush=True)
 
         all_outputs = []
