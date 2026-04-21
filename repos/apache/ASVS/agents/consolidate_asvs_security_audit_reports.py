@@ -118,7 +118,7 @@ async def run(input_dict, tools):
 
         HEAVY_PROVIDER = "bedrock"
         HEAVY_MODEL = "us.anthropic.claude-opus-4-6-v1"
-        HEAVY_PARAMS = {"temperature": 1, "reasoning_effort": "high", "max_tokens": 128000}
+        HEAVY_PARAMS = {"temperature": 1, "reasoning_effort": "medium", "max_tokens": 128000}
 
         FAST_CONTEXT_WINDOW = get_context_window(FAST_PROVIDER, FAST_MODEL)
         HEAVY_CONTEXT_WINDOW = get_context_window(HEAVY_PROVIDER, HEAVY_MODEL)

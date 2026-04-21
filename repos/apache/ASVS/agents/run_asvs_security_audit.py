@@ -83,7 +83,7 @@ async def run(input_dict, tools):
 
         OPUS_PROVIDER = "bedrock"
         OPUS_MODEL = "us.anthropic.claude-opus-4-6-v1"
-        OPUS_PARAMS = {"temperature": 1, "reasoning_effort": "medium", "max_tokens": 64000}
+        OPUS_PARAMS = {"temperature": 1, "reasoning_effort": "high", "max_tokens": 64000}
 
         SONNET_CONTEXT = get_context_window(SONNET_PROVIDER, SONNET_MODEL)
         OPUS_CONTEXT = get_context_window(OPUS_PROVIDER, OPUS_MODEL)

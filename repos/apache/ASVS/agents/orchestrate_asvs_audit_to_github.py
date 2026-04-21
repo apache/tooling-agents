@@ -199,6 +199,37 @@ async def run(input_dict, tools):
             total_sections = sum(len(p.get("asvs_sections", [])) for p in passes)
             print(f"  After level filter ({level or 'all'}): {total_sections} sections, {len(passes)} passes", flush=True)
 
+            # Check for ASVS sections at this level that discovery missed
+            load_asvs_levels()
+            all_level_sections = [s for s, lv in asvs_level_cache.items() if lv <= max_level_num]
+            covered_sections = set()
+            for p in passes:
+                covered_sections.update(p.get("asvs_sections", []))
+            uncovered = sorted([s for s in all_level_sections if s not in covered_sections])
+            if uncovered:
+                # Group by ASVS chapter (e.g., "1.2.3" → "ch01")
+                chapter_groups = {}
+                for section in uncovered:
+                    ch_num = section.split(".")[0]
+                    ch_name = f"ch{ch_num.zfill(2)}_general"
+                    chapter_groups.setdefault(ch_name, []).append(section)
+
+                print(f"  {len(uncovered)} sections not assigned by discovery — adding {len(chapter_groups)} chapter-based passes", flush=True)
+                for ch_name, ch_sections in sorted(chapter_groups.items()):
+                    passes.append({
+                        "name": ch_name,
+                        "description": f"ASVS chapter {ch_name.split('_')[0]} sections not assigned to a specific domain",
+                        "asvs_sections": ch_sections,
+                        "files": [],
+                        "domain_context": "",
+                        "estimated_lines": 0,
+                    })
+                    domain_groups[ch_name] = ch_sections
+                    print(f"    {ch_name}: {len(ch_sections)} sections", flush=True)
+
+                total_sections = sum(len(p.get("asvs_sections", [])) for p in passes)
+                print(f"  Total sections now: {total_sections} (of {len(all_level_sections)} at {level or 'L3'})", flush=True)
+
             if total_sections == 0:
                 return {"outputText": f"No ASVS sections match level {level}."}
 

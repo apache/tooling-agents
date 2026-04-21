@@ -1,5 +1,4 @@
 # discover_codebase_architecture
-
 from agent_factory.remote_mcp_client import RemoteMCPClient
 from services.llm_service import call_llm
 import httpx
@@ -236,7 +235,11 @@ Each domain should:
 4. Include a context paragraph that an auditor needs to understand this domain
 
 Group ASVS sections by the code area they'd be testing, NOT by ASVS chapter number.
-Every ASVS section should appear in exactly one domain.
+
+CRITICAL: **Every single ASVS section listed above MUST appear in exactly one domain.**
+Do NOT skip sections. If a section doesn't fit neatly into an architecture-specific
+domain, assign it to a "general_security" domain. Count your sections — the total
+across all domains must equal the number of sections listed above.
 
 Return ONLY a JSON object:
 {{
@@ -248,7 +251,8 @@ Return ONLY a JSON object:
       "files": ["path/to/file.py", ...],
       "context": "paragraph explaining the architecture of this domain for auditors"
     }}
-  ]
+  ],
+  "total_sections_assigned": 999
 }}"""
 
         domains = []
@@ -264,7 +268,8 @@ Return ONLY a JSON object:
                 if json_match:
                     domain_result = json.loads(json_match.group())
                     domains = domain_result.get("domains", [])
-                    print(f"  Generated {len(domains)} domains", flush=True)
+                    assigned_count = sum(len(d.get("asvs_sections", [])) for d in domains)
+                    print(f"  Generated {len(domains)} domains, {assigned_count}/{len(asvs_sections_available)} sections assigned", flush=True)
                     for d in domains:
                         print(f"    {d['name']}: {len(d.get('asvs_sections', []))} sections, {len(d.get('files', []))} files", flush=True)
                     break
