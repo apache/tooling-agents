@@ -16,7 +16,13 @@ orchestrate_asvs_audit_to_github         (single entry point)
   ├──▶ run_asvs_security_audit            (× N sections)
   │    └──▶ add_markdown_file_to_github_directory  (× N)
   │
-  └──▶ consolidate_asvs_security_audit_reports  (once — final report)
+  ├──▶ consolidate_asvs_security_audit_reports  (once — final report)
+  │
+  └──▶ redact + publish                   (if privateRepo is set)
+         ├──▶ read full reports from private repo
+         ├──▶ strip Critical findings
+         ├──▶ push redacted reports to public repo
+         └──▶ email Critical summary to PMC
 ```
 
 Pre-requisites (one-time, outside the pipeline):
@@ -94,6 +100,20 @@ The discovery agent scans the codebase architecture and generates security domai
 
 The consolidation agent reads all per-section reports from GitHub, extracts findings into structured JSON, deduplicates within and across domains, generates deterministic cross-references, and produces the final consolidated report with executive summary and issues file.
 
+## Critical Finding Carve-Out
+
+When `privateRepo` is set, Critical findings never touch the public repo — not even in git history. The flow is:
+
+1. All per-section reports and the consolidated report are pushed to the **private** repo
+2. The orchestrator reads everything back from the private repo
+3. Critical findings are stripped from the consolidated report, issues file, and per-section reports
+4. Redacted versions are pushed to the **public** repo
+5. A summary of Critical findings is emailed to the PMC's private mailing list (if `notifyEmail` is set)
+
+The public report includes a notice: "N Critical findings have been redacted from this report and forwarded to the project's PMC private mailing list."
+
+When `privateRepo` is absent, all reports go directly to `outputRepo` (current behavior, no redaction).
+
 ---
 
 ## Agent Reference
@@ -109,13 +129,16 @@ The main entry point. Calls all other agents.
 | `sourceRepo` | yes | Source code to audit. Accepts `owner/repo`, `owner/repo/subdir`, or full GitHub URL like `https://github.com/owner/repo/tree/branch/subdir` |
 | `sourceToken` | no | PAT for private source repos |
 | `supplementalData` | no | Extra data store namespaces, comma-separated (e.g., `audit_guidance`) |
-| `outputRepo` | yes | GitHub repo for reports (`owner/repo`) |
+| `outputRepo` | yes | GitHub repo for public reports (`owner/repo`) |
 | `outputToken` | yes | PAT with write access to output repo |
 | `outputDirectory` | yes | Base directory — repo name and commit hash are appended automatically |
 | `discover` | no | `"true"` or `"false"` (default `"true"`) |
 | `level` | no | `"L1"`, `"L2"`, or `"L3"` (default `"L3"` — use `"L1"` for a quick baseline audit) |
 | `severityThreshold` | no | `"CRITICAL"`, `"HIGH"`, `"MEDIUM"`, or empty |
 | `consolidate` | no | `"true"` or `"false"` (default `"true"`) |
+| `privateRepo` | no | Private repo for full unredacted reports (enables carve-out) |
+| `privateToken` | no | PAT with write access to private repo (required when `privateRepo` is set) |
+| `notifyEmail` | no | Email address for Critical findings (e.g., `private@steve.apache.org`) |
 
 **Output:** `outputText` — combined audit results.
 
@@ -125,7 +148,7 @@ The main entry point. Calls all other agents.
 1. `download_github_repo_to_datastore` — downloads source code
 2. `discover_codebase_architecture` — generates audit plan (if `discover="true"`)
 3. `run_asvs_security_audit` — once per ASVS section
-4. `add_markdown_file_to_github_directory` — once per section
+4. `add_markdown_file_to_github_directory` — once per section, plus consolidated/issues
 5. `consolidate_asvs_security_audit_reports` — final report (if `consolidate="true"`)
 
 ---
@@ -210,6 +233,8 @@ Reads per-section reports from GitHub, deduplicates, produces consolidated repor
 
 **"sourceRepo is required"** — Provide `sourceRepo` as `owner/repo`, `owner/repo/subdir`, or a full GitHub URL.
 
+**"privateToken is required when privateRepo is set"** — Provide a PAT with write access to the private repo.
+
 **"No ASVS sections match level L1"** — Check that ASVS requirement entries have a `level` field.
 
 **Download takes too long** — Use a path prefix to scope: `apache/airflow/airflow-core/src` instead of `apache/airflow`.
@@ -217,3 +242,7 @@ Reads per-section reports from GitHub, deduplicates, produces consolidated repor
 **Too many findings** — Use `severityThreshold="HIGH"` or `"CRITICAL"`.
 
 **Reports not on GitHub** — Check `outputToken` has write access to `outputRepo`.
+
+**Email not delivered** — The email agent uses `mail-relay.apache.org`. Only works from ASF infrastructure. Check the logs for SMTP errors.
+
+**Redacted report still shows Critical findings** — The redaction regex looks for `🔴 Critical` and `CRITICAL` in finding blocks. If the consolidator's output format changed, the regex may need updating.

@@ -692,6 +692,8 @@ Be thorough but precise. If something is done correctly, acknowledge it as a pos
         print(f"  Analysis complete: {len(analysis_results)} results", flush=True)
 
         if not analysis_results:
+            if not opus_batches:
+                return {"outputText": "Not applicable: no relevant files found for this ASVS requirement."}
             return {"outputText": "Error: All analysis batches failed. No results to report."}
 
         # =============================================================

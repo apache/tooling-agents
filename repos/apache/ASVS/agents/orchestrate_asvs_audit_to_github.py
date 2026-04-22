@@ -9,13 +9,15 @@ async def run(input_dict, tools):
     http_client = httpx.AsyncClient()
     try:
         import json
+        import re
+        import base64
 
         # =============================================================
         # Parse inputs
         # =============================================================
-        source_repo = input_dict.get("sourceRepo", "")       # e.g., "apache/airflow" or "apache/airflow/airflow-core/src"
-        source_token = input_dict.get("sourceToken", "")      # PAT for private source repos
-        supplemental_data = input_dict.get("supplementalData", "")  # extra namespaces, comma-separated
+        source_repo = input_dict.get("sourceRepo", "")
+        source_token = input_dict.get("sourceToken", "")
+        supplemental_data = input_dict.get("supplementalData", "")
         output_repo = input_dict.get("outputRepo", "")
         output_token = input_dict.get("outputToken", "")
         output_directory = input_dict.get("outputDirectory", "")
@@ -23,6 +25,11 @@ async def run(input_dict, tools):
         severity_threshold = input_dict.get("severityThreshold", "")
         consolidate = input_dict.get("consolidate", "true")
         level = input_dict.get("level", "")
+
+        # Carve-out inputs
+        private_repo = input_dict.get("privateRepo", "")
+        private_token = input_dict.get("privateToken", "")
+        notify_email = input_dict.get("notifyEmail", "")
 
         if isinstance(discover, str):
             discover = discover.lower() in ("true", "1", "yes")
@@ -38,16 +45,19 @@ async def run(input_dict, tools):
         if not source_repo:
             return {"outputText": "Error: sourceRepo is required (e.g., 'apache/airflow', 'apache/airflow/src', or 'https://github.com/apache/airflow/tree/main/src')"}
 
+        # Validate carve-out inputs
+        carve_out = bool(private_repo)
+        if carve_out and not private_token:
+            return {"outputText": "Error: privateToken is required when privateRepo is set"}
+
+        # Determine where audit + consolidation pushes go
+        push_repo = private_repo if carve_out else output_repo
+        push_token = private_token if carve_out else output_token
+
         # Derive repo name, path prefix, and namespace from sourceRepo
-        # Accepts:
-        #   "apache/steve"                                    → repo=apache/steve, path=""
-        #   "apache/steve/v3"                                 → repo=apache/steve, path="v3"
-        #   "apache/airflow/airflow-core/src"                 → repo=apache/airflow, path="airflow-core/src"
-        #   "https://github.com/apache/steve/tree/trunk/v3"   → repo=apache/steve, path="v3"
         import re as _re
         _source = source_repo.strip().strip("/")
 
-        # Strip GitHub URL prefix and tree/branch segment if present
         _gh_match = _re.match(
             r'(?:https?://)?github\.com/([^/]+)/([^/]+?)(?:\.git)?(?:/tree/[^/]+(?:/(.+))?)?$',
             _source,
@@ -64,14 +74,12 @@ async def run(input_dict, tools):
             repo_short_name = source_parts[1]
             source_path_prefix = "/".join(source_parts[2:]) if len(source_parts) > 2 else ""
 
-        # Reconstruct the download input: owner/repo/path (short form for the download agent)
         download_source = repo_owner_name
         if source_path_prefix:
             download_source += f"/{source_path_prefix}"
 
         code_namespace = f"files:{download_source}"
 
-        # Build namespace list: code namespace + any supplemental
         namespaces = [code_namespace]
         if supplemental_data:
             for ns in supplemental_data.split(","):
@@ -79,7 +87,7 @@ async def run(input_dict, tools):
                 if ns and ns not in namespaces:
                     namespaces.append(ns)
 
-        # Fetch latest commit hash and append repo/hash to output directory
+        # Fetch latest commit hash
         source_headers = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}
         if source_token:
             source_headers["Authorization"] = f"Bearer {source_token}"
@@ -98,12 +106,140 @@ async def run(input_dict, tools):
         if source_path_prefix:
             repo_path_segment += f"/{source_path_prefix}"
         output_directory = f"{output_directory.strip('/')}/{repo_path_segment}/{commit_hash}"
+
+        # When carve-out is on, audit+consolidate push to private repo at same path
+        push_directory = output_directory
+
         print(f"  Output directory: {output_directory}", flush=True)
+        if carve_out:
+            print(f"  Carve-out enabled: full → {private_repo}, redacted → {output_repo}", flush=True)
 
         all_outputs = []
         successes = []
         failures = []
         report_directories = []
+
+        # =============================================================
+        # Redaction helpers
+        # =============================================================
+        def redact_consolidated(content):
+            """Strip CRITICAL findings from consolidated.md.
+            Returns (redacted_content, list_of_critical_findings)."""
+            critical_findings = []
+            redacted = content
+
+            # Extract CRITICAL finding blocks: #### FINDING-NNN: ... until next #### or ## or ---
+            finding_pattern = re.compile(
+                r'(#### (FINDING-\d{3}):.*?)(?=####\s|##\s|---|\Z)',
+                re.DOTALL,
+            )
+            for match in finding_pattern.finditer(content):
+                block = match.group(1)
+                finding_id = match.group(2)
+                # Check if this block contains a Critical severity indicator
+                if re.search(r'🔴\s*Critical|severity[:\s]*Critical|\bCRITICAL\b', block, re.IGNORECASE):
+                    critical_findings.append({"id": finding_id, "block": block.strip()})
+                    redacted = redacted.replace(match.group(1), "")
+
+            # Clean up empty severity sections (### 3.1 Critical Findings with no content)
+            redacted = re.sub(
+                r'### 3\.1 Critical.*?(?=### 3\.\d|## \d|\Z)',
+                '',
+                redacted,
+                flags=re.DOTALL,
+            )
+
+            # Add redaction notice after executive summary
+            if critical_findings:
+                notice = (
+                    f"\n\n> **Note:** {len(critical_findings)} Critical "
+                    f"{'finding has' if len(critical_findings) == 1 else 'findings have'} "
+                    f"been redacted from this report and forwarded to the project's "
+                    f"PMC private mailing list.\n\n"
+                )
+                # Insert after the first --- separator (end of executive summary)
+                first_sep = redacted.find("\n---\n")
+                if first_sep > 0:
+                    redacted = redacted[:first_sep + 5] + notice + redacted[first_sep + 5:]
+                else:
+                    redacted = notice + redacted
+
+            return redacted, critical_findings
+
+        def redact_issues(content):
+            """Strip CRITICAL issues from issues.md."""
+            # Issue blocks: ## Issue: FINDING-NNN ... until next ## Issue: or end
+            issue_pattern = re.compile(
+                r'(## Issue: (FINDING-\d{3}).*?)(?=## Issue:|\Z)',
+                re.DOTALL,
+            )
+            redacted = content
+            removed_count = 0
+            for match in issue_pattern.finditer(content):
+                block = match.group(1)
+                if re.search(r'priority:\s*critical|Priority\s*\n\s*Critical|\bCRITICAL\b', block, re.IGNORECASE):
+                    redacted = redacted.replace(match.group(1), "")
+                    removed_count += 1
+            return redacted, removed_count
+
+        def build_email_body(critical_findings, repo_name, commit):
+            """Build email body summarizing critical findings."""
+            lines = [
+                f"ASVS Security Audit: Critical Findings",
+                f"",
+                f"Repository: {repo_name}",
+                f"Commit: {commit}",
+                f"Critical findings: {len(critical_findings)}",
+                f"",
+                f"The following Critical severity findings were identified",
+                f"and have been redacted from the public report.",
+                f"",
+                f"Full report: https://github.com/{private_repo}/tree/main/{output_directory}/consolidated.md",
+                f"",
+            ]
+            for cf in critical_findings:
+                lines.append(f"---")
+                lines.append(f"")
+                lines.append(cf["block"])
+                lines.append(f"")
+            return "\n".join(lines)
+
+        async def send_email(recipient, subject, body):
+            """Send email via SMTP."""
+            import smtplib
+            from email.mime.text import MIMEText
+
+            msg = MIMEText(body, "plain", "utf-8")
+            msg["Subject"] = subject
+            msg["From"] = "tooling-agents@apache.org"
+            msg["To"] = recipient
+
+            try:
+                # Try ASF mail relay first (no auth needed from ASF infra)
+                smtp = smtplib.SMTP("mail-relay.apache.org", 587, timeout=30)
+                smtp.starttls()
+                smtp.send_message(msg)
+                smtp.quit()
+                print(f"  Email sent to {recipient}", flush=True)
+            except Exception as e:
+                print(f"  Email FAILED to {recipient}: {e}", flush=True)
+                failures.append(f"email to {recipient}: {e}")
+
+        async def read_file_from_github(repo, token, filepath):
+            """Read a file from GitHub."""
+            headers = {
+                "Authorization": f"token {token}",
+                "Accept": "application/vnd.github.v3+json",
+            }
+            resp = await http_client.get(
+                f"https://api.github.com/repos/{repo}/contents/{filepath}",
+                headers=headers,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                return base64.b64decode(data["content"]).decode("utf-8", errors="replace")
+            print(f"  WARNING: Could not read {repo}/{filepath}: {resp.status_code}", flush=True)
+            return None
 
         # =============================================================
         # Helper: filter ASVS sections by level
@@ -160,10 +296,10 @@ async def run(input_dict, tools):
         except Exception as e:
             return {"outputText": f"Download failed: {e}"}
 
-        # =============================================================
-        # Step 2: Discover architecture
-        # =============================================================
         if discover:
+            # =============================================================
+            # DISCOVERY MODE
+            # =============================================================
             print(f"\n{'='*60}", flush=True)
             print(f"Step 2: Discovering codebase architecture", flush=True)
             print(f"  Namespaces: {namespaces}", flush=True)
@@ -200,7 +336,7 @@ async def run(input_dict, tools):
             total_sections = sum(len(p.get("asvs_sections", [])) for p in passes)
             print(f"  After level filter ({level or 'all'}): {total_sections} sections, {len(passes)} passes", flush=True)
 
-            # Check for ASVS sections at this level that discovery missed
+            # Check for uncovered sections
             load_asvs_levels()
             all_level_sections = [s for s, lv in asvs_level_cache.items() if lv <= max_level_num]
             covered_sections = set()
@@ -208,7 +344,6 @@ async def run(input_dict, tools):
                 covered_sections.update(p.get("asvs_sections", []))
             uncovered = sorted([s for s in all_level_sections if s not in covered_sections])
             if uncovered:
-                # Group by ASVS chapter (e.g., "1.2.3" → "ch01")
                 chapter_groups = {}
                 for section in uncovered:
                     ch_num = section.split(".")[0]
@@ -235,10 +370,11 @@ async def run(input_dict, tools):
                 return {"outputText": f"No ASVS sections match level {level}."}
 
             # =============================================================
-            # Step 3: Audit + push
+            # Step 3: Audit + push (to private repo if carve-out, else public)
             # =============================================================
             print(f"\n{'='*60}", flush=True)
             print(f"Step 3: Auditing {total_sections} sections", flush=True)
+            print(f"  Pushing to: {push_repo}", flush=True)
             print(f"{'='*60}", flush=True)
 
             section_idx = 0
@@ -247,7 +383,7 @@ async def run(input_dict, tools):
                 sections = pass_def.get("asvs_sections", [])
                 include_files = pass_def.get("files", [])
                 domain_context = pass_def.get("domain_context", "")
-                pass_output_dir = f"{output_directory}/{pass_name}" if output_directory else pass_name
+                pass_output_dir = f"{push_directory}/{pass_name}" if push_directory else pass_name
                 report_directories.append(pass_output_dir)
 
                 print(f"\n{'='*60}", flush=True)
@@ -285,8 +421,8 @@ async def run(input_dict, tools):
                             agent_name="add_markdown_file_to_github_directory",
                             input_dict={
                                 "inputText": json.dumps({
-                                    "repo": output_repo,
-                                    "token": output_token,
+                                    "repo": push_repo,
+                                    "token": push_token,
                                     "directory": pass_output_dir,
                                     "filename": f"{section}.md",
                                 }),
@@ -302,21 +438,22 @@ async def run(input_dict, tools):
                     all_outputs.append(audit_output_text)
 
             # =============================================================
-            # Step 4: Consolidate
+            # Step 4: Consolidate (pushed to private repo if carve-out)
             # =============================================================
             if consolidate and successes:
                 print(f"\n{'='*60}", flush=True)
                 print(f"Step 4: Consolidating reports", flush=True)
+                print(f"  Pushing to: {push_repo}", flush=True)
                 print(f"{'='*60}", flush=True)
                 try:
                     await gofannon_client.call(
                         agent_name="consolidate_asvs_security_audit_reports",
                         input_dict={
                             "inputText": "\n".join([
-                                f"repo: {output_repo}",
-                                f"pat: {output_token}",
+                                f"repo: {push_repo}",
+                                f"pat: {push_token}",
                                 f"directories: {', '.join(report_directories)}",
-                                f"output: {output_directory}",
+                                f"output: {push_directory}",
                             ]),
                             "domainGroups": json.dumps(domain_groups),
                             "level": level or "L3",
@@ -327,19 +464,144 @@ async def run(input_dict, tools):
                 except Exception as e:
                     print(f"  Consolidation FAILED: {e}", flush=True)
                     failures.append(f"consolidation: {e}")
+
+            # =============================================================
+            # Step 5: Carve-out — redact and publish to public repo
+            # =============================================================
+            if carve_out and consolidate and successes:
+                print(f"\n{'='*60}", flush=True)
+                print(f"Step 5: Redacting critical findings for public report", flush=True)
+                print(f"  Reading from: {private_repo}", flush=True)
+                print(f"  Publishing to: {output_repo}", flush=True)
+                print(f"{'='*60}", flush=True)
+
+                # Read consolidated.md from private repo
+                consolidated_content = await read_file_from_github(
+                    private_repo, private_token,
+                    f"{output_directory}/consolidated.md",
+                )
+                issues_content = await read_file_from_github(
+                    private_repo, private_token,
+                    f"{output_directory}/issues.md",
+                )
+
+                critical_findings = []
+
+                if consolidated_content:
+                    redacted_consolidated, critical_findings = redact_consolidated(consolidated_content)
+                    print(f"  Redacted {len(critical_findings)} critical findings from consolidated report", flush=True)
+
+                    # Push redacted consolidated.md to public repo
+                    try:
+                        await gofannon_client.call(
+                            agent_name="add_markdown_file_to_github_directory",
+                            input_dict={
+                                "inputText": json.dumps({
+                                    "repo": output_repo,
+                                    "token": output_token,
+                                    "directory": output_directory,
+                                    "filename": "consolidated.md",
+                                }),
+                                "commitMessage": f"ASVS {level or 'full'} audit: consolidated report (redacted)",
+                                "fileContents": redacted_consolidated,
+                            }
+                        )
+                        print(f"  Pushed redacted consolidated.md to {output_repo}", flush=True)
+                    except Exception as e:
+                        print(f"  Push redacted consolidated.md FAILED: {e}", flush=True)
+                        failures.append(f"redacted consolidated push: {e}")
+                else:
+                    print(f"  WARNING: Could not read consolidated.md from private repo", flush=True)
+
+                if issues_content:
+                    redacted_issues, removed_count = redact_issues(issues_content)
+                    print(f"  Redacted {removed_count} critical issues", flush=True)
+
+                    # Push redacted issues.md to public repo
+                    try:
+                        await gofannon_client.call(
+                            agent_name="add_markdown_file_to_github_directory",
+                            input_dict={
+                                "inputText": json.dumps({
+                                    "repo": output_repo,
+                                    "token": output_token,
+                                    "directory": output_directory,
+                                    "filename": "issues.md",
+                                }),
+                                "commitMessage": f"ASVS {level or 'full'} audit: issues (redacted)",
+                                "fileContents": redacted_issues,
+                            }
+                        )
+                        print(f"  Pushed redacted issues.md to {output_repo}", flush=True)
+                    except Exception as e:
+                        print(f"  Push redacted issues.md FAILED: {e}", flush=True)
+                        failures.append(f"redacted issues push: {e}")
+
+                # Push redacted per-section reports to public repo
+                # Read each from private, strip critical blocks, push to public
+                for pass_output_dir in report_directories:
+                    # List files in this directory from private repo
+                    list_headers = {
+                        "Authorization": f"token {private_token}",
+                        "Accept": "application/vnd.github.v3+json",
+                    }
+                    list_resp = await http_client.get(
+                        f"https://api.github.com/repos/{private_repo}/contents/{pass_output_dir}",
+                        headers=list_headers,
+                    )
+                    if list_resp.status_code != 200:
+                        continue
+                    dir_contents = list_resp.json()
+                    for item in dir_contents:
+                        if item["type"] != "file" or not item["name"].endswith(".md"):
+                            continue
+                        file_content = await read_file_from_github(
+                            private_repo, private_token,
+                            f"{pass_output_dir}/{item['name']}",
+                        )
+                        if not file_content:
+                            continue
+                        # Redact critical findings from individual reports
+                        redacted_section, _ = redact_consolidated(file_content)
+                        try:
+                            await gofannon_client.call(
+                                agent_name="add_markdown_file_to_github_directory",
+                                input_dict={
+                                    "inputText": json.dumps({
+                                        "repo": output_repo,
+                                        "token": output_token,
+                                        "directory": pass_output_dir,
+                                        "filename": item["name"],
+                                    }),
+                                    "commitMessage": f"ASVS audit: {item['name']} (redacted)",
+                                    "fileContents": redacted_section,
+                                }
+                            )
+                        except Exception as e:
+                            print(f"  Push redacted {item['name']} FAILED: {e}", flush=True)
+
+                print(f"  Redacted reports pushed to {output_repo}", flush=True)
+
+                # Email critical findings to PMC
+                if notify_email and critical_findings:
+                    print(f"  Emailing {len(critical_findings)} critical findings to {notify_email}", flush=True)
+                    email_subject = f"[ASVS Audit] {len(critical_findings)} Critical findings in {repo_owner_name}"
+                    email_body = build_email_body(critical_findings, repo_owner_name, commit_hash)
+                    await send_email(notify_email, email_subject, email_body)
+                elif notify_email:
+                    print(f"  No critical findings to email", flush=True)
+
             elif not successes:
                 print(f"\n  Skipping consolidation — no successful audits", flush=True)
 
         else:
             # =============================================================
-            # NO-DISCOVER MODE: just audit all ASVS sections in the data
-            # store without domain scoping. Useful for small codebases.
+            # NO-DISCOVER MODE
             # =============================================================
             print(f"\n{'='*60}", flush=True)
             print(f"Step 2: Loading ASVS sections (no discovery)", flush=True)
             print(f"{'='*60}", flush=True)
 
-            # Get all ASVS sections from the data store, filtered by level
             all_sections = []
             try:
                 asvs_ns = data_store.use_namespace("asvs")
@@ -376,9 +638,9 @@ async def run(input_dict, tools):
                         agent_name="add_markdown_file_to_github_directory",
                         input_dict={
                             "inputText": json.dumps({
-                                "repo": output_repo,
-                                "token": output_token,
-                                "directory": output_directory,
+                                "repo": push_repo,
+                                "token": push_token,
+                                "directory": push_directory,
                                 "filename": f"{section}.md",
                             }),
                             "commitMessage": f"ASVS audit: {section}",
@@ -395,6 +657,11 @@ async def run(input_dict, tools):
         # =============================================================
         print(f"\n{'='*60}", flush=True)
         print(f"Complete: {len(successes)} succeeded, {len(failures)} failed", flush=True)
+        if carve_out:
+            print(f"  Full reports: {private_repo}/{output_directory}/", flush=True)
+            print(f"  Redacted reports: {output_repo}/{output_directory}/", flush=True)
+        else:
+            print(f"  Reports: {output_repo}/{output_directory}/", flush=True)
         if failures:
             for f in failures:
                 print(f"  - {f}", flush=True)
