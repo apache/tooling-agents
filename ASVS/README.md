@@ -27,7 +27,7 @@ orchestrate_asvs_audit_to_github         (single entry point)
 
 Pre-requisites (one-time, outside the pipeline):
 - ASVS requirements loaded into the `asvs` data store namespace
-- Optionally: audit guidance loaded via `fetch_audit_guidance`
+- Optionally: audit guidance loaded via `fetch_audit_guidance` (see [`audit_guidance/README.md`](audit_guidance/README.md) for how to write guidance for new projects)
 
 ## Quick Start
 

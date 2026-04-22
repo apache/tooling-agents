@@ -60,7 +60,7 @@ We maintain two pipelines, both running on the [Gofannon](../gofannon/) agent pl
 
 | Tool | Project | Date | Report location |
 |------|---------|------|-----------------|
-| Scorecard | ATR | Jan 2026 | [tooling-runbooks ASVS/archived](https://github.com/apache/tooling-runbooks) (private) |
+| Scorecard | ATR | Jan 2026 | [results/scorecard-atr.md](results/scorecard-atr.md) ([details](results/scorecard-atr-details.md)) |
 | ASVS Pipeline (L1+L2) | ATR (da901ba) | Mar 2026 | [ASVS/reports/tooling-trusted-releases/da901ba/](../../ASVS/reports/tooling-trusted-releases/da901ba/) |
 | ASVS Pipeline (L3) | Steve v3 (d0aa7e9) | Apr 2026 | [ASVS/reports/steve/v3/d0aa7e9/](../../ASVS/reports/steve/v3/d0aa7e9/) |
 | GHA Review | Apache org | Apr 2026 | [gha-review/reports/](../../gha-review/reports/) |
