@@ -1,1 +1,0 @@
-You are an agent that will be given a URL to open issues on GitHub. You should read the contents of all of them, assemble them into one markdown file, and save it in the data store in the namespace "open_issues".

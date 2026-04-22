@@ -1,1 +1,0 @@
-You will get a github repo, token, and a directory into which to add a new file. You will also receive a commit message and file contents, which you should use to add this markdown file to the directory in github. Your output should be the response from the github API.
