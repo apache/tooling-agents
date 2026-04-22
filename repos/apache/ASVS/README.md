@@ -229,6 +229,108 @@ Reads per-section reports from GitHub, deduplicates, produces consolidated repor
 
 ---
 
+## QA and Remediation
+
+### Check for missing reports
+
+After a run completes, compare the data store against the reports pushed to GitHub:
+
+```bash
+# 1. List all ASVS sections in the data store
+curl -s -u admin:password "http://localhost:5984/agent_data_store/_find" \
+  -H "Content-Type: application/json" \
+  -d '{"selector":{"namespace":"asvs","key":{"$regex":"^asvs:requirements:"}}, "fields":["key"], "limit":999}' \
+  | python3 -c "
+import sys, json
+docs = json.load(sys.stdin)['docs']
+sections = sorted([d['key'].replace('asvs:requirements:','') for d in docs])
+with open('/tmp/asvs_sections.txt', 'w') as f:
+    for s in sections: f.write(s + '\n')
+print(f'Data store: {len(sections)} sections')
+"
+
+# 2. List all report files on GitHub
+REPO="apache/tooling-agents"
+DIR="ASVS/reports/steve/v3/d0aa7e9"   # adjust to your run
+TOKEN="ghp_..."
+
+curl -s -H "Authorization: token $TOKEN" \
+  "https://api.github.com/repos/$REPO/git/trees/main?recursive=1" \
+  | python3 -c "
+import sys, json, re
+tree = json.load(sys.stdin).get('tree', [])
+reports = set()
+for item in tree:
+    p = item.get('path', '')
+    if p.startswith('$DIR/') and p.endswith('.md') and item['type'] == 'blob':
+        fname = p.split('/')[-1].replace('.md', '')
+        if re.match(r'^\d+\.\d+\.\d+$', fname):
+            reports.add(fname)
+with open('/tmp/github_reports.txt', 'w') as f:
+    for s in sorted(reports): f.write(s + '\n')
+print(f'GitHub reports: {len(reports)} sections')
+"
+
+# 3. Show missing
+echo "=== Missing reports ==="
+comm -23 /tmp/asvs_sections.txt /tmp/github_reports.txt
+```
+
+### Re-run failed sections
+
+Use `rerun_sections.sh` to audit missing sections and push them to a `rerun` subdirectory under the original output directory:
+
+```bash
+./rerun_sections.sh <namespace> <output_repo> <output_token> <output_dir> <section> [section...]
+```
+
+Example:
+
+```bash
+./rerun_sections.sh "files:apache/steve/v3" apache/tooling-agents ghp_xxx \
+  ASVS/reports/steve/v3/d0aa7e9 1.3.3 1.5.1 1.5.2 1.5.3 3.5.7
+```
+
+To re-run consolidation after filling in the gaps, add `--consolidate`:
+
+```bash
+./rerun_sections.sh "files:apache/steve/v3" apache/tooling-agents ghp_xxx \
+  ASVS/reports/steve/v3/d0aa7e9 --consolidate 1.3.3 1.5.1 1.5.2 1.5.3 3.5.7
+```
+
+The consolidator reads all subdirectories (including `rerun/`) and deduplicates findings across them.
+
+### Data store inspection
+
+```bash
+# Count sections by level
+curl -s -u admin:password "http://localhost:5984/agent_data_store/_find" \
+  -H "Content-Type: application/json" \
+  -d '{"selector":{"namespace":"asvs","key":{"$regex":"^asvs:requirements:"}}, "fields":["key","value"], "limit":999}' \
+  | python3 -c "
+import sys, json
+from collections import Counter
+docs = json.load(sys.stdin)['docs']
+levels = Counter(f'L{d[\"value\"].get(\"level\",\"?\")}' for d in docs)
+for lv in ['L1','L2','L3']: print(f'  {lv}: {levels.get(lv,0)}')
+print(f'  Total: {sum(levels.values())}')
+"
+
+# List all namespaces and document counts
+curl -s -u admin:password "http://localhost:5984/agent_data_store/_find" \
+  -H "Content-Type: application/json" \
+  -d '{"selector":{},"fields":["namespace"],"limit":99999}' \
+  | python3 -c "
+import sys, json
+from collections import Counter
+docs = json.load(sys.stdin)['docs']
+for ns, count in sorted(Counter(d['namespace'] for d in docs).items()):
+    print(f'  {count}\t{ns}')
+"
+```
+
+---
+
 ## Troubleshooting
 
 **"sourceRepo is required"** — Provide `sourceRepo` as `owner/repo`, `owner/repo/subdir`, or a full GitHub URL.
