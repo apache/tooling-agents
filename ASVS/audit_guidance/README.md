@@ -52,7 +52,3 @@ audit_guidance/
 ```
 
 The orchestrator loads all guidance files for the target project into the data store before starting the audit. The audit agent includes them in its prompt context when analyzing each ASVS section.
-
-## Current Guidance
-
-The files at the top level of this directory are ATR (tooling-trusted-releases) guidance from the initial pilot. They should eventually be moved into a `tooling-trusted-releases/` subdirectory as more projects are onboarded.
