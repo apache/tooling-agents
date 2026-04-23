@@ -2,9 +2,9 @@
 
 Research and evaluation of automated security tooling for open source projects. This directory tracks tools we've evaluated, how they compare to what we've built, and where they complement each other.
 
-## Our Tools
+## Tooling-Agents Pipelines
 
-We maintain two pipelines, both running on the [Gofannon](../gofannon/) agent platform:
+The Tooling team maintains two pipelines, both running on the [Gofannon](../gofannon/) agent platform:
 
 **ASVS Security Audit Pipeline** ([ASVS/](../../ASVS/)) — LLM-driven code analysis against OWASP ASVS v5.0.0 requirements. Uses architecture-aware domain scoping to audit 345 requirements across 3 levels. Produces per-requirement reports, consolidated findings, and GitHub issues. In production, piloted on ATR and Apache Steve.
 
@@ -27,7 +27,7 @@ We maintain two pipelines, both running on the [Gofannon](../gofannon/) agent pl
 
 ### CI/CD and Workflow Security
 
-| | **Our GHA Review Pipeline** | **ASF infrastructure-actions** | **zizmor** |
+| | **GHA Review Pipeline** | **ASF infrastructure-actions** | **zizmor** |
 |---|---|---|---|
 | **What it does** | Org-wide GHA security audit: finds exploitable workflows across all repos | Allowlist governance: controls which external actions ASF projects can use | Per-repo static analysis of workflow YAML for security issues |
 | **Scope** | All repos in a GitHub org (scanned 2,500+ Apache repos) | All apache/* repos (policy enforcement) | Single repo or directory of workflows |
@@ -38,23 +38,23 @@ We maintain two pipelines, both running on the [Gofannon](../gofannon/) agent pl
 | **Maturity** | In production | In production (ASF Infra) | Mature, adopted by Grafana Labs and others at scale |
 | **URL** | [gha-review/](../../gha-review/) | [apache/infrastructure-actions](https://github.com/apache/infrastructure-actions) | [docs.zizmor.sh](https://docs.zizmor.sh) |
 
-## How They Relate to What We Built
+## How They Relate
 
 **Scorecard** checks whether you have good security practices (branch protection, dependency management, SAST enabled) but never reads your code. Complementary to our ASVS pipeline, which does the opposite: deep code analysis against a formal standard. We ran Scorecard on ATR and scored 6.2/10 — the findings (missing SAST, branch protection gaps) were entirely disjoint from what our ASVS audit found (missing rate limiting, session fixation, weak crypto).
 
 **OSS-CRS** finds memory safety bugs through fuzzing and generates patches. Completely different class of vulnerability from what ASVS covers. Requires OSS-Fuzz-compatible build configuration, so it's limited to projects already set up for fuzzing. The 20-40% semantically incorrect patch rate underscores the need for human review.
 
-**Strix** is the closest analog to our ASVS pipeline in terms of ambition — it also uses LLMs to find security issues in application code. But the approach is fundamentally different: Strix acts as a pentester (running code, probing endpoints, exploiting vulns) while our pipeline acts as an auditor (reading code against a compliance standard). Strix finds exploitable runtime vulnerabilities with PoCs; our pipeline finds architectural gaps and missing controls against ASVS requirements. Both are valuable, and they'd find different things on the same codebase.
+**Strix** is the closest analog to the ASVS pipeline in terms of ambition — it also uses LLMs to find security issues in application code. But the approach is fundamentally different: Strix acts as a pentester (running code, probing endpoints, exploiting vulns) while the ASVS pipeline acts as an auditor (reading code against a compliance standard). Strix finds exploitable runtime vulnerabilities with PoCs; the ASVS pipeline finds architectural gaps and missing controls against ASVS requirements. Both are valuable, and they'd find different things on the same codebase.
 
-**Brief** is interesting as a potential complement to our `discover_codebase_architecture` agent. Brief does static project structure detection (languages, frameworks, package managers, CI config) as a fast Go binary. Our discover agent uses an LLM to map code into ASVS-relevant security domains. Brief could provide the initial inventory that the LLM then reasons about, potentially reducing token usage and improving accuracy.
+**Brief** is interesting as a potential complement to the `discover_codebase_architecture` agent. Brief does static project structure detection (languages, frameworks, package managers, CI config) as a fast Go binary. The discover agent uses an LLM to map code into ASVS-relevant security domains. Brief could provide the initial inventory that the LLM then reasons about, potentially reducing token usage and improving accuracy.
 
 **Scrutineer** is early but likely headed toward automated pentesting, similar to Strix. The Alpha-Omega team's focus is finding real vulnerabilities in critical OSS projects, and the repo structure (Go binary, modular skills, Docker runner) suggests a tool for active security testing rather than static analysis. Worth monitoring — Alpha-Omega has the funding and OSS relationships to make this impactful.
 
-**Our GHA review pipeline** is unique among these tools — none of the others analyze CI/CD workflow security at the organization level. It complements two tools already in use at ASF:
+**The GHA review pipeline** is unique among these tools — none of the others analyze CI/CD workflow security at the organization level. It complements two tools already in use at ASF:
 
-**ASF infrastructure-actions** is the governance layer: it maintains an allowlist of approved actions and requires security review before any external action can be used. `utils/action-usage.sh` checks whether an action is still used anywhere across the org. This is policy enforcement — it controls what _can_ run but doesn't audit what _is_ running. Our GHA review pipeline fills that gap by scanning all 2,500+ repos to find exploitable patterns in the workflows themselves.
+**ASF infrastructure-actions** is the governance layer: it maintains an allowlist of approved actions and requires security review before any external action can be used. `utils/action-usage.sh` checks whether an action is still used anywhere across the org. This is policy enforcement — it controls what _can_ run but doesn't audit what _is_ running. The GHA review pipeline fills that gap by scanning all 2,500+ repos to find exploitable patterns in the workflows themselves.
 
-**zizmor** is the per-repo static scanner recommended by ASF Infra. It's excellent for individual repos — it finds injection via `${{ }}` interpolation, unpinned actions, cache poisoning, and known vulnerable actions, and outputs SARIF for GitHub code scanning. Our pipeline operates at a different level: org-wide risk assessment, cross-referencing security findings with publishing analysis to identify which vulnerable repos actually push packages to public registries. zizmor tells you "this workflow has an injection"; our pipeline tells you "this repo publishes to PyPI AND has a CRITICAL injection — this is your P0."
+**zizmor** is the per-repo static scanner recommended by ASF Infra. It's excellent for individual repos — it finds injection via `${{ }}` interpolation, unpinned actions, cache poisoning, and known vulnerable actions, and outputs SARIF for GitHub code scanning. The GHA review pipeline operates at a different level: org-wide risk assessment, cross-referencing security findings with publishing analysis to identify which vulnerable repos actually push packages to public registries. zizmor tells you "this workflow has an injection"; the GHA review pipeline tells you "this repo publishes to PyPI AND has a CRITICAL injection — this is your P0."
 
 ## Evaluation Results
 

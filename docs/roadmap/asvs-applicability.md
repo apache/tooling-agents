@@ -2,7 +2,7 @@
 
 ## Summary
 
-OWASP ASVS v5.0.0 is explicitly designed for web applications. It's an excellent fit for projects like ATR and Steve — server-rendered web apps with authentication, session management, and user-facing endpoints. For libraries, CLI tools, and backend services without HTTP interfaces, ASVS has significant coverage gaps and many requirements that simply don't apply. This isn't a limitation of our pipeline — it's a limitation of the standard itself.
+OWASP ASVS v5.0.0 is explicitly designed for web applications. It's an excellent fit for projects like ATR and Steve — server-rendered web apps with authentication, session management, and user-facing endpoints. For libraries, CLI tools, and backend services without HTTP interfaces, ASVS has significant coverage gaps and many requirements that simply don't apply. This isn't a limitation of the pipeline — it's a limitation of the standard itself.
 
 See the [ASVS pipeline documentation](../../ASVS/README.md) for how the pipeline works, and the [spec expansion plans](specs/) for how we plan to address this.
 

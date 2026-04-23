@@ -18,6 +18,10 @@ Test harness design for measuring pipeline quality and operating at scale. Cover
 
 Implementation plan for Phase 0: renaming the pipeline from ASVS to security, making agents spec-agnostic, adding the `spec` input parameter, data store schema per spec, spec selection modes, cross-spec deduplication, and migration path. This is the prerequisite for all spec additions below.
 
+### [How tooling-agents Complements ATR](specs/atr-integration.md)
+
+How every tool in the tooling-agents portfolio — ASVS audit, GHA Review, ASF Baseline, and SLSA — fills gaps that ATR can't cover, and how ATR covers the distribution layer that tooling-agents doesn't address. The three-layer model: source/CI security → build integrity → release verification.
+
 ### Multi-Spec Expansion
 
 The pipeline currently audits against OWASP ASVS only. These plans extend it to additional security specifications, with automatic spec selection based on project type.

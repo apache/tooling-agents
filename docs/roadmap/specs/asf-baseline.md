@@ -65,19 +65,24 @@ Draft requirements, organized by category. These should be developed collaborati
 
 ## Relationship to Apache Trusted Releases (ATR)
 
-ATR already verifies many of the same properties — release signing, checksums, license compliance — at distribution time. The ASF Baseline checks these at development time, in the source code and CI configuration that produces the release.
+See also: [How tooling-agents Complements ATR](atr-integration.md) for the full three-layer model.
 
-| Concern | ATR (runtime) | ASF Baseline (source) |
+ATR runs a comprehensive verification pipeline on release artifacts: GPG signature verification against PMC keys with Apache UID enforcement, SHA-256/SHA-512 hash verification (MD5 forbidden, SHA-1 deprecated), source-to-release file tree comparison via Git, Apache license header scanning across 25+ language patterns, LICENSE/NOTICE file checks, CycloneDX SBOM generation, and OSV vulnerability scanning across 30+ databases.
+
+The ASF Baseline checks these same concerns at development time, in the source code and CI configuration that produces the release:
+
+| Concern | ATR (verifies artifacts) | ASF Baseline (checks source & CI) |
 |---|---|---|
-| Release signing | "Is this artifact signed with a KEYS-listed key?" | "Does the release workflow include a signing step?" |
-| Checksums | "Does this artifact have a published SHA-512?" | "Does the CI generate checksums before upload?" |
-| License headers | "Does the source archive contain Apache headers?" | "Do all source files have headers? Is the check in CI?" |
-| NOTICE file | "Is NOTICE present in the release?" | "Is NOTICE maintained in source and updated with deps?" |
-| Dependency licenses | "Does the binary release include Category X deps?" | "Does the CI check license compatibility before merge?" |
+| Release signing | Verifies GPG signatures against PMC keys, requires Apache UID on signing key | "Does the release workflow include a signing step?" |
+| Checksums | Computes and verifies SHA-256/SHA-512 (MD5 forbidden) using timing-safe comparison | "Does the CI generate checksums before upload?" |
+| License headers | Scans release archive for Apache License headers across 25+ language patterns | "Do all source files have headers? Is the check in CI?" |
+| Source integrity | Clones tagged source via Git and compares file tree against release archive | "Is the tagged source the same as what's in the repo?" |
+| NOTICE file | Checks presence in the release archive | "Is NOTICE maintained in source and updated with deps?" |
+| Vulnerabilities | OSV scanning of CycloneDX SBOM components via PackageURL | "Is Dependabot/Renovate enabled? Are SLAs met?" |
 
-This is belt-and-suspenders: ATR is the gate that catches problems at release time, ASF Baseline is the shift-left check that catches them during development so they never reach the gate. A project passing ASF Baseline should have a smooth ATR release process. A project failing ASF Baseline will hit friction at release time that ATR surfaces.
+This is belt-and-suspenders: ATR catches problems at release time, ASF Baseline catches them during development so they never reach ATR. A project passing ASF Baseline should have a smooth ATR release process. A project failing ASF Baseline will discover the problems when ATR blocks their release.
 
-For projects already using ATR, the ASF Baseline findings are mostly informational ("you'll pass ATR because your CI already handles this"). For projects not yet using ATR, the ASF Baseline tells them what to fix before they try to release.
+For projects already using ATR, the ASF Baseline findings on release-related requirements are largely informational — "you'll pass ATR because your CI already handles this." The ASF Baseline's unique value is the non-release requirements that ATR doesn't cover: OAuth delegation, committer/PMC authorization, GHA SHA pinning, and infrastructure conventions.
 
 ## How This Differs from Other Specs
 
@@ -151,7 +156,7 @@ Some ASF Baseline requirements can be evaluated without an LLM:
 | ASF-LIC-2 (NOTICE file) | File existence check | No |
 | ASF-VULN-1 (SECURITY.md) | File existence check | No |
 | ASF-VULN-2 (dependency scanning) | Check for dependabot.yml | No |
-| ASF-INFRA-2 (SHA-pinned actions) | Parse workflow YAML | No (our GHA pipeline does this) |
+| ASF-INFRA-2 (SHA-pinned actions) | Parse workflow YAML | No (the GHA review pipeline does this) |
 | ASF-AUTH-1 (OAuth delegation) | Code analysis | Yes |
 | ASF-AUTH-2 (committer/PMC authz) | Code analysis | Yes |
 | ASF-REL-3 (reproducible build) | Build system analysis | Yes |

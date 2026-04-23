@@ -4,7 +4,12 @@
 
 [SLSA (Supply-chain Levels for Software Artifacts)](https://slsa.dev/) is a framework for ensuring the integrity of software artifacts throughout the supply chain. It defines build levels (1–3) with increasing requirements for build process security, provenance generation, and artifact verification.
 
-SLSA complements our existing tools: the ASVS pipeline checks application code, the GHA review pipeline checks workflow security, and SLSA checks the build process itself — whether the artifact you're distributing was actually built from the source you tagged.
+SLSA has two sides: **assessment** (is the project set up to produce provenance?) and **verification** (does this specific artifact have valid provenance?). These belong in different tools:
+
+- **tooling-agents** handles SLSA assessment — analyzing CI workflow files to determine whether the project is configured for provenance generation, build isolation, and reproducibility. This is the same shift-left pattern as ASF Baseline: checking development practices, not release artifacts.
+- **ATR** is the natural home for SLSA verification — it already has the released artifacts in hand and could verify provenance attestations (`.intoto.jsonl`, Sigstore bundles) alongside its existing GPG signature and hash checks.
+
+Everything in this document describes the assessment side — what tooling-agents would check in CI configuration. Artifact-level provenance verification would be an ATR enhancement.
 
 ## Where SLSA Fits
 
@@ -21,7 +26,7 @@ SLSA complements our existing tools: the ASVS pipeline checks application code, 
 | Source integrity | — | — | — | ✅ |
 | Build isolation | — | — | — | ✅ |
 
-SLSA is primarily relevant for projects that publish packages (npm, PyPI, Maven, Docker Hub). Our GHA review already identifies which ASF projects publish — that data feeds directly into SLSA scoping.
+SLSA is primarily relevant for projects that publish packages (npm, PyPI, Maven, Docker Hub). The GHA review pipeline already identifies which ASF projects publish — that data feeds directly into SLSA scoping.
 
 ## SLSA v1.0 Requirements
 
@@ -54,17 +59,18 @@ SLSA is primarily relevant for projects that publish packages (npm, PyPI, Maven,
 
 ## Analysis Approach
 
-SLSA requirements are about the build process, not application code. The audit approach is different from ASVS:
+SLSA assessment examines the build configuration, not the build output. The inputs are CI workflow files and build configuration — the same files the GHA review pipeline already caches.
 
 ### What to Analyze
 
 | Source | What it tells us |
 |---|---|
-| CI workflow files (`.github/workflows/`) | Build steps, triggers, artifact generation |
-| Build configuration (`Makefile`, `pyproject.toml`, `pom.xml`, `Dockerfile`) | Build inputs, dependencies, output artifacts |
+| CI workflow files (`.github/workflows/`) | Build steps, triggers, provenance generation steps |
+| Build configuration (`Makefile`, `pyproject.toml`, `pom.xml`, `Dockerfile`) | Build inputs, dependencies, reproducibility potential |
 | Release scripts | Signing, checksums, upload steps |
-| Package registry configuration | Trusted publishing setup, API tokens |
-| Provenance artifacts (if any) | `*.intoto.jsonl`, Sigstore attestations |
+| Package registry configuration | Trusted publishing setup, OIDC token usage |
+
+Note: actual provenance artifacts (`*.intoto.jsonl`, Sigstore bundles) are not inputs to the assessment. Verifying those against a released artifact would be an ATR feature.
 
 ### Hybrid: Static + LLM
 
@@ -81,7 +87,7 @@ Like the ASF Baseline, many SLSA requirements can be checked statically:
 
 ## Integration with GHA Review
 
-Our GHA review pipeline already has the data SLSA needs:
+The GHA review pipeline already has the data SLSA needs:
 
 | GHA Review Data | SLSA Use |
 |---|---|
@@ -165,7 +171,7 @@ Add `slsa-github-generator` to the release workflow:
 
 ## Connection to Trusted Publishing
 
-Our GHA review already identifies "Trusted Publishing Migration Opportunities" — repos using long-lived API tokens where OIDC-based trusted publishing is available. SLSA L2+ requires platform-authenticated provenance, which aligns with trusted publishing:
+The GHA review pipeline already identifies "Trusted Publishing Migration Opportunities" — repos using long-lived API tokens where OIDC-based trusted publishing is available. SLSA L2+ requires platform-authenticated provenance, which aligns with trusted publishing:
 
 - Trusted publishing: "the registry trusts the build platform's identity"
 - SLSA L2: "provenance is authenticated by the build platform"
@@ -174,17 +180,80 @@ These are two sides of the same coin. A project that adopts trusted publishing i
 
 ## Relationship to ATR and ASF Baseline
 
+See also: [How tooling-agents Complements ATR](atr-integration.md) for the full three-layer model.
+
 ATR, SLSA, and ASF Baseline address artifact integrity at three different layers:
 
 | Layer | Tool | Question it answers |
 |---|---|---|
 | **Source & CI** | ASF Baseline | "Is the code and CI configured to produce secure releases?" |
 | **Build process** | SLSA | "Was this artifact built securely, with provenance?" |
-| **Distribution** | ATR | "Is this released artifact signed, checksummed, and license-compliant?" |
+| **Distribution** | ATR | "Is this released artifact verified end-to-end?" |
 
-They form a chain: ASF Baseline checks that your release workflow has a signing step → SLSA verifies the build produced provenance and ran in an isolated environment → ATR verifies the final artifact is signed and has checksums before it reaches mirrors.
+### What ATR Actually Does (from source code)
 
-A project with all three has end-to-end assurance: the source is set up correctly (Baseline), the build is tamper-resistant (SLSA), and the artifact is verified at distribution (ATR).
+ATR is not a simple "check if signed" tool. It runs a comprehensive verification pipeline and tracks build provenance:
+
+**Verification checks** (`atr/tasks/checks/`):
+
+| Check | Module | What it does |
+|---|---|---|
+| Signature verification | `signature.py` | Full GPG verification of detached `.asc` signatures against PMC member keys from KEYS files. Requires signing keys to have an Apache UID. |
+| Hash verification | `hashing.py` | Computes and verifies SHA-256/SHA-512 checksums |
+| File tree comparison | `compare.py` | Compares source repo against release archive to detect tampering |
+| License headers | `rat.py` | Runs Apache RAT for license header compliance |
+| License policy | `license.py` | Three-tier license enforcement (A/B/X categories) |
+| SBOM generation | `sbom/` | CycloneDX SBOM with NTIA 2021 conformance |
+| Vulnerability scanning | `sbom/osv.py` | Batch OSV scanning of all SBOM components |
+
+**Provenance tracking** (`atr/attestable.py`, `atr/models/`):
+
+| Capability | What it does |
+|---|---|
+| GitHub Trusted Publisher | Accepts and stores OIDC tokens from GitHub Actions — captures commit SHA, repository, workflow ref, workflow SHA, runner environment, actor, ref/tag |
+| Per-file attestable state | `AttestableV2` tracks content hashes, file classifications, upload attribution (who uploaded what in which revision), and per-path provenance across revisions |
+| Signature provenance API | `/signature/provenance` endpoint: given a signature, identifies which committee published the artifact, returns signing key and KEYS file URL |
+| Hash attribution | Tracks which user uploaded each content hash and in which revision number |
+
+### How This Maps to SLSA
+
+| SLSA Requirement | ATR Coverage |
+|---|---|
+| L1-1: Provenance exists | ✅ GitHub TP payload captures build metadata |
+| L1-2: Build platform identified | ✅ TP payload includes `runner_environment`, `iss` |
+| L1-3: Source repo and commit | ✅ TP payload includes `repository`, `sha` |
+| L2-1: Hosted build | ✅ TP payload includes `runner_environment` |
+| L2-2: Signed provenance | ⚠️ GPG sigs are human-signed. TP OIDC tokens are platform-authenticated but stored in ATR's format, not published as SLSA attestations |
+| L2-3: Platform-authenticated provenance | ⚠️ TP payload IS platform-authenticated (OIDC), but not re-published in in-toto/SLSA format |
+| L2-4: Verifiable by consumers | ⚠️ Provenance API exists but returns ATR-format data, not standard SLSA attestations |
+| L3-1: Ephemeral build | ❌ Not checked |
+| L3-2: Build isolation | ❌ Not checked |
+| L3-3: Declared inputs | ❌ Not checked |
+| L3-4: Reproducible build | ❌ Not checked |
+
+### Where SLSA Adds Value
+
+ATR already covers L1 and partially L2 through its Trusted Publisher integration. The real gap is L3 — build environment properties:
+
+| Concern | ATR | SLSA Assessment (tooling-agents) |
+|---|---|---|
+| "Is the artifact signed by a PMC member?" | ✅ | — |
+| "Was this built from the tagged commit?" | ✅ (via TP payload `sha`) | ✅ (checks workflow references commit) |
+| "Which workflow produced this?" | ✅ (via TP payload `workflow_ref`) | ✅ (checks workflow exists) |
+| "Was the build environment ephemeral?" | — | ✅ L3 (checks for self-hosted runners) |
+| "Were build inputs fully declared?" | — | ✅ L3 (analyzes build config) |
+| "Is the build reproducible?" | — | ✅ L3 (analyzes build system) |
+| "Was the build isolated from other builds?" | — | ✅ L3 (checks runner config) |
+
+A compromised build system could produce a properly signed, hash-verified, TP-attested artifact that contains a backdoor. ATR would accept it because the signatures and provenance are valid. SLSA L3 (build isolation + declared inputs + reproducibility) makes this attack much harder to execute.
+
+### Responsibility Split
+
+**tooling-agents** does SLSA assessment: "Is this project's CI configured for provenance generation, build isolation, and reproducibility?" Input is workflow YAML and build configuration files — the same data the GHA review pipeline already caches. Output is a per-project SLSA level assessment with remediation guidance.
+
+**ATR** does partial SLSA verification today through Trusted Publisher: it captures and stores OIDC provenance payloads (commit SHA, workflow ref, runner environment) and exposes a `/signature/provenance` API. A future ATR enhancement could publish these as standard SLSA/in-toto attestations alongside the released artifacts, closing the L2 gap (ATR has the data, just not in SLSA format).
+
+For projects already using ATR with GitHub Trusted Publishing, the SLSA assessment from tooling-agents would focus almost entirely on L3 requirements since L1 and most of L2 are already covered by ATR's TP integration.
 
 ## Estimated Effort
 
