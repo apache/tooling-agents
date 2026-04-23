@@ -984,13 +984,26 @@ End with ---."""
                     result, _ = await call_llm(provider=FAST_PROVIDER, model=FAST_MODEL,
                         messages=[{"role": "user", "content": prompt}],
                         parameters={**FAST_PARAMS, "max_tokens": 64000}, timeout=900)
-                    issues_parts.append(sanitize_md_html(result))
+                    result = sanitize_md_html(result)
+                    # Count how many issues were generated
+                    generated_ids = set(re.findall(r'FINDING-(\d{3})', result))
+                    expected_ids = set(f["global_id"].replace("FINDING-", "") for f in batch if "global_id" in f)
+                    missing_ids = expected_ids - generated_ids
+                    issues_parts.append(result)
+                    if missing_ids:
+                        # Fill in missing issues with deterministic fallback
+                        missing_findings = [f for f in batch if f.get("global_id", "").replace("FINDING-", "") in missing_ids]
+                        fb = []
+                        for f in missing_findings:
+                            fb.append(f"---\n\n## Issue: {f['global_id']} - {sanitize_md_html(f.get('title',''))}\n\n**Labels:** bug, security, priority:{f.get('severity','Medium').lower()}\n\n**Description:**\n\n{sanitize_md_html(f.get('description',''))}\n\n**Remediation:** {sanitize_md_html(f.get('recommended_remediation',''))}\n\n**Priority:** {f.get('severity','Medium')}")
+                        issues_parts.append("\n\n".join(fb))
+                        print(f"    Filled {len(missing_findings)} missing issues from batch")
                     break
                 except:
                     if attempt < 2:
                         await asyncio.sleep(5)
                     else:
-                        # Fallback
+                        # Full fallback
                         fb = []
                         for f in batch:
                             fb.append(f"---\n\n## Issue: {f['global_id']} - {sanitize_md_html(f.get('title',''))}\n\n**Labels:** bug, security, priority:{f.get('severity','Medium').lower()}\n\n**Description:**\n\n{sanitize_md_html(f.get('description',''))}\n\n**Remediation:** {sanitize_md_html(f.get('recommended_remediation',''))}\n\n**Priority:** {f.get('severity','Medium')}")
