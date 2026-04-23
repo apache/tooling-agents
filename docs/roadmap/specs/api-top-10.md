@@ -142,7 +142,7 @@ When API Top 10 and ASVS produce overlapping findings, the consolidated report n
 | Write ingest script (10 entries, manually curated) | Half day | None |
 | Build cross-reference mapping (API ↔ ASVS ↔ CWE) | Half day | CWE ingest |
 | Audit prompt template | Half day | None |
-| Add API detection to discovery agent | Half day | Phase 0 rename |
+| Add API detection to discovery agent | Half day | [Phase 0](../multi-spec-architecture.md) |
 | Test with ATR (has REST API) | Half day | Ingest script |
 | **Total** | **~2.5 days** | |
 

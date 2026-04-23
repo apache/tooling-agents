@@ -157,9 +157,9 @@ Draft the initial spec based on existing ASF policy documents, then iterate thro
 |---|---|---|
 | Draft requirements (from ASF policy docs) | 2 days | Community input |
 | Write ingest script | Half day | Draft requirements |
-| Implement static checks (no-LLM fast path) | 2 days | Phase 0 rename |
+| Implement static checks (no-LLM fast path) | 2 days | [Phase 0](../multi-spec-architecture.md) |
 | Write audit prompts for LLM-required checks | 1 day | Draft requirements |
 | Community review and iteration | 2 weeks | Draft complete |
-| Integrate with discovery agent | Half day | Phase 0 rename |
+| Integrate with discovery agent | Half day | [Phase 0](../multi-spec-architecture.md) |
 | **Total (engineering)** | **~6 days** | |
 | **Total (with review)** | **~3 weeks** | |

@@ -162,7 +162,7 @@ When both ASVS and CWE Top 25 are selected, the consolidator uses cross-referenc
 | Write ingest script for CWE data | 1 day | None |
 | Build cross-reference mapping (CWE ↔ ASVS) | 1 day | Ingest script |
 | Adapt audit prompt template for CWE format | Half day | None |
-| Add language filtering to discovery agent | Half day | Phase 0 rename |
-| Update consolidator for cross-spec dedup | 1 day | Phase 0 rename |
+| Add language filtering to discovery agent | Half day | [Phase 0](../multi-spec-architecture.md) |
+| Update consolidator for cross-spec dedup | 1 day | [Phase 0](../multi-spec-architecture.md) |
 | Test with library fixture | 1 day | Eval framework |
 | **Total** | **~5 days** | |
