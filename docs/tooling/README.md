@@ -67,6 +67,9 @@ We maintain two pipelines, both running on the [Gofannon](../gofannon/) agent pl
 
 ## Links
 
+- [ASVS Applicability Study](../roadmap/asvs-applicability.md) — where ASVS fits (web apps) and where it doesn't (libraries, backend services)
+- [Eval Framework](../roadmap/eval-framework.md) — test harness, fixtures, metrics, and operational error handling at scale
+- [Multi-Spec Roadmap](../roadmap/) — expanding the pipeline beyond ASVS to CWE Top 25, API Top 10, ASF Baseline, and SLSA
 - [OWASP ASVS v5.0.0 PDF](https://github.com/OWASP/ASVS/blob/v5.0.0/5.0/OWASP_Application_Security_Verification_Standard_5.0.0_en.pdf)
 - [OpenSSF Scorecard documentation](https://github.com/ossf/scorecard)
 - [OSS-CRS paper](https://arxiv.org/abs/2603.08566)

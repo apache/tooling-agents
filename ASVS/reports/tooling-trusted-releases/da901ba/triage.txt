@@ -1,0 +1,242 @@
+001 Fixed
+002 Fixed
+003 Fixed
+004 https://github.com/apache/tooling-trusted-releases/issues/723
+005 https://github.com/apache/tooling-trusted-releases/issues/731
+006 Todo - priority
+007 Todo - attach to session store - validate_session_lifetime won't be needed when we use update to asfquart https://github.com/apache/tooling-trusted-releases/issues/731
+008 Fixed - prompts
+009 Todo - overall key management, historical keys, etc.
+010 Todo - asfquart
+011 Todo - either make a separate blueprint for protected endpoints or take the advice
+012 Fixed
+013 Todo
+014 Todo - possibly remove endpoint
+015 Fixed
+016 Todo - asfpy - security
+017 Todo - add inline audit_guidance https://github.com/apache/tooling-trusted-releases/issues/666
+018 Todo - combine with 009
+019 Todo
+020 Todo - confirm this is in audit_guidance
+021 Todo
+022 Todo
+023 Todo - sbp
+024 Dupe of 009
+025 Todo - audit_guidance
+026 Todo - review business logic, related to 022
+027 Todo
+028 Todo - related to 004
+029 Todo
+030 Todo - review two-phase voting for podlings
+031 Todo - clean out old code
+032 Todo - https://github.com/apache/tooling-trusted-releases/issues/716
+033 Todo
+034 Todo - audit_guidance about clear not being needed because write effectively does a clear by OVERWRITING IT
+035 Todo - related to 007 and session store
+036 Todo
+037 Todo - related to session store
+038 Todo - asfquart
+039 Todo - confirm
+040 Todo - audit_guidance copy https://github.com/apache/tooling-trusted-releases/blob/main/atr/docs/code-policies.md in
+041 Todo - atr/docs and audit_guidance about the special stance we have as an open software group, allowing this intentionally
+042 Dupe of 016
+043 Todo - asfpy confidential
+044 Todo - https://github.com/apache/tooling-trusted-releases/issues/944
+045 Dupe of 044
+046 Dupe of 011, actually provides the detail missing in 011
+047 Todo
+048 Not an issue
+046 Dupe of 011 and 046
+050 Todo - adjacent to https://github.com/apache/tooling-trusted-releases/issues/723
+051 Not an issue
+052 Todo - documentation - long-term
+053 Todo - long-term - possibly remove code
+054 Fixed
+055 Todo - confirm
+056 Todo
+057 Todo - look at all atr/storage/writers; balance info with spam
+058 Todo
+059 Todo - discussion, long-term, find standard and choose a spec level; allow 2048, new keys to be 4096 (add a check, sbp)
+060 Todo - asfquart
+061 Todo - asfquart - possibly goes on MFA server
+062 Known issue
+063 Not an issue
+064 Fixed
+065 - Fixed
+066 - Not an issue
+067 - Todo - asfquart
+068 - Todo - asfquart offer to contribute create_secure_session
+069 - Todo
+070 - Todo - related to 069
+071 - Todo - asfpy
+072 - Todo - cross-post to asfpy also
+073 - Todo - add validation for leading hyphens to safe.RelPath
+074 - Todo
+075 - Todo - low
+076 - Todo
+077 - Todo
+078 - Todo - audit_guidance
+079 - Todo - audit_guidance
+080 - Todo - asfpy
+081 - Todo - in-line audit_guidance, known issue and the code will change
+082 - Todo - add a safe thread type
+083 - Todo
+084 - Todo - asfpy
+085 - Todo - sbp
+086 - Todo - related to 085 - sbp
+087 - Todo - related to 085 - sbp
+088 - Todo - related to 055 - confirm
+089 - Todo
+090 - Not an issue
+091 - Todo - confirm, maybe add an inline comment
+092 - Defer - talk to sbp
+093 - Todo
+094 - Fixed
+095 - Not an issue
+096 - Not an issue
+097 - Not an issue
+098 - Todo - review API for drift compared to the web site
+099 - Todo
+100 - Todo - confirm the web does this, that the method does what it says, possibly abstract it to use a protocol
+101 - Todo - related to 099
+102 - Fixed
+103 - Todo - related to https://github.com/apache/tooling-trusted-releases/issues/968
+104 - Fixed
+105 - Todo - related to https://github.com/apache/tooling-trusted-releases/issues/968
+106 - Todo - low
+107 - Todo - already an issue https://github.com/apache/infrastructure-asfquart/issues/69
+108 - Todo - audit_guidance "text values given to htm are safe by construction"
+109 - Fixed
+110 - Fixed
+111 - Fixed
+112 - Fixed
+113 - Todo - @sbp check quart_schema
+114 - Todo - asfquart
+115 - Todo - @andrewmusselman check skip lists for .js and .ts
+116 - Todo
+117 - Fixed
+118 - Not an issue
+119 - Todo - related to https://github.com/apache/tooling-trusted-releases/issues/968
+120 - Todo - related to https://github.com/apache/tooling-trusted-releases/issues/968
+121 - Todo
+122 - Todo
+123 - Todo
+124 - Fixed
+125 - Fixed
+126 - Todo - related to https://github.com/apache/tooling-trusted-releases/issues/723
+127 - Todo - documentation - audit_guidance add info about the purpose of docs in audit_guidance, also add public docs about SSH auth
+128 - Todo - documentation - add docs saying we do not have adaptive response
+129 - Todo - related to https://github.com/apache/tooling-trusted-releases/issues/951
+130 - Todo - clean up
+131 - Todo - discussion - discuss how we monitor and administer SSH sessions
+132 - Todo - related to 131
+133 - Todo
+134 - Todo - audit_guidance to say we are already logging from @jwtoken.require() to the request log, so this is not an issue
+135 - Todo - asfquart
+136 - Todo
+137 - Todo
+138 - Todo - just admin routes need to be fixed
+139 - Todo
+140 - Todo - audit_guidance - add in-line comment on the get routes, @sbp - possibly rename the function, add blueprint for token roots
+141 - Todo - related to 140
+142 - Not an issue
+143 - Fixed
+144 - Todo
+145 - Fixed
+146 - Fixed
+147 - Todo
+148 - Todo - audit_guidance about projects not moving committees, moving from podling to tlp, project going to or from attic, do not surmise future code changes
+149 - Todo
+150 - Duplicate of 102
+151 - Todo - make sure user id that comes back is the same as the one that initiated the task, also add security guidance
+152 - Todo - audit_guidance about public endpoints, add to what's there
+153 - Not an issue
+154 - Todo - audit_guidance we give room to committees to modify their policy, and anything that is editable is allowed to be
+155 - Fixed
+156 - Todo - compare values
+157 - Todo - documentation
+158 - Todo - related to 157
+159 - Todo - related to 157
+160 - Todo - related to 157
+161 - Not an issue
+162 - Todo - check
+163 - Todo - low
+164 - Todo - asfquart
+165 - Todo - low, also let asfquart know about this
+166 - Todo - asfquart
+167 - Fixed
+168 - Fixed
+169 - Not an issue
+170 - Fixed
+171 - Not an issue
+172 - Not an issue
+173 - Duplicate of 107
+174 - Not an issue
+175 - Fixed
+176 - Fixed
+177 - Todo - clean things up
+178 - Not an issue
+179 - Fixed
+180 - Fixed
+181 - Todo
+182 - Todo - audit_guidance yes this is the intention for public documentation
+183 - Todo - duplicate of 182
+184 - Fixed
+185 - Todo - check into this, make this test-mode only
+186 - Todo - low - consider all-purpose daily tidy task
+187 - Todo - discussion - per another issue we will decide how to handle this, related to https://github.com/apache/tooling-trusted-releases/issues/1033
+188 - Fixed
+189 - Not an issue
+190 - Not an issue
+191 - Fixed
+192 - Todo - wipe isRoot on atr side, related to https://github.com/apache/tooling-trusted-releases/issues/1035
+193 - Todo
+194 - Todo - low
+195 - Todo
+196 - Todo
+197 - Todo
+198 - Todo
+199 - Todo - look for pre-existing scanner
+200 - Todo - look for pre-existing scanner
+201 - Todo
+202 - Todo - get syft via a safer way
+203 - Todo
+204 - Todo - low
+205 - Todo - @sbp
+206 - Todo
+207 - Todo - related to https://github.com/apache/tooling-trusted-releases/issues/276
+208 - Todo
+214 - Todo - if VOTE is completed then do not allow additional votes on POST
+215 - Todo - documentation
+225 - Todo - very-low
+218 - Todo
+222 - Todo
+229 - Todo - @dave2wave
+230 - Todo - @dave2wave
+245 - Todo - discussion - detecting brute force
+246 - Todo
+249 - Todo - very-low
+250 - Todo
+251 - Todo - very-low
+253 - Todo
+258 - Todo - related to https://github.com/apache/tooling-trusted-releases/issues/510
+260 - Todo - check
+262 - Todo - @sbp
+263 - Todo
+267 - Todo
+269 - Todo
+271 - Todo
+276 - Todo - asfquart (memory leak)
+279 - Todo
+283 - Todo
+284 - Todo - very-low
+285 - Todo - asfquart (oauth-oidc)
+286 - Todo
+289 - Todo
+294 - Todo - @dave2wave
+296 - Todo - janitorial services
+302 - Todo - janitorial services
+303 - Todo
+305 - Todo - @andrewmusselman - check
+306 - Todo - @sbp
+308 - Todo - @sbp
