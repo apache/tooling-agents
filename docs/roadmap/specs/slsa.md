@@ -8,16 +8,18 @@ SLSA complements our existing tools: the ASVS pipeline checks application code, 
 
 ## Where SLSA Fits
 
-| Concern | ASVS Pipeline | GHA Review | SLSA |
-|---|---|---|---|
-| Code vulnerabilities | ✅ | — | — |
-| Workflow injection | — | ✅ | — |
-| Unpinned actions | — | ✅ | ✅ (build isolation) |
-| Build provenance | — | — | ✅ |
-| Reproducible builds | — | — | ✅ |
-| Artifact signing | — | — | ✅ |
-| Source integrity | — | — | ✅ |
-| Build isolation | — | — | ✅ |
+| Concern | ASVS Pipeline | GHA Review | ATR | SLSA |
+|---|---|---|---|---|
+| Code vulnerabilities | ✅ | — | — | — |
+| Workflow injection | — | ✅ | — | — |
+| Unpinned actions | — | ✅ | — | ✅ (build isolation) |
+| Release signing | — | — | ✅ (verifies) | ✅ (provenance signing) |
+| Checksums | — | — | ✅ (verifies) | — |
+| License compliance | — | — | ✅ (verifies) | — |
+| Build provenance | — | — | — | ✅ |
+| Reproducible builds | — | — | — | ✅ |
+| Source integrity | — | — | — | ✅ |
+| Build isolation | — | — | — | ✅ |
 
 SLSA is primarily relevant for projects that publish packages (npm, PyPI, Maven, Docker Hub). Our GHA review already identifies which ASF projects publish — that data feeds directly into SLSA scoping.
 
@@ -169,6 +171,20 @@ Our GHA review already identifies "Trusted Publishing Migration Opportunities" �
 - SLSA L2: "provenance is authenticated by the build platform"
 
 These are two sides of the same coin. A project that adopts trusted publishing is halfway to SLSA L2.
+
+## Relationship to ATR and ASF Baseline
+
+ATR, SLSA, and ASF Baseline address artifact integrity at three different layers:
+
+| Layer | Tool | Question it answers |
+|---|---|---|
+| **Source & CI** | ASF Baseline | "Is the code and CI configured to produce secure releases?" |
+| **Build process** | SLSA | "Was this artifact built securely, with provenance?" |
+| **Distribution** | ATR | "Is this released artifact signed, checksummed, and license-compliant?" |
+
+They form a chain: ASF Baseline checks that your release workflow has a signing step → SLSA verifies the build produced provenance and ran in an isolated environment → ATR verifies the final artifact is signed and has checksums before it reaches mirrors.
+
+A project with all three has end-to-end assurance: the source is set up correctly (Baseline), the build is tamper-resistant (SLSA), and the artifact is verified at distribution (ATR).
 
 ## Estimated Effort
 
