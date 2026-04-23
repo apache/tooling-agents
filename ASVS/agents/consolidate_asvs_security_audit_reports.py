@@ -182,6 +182,7 @@ async def run(input_dict, tools):
         print("\n=== PHASE 1: Reading all reports ===")
 
         reports = {}
+        report_dirs = {}  # report_key -> directory it came from
 
         for directory in directories:
             print(f"\n  Reading reports from {directory}...")
@@ -215,6 +216,7 @@ async def run(input_dict, tools):
                     content = base64.b64decode(file_data["content"]).decode("utf-8", errors="replace")
                     report_key = item['name']
                     reports[report_key] = content
+                    report_dirs[report_key] = directory
                     print(f"    Read {report_key} ({len(content)} chars)")
 
         total_reports = len(reports)
@@ -300,16 +302,13 @@ Return ONLY valid JSON:
                             extracted = parse_llm_json(raw)
                         except Exception as e:
                             print(f"ERROR: {e}")
-                            print(f"  DEBUG first 300 chars: {raw[:300]}")
-                            print(f"  DEBUG last 200 chars: {raw[-200:]}")
                             return report_key, None, str(e)
                         extracted["source_report"] = report_key
                         extraction_ns.set(report_key, extracted)
                         print(f"{len(extracted.get('findings', []))} findings, status: {extracted.get('asvs_status', '?')}")
                         return report_key, extracted, None
                     else:
-                        print(f"WARNING: no JSON found with expected keys")
-                        print(f"  DEBUG first 500 chars: {clean_result[:500]}")
+                        print(f"WARNING: no JSON found")
                         return report_key, None, "No JSON in result"
                 except Exception as e:
                     print(f"ERROR: {e}")
@@ -953,6 +952,19 @@ End with ---."""
             lv_findings = [f for f in all_findings if lv_name in f.get("asvs_levels", [])]
             s7.append(f"| {lv_name} | {lv_sections} | {len(lv_findings)} |")
         s7.append(f"\n**Total consolidated findings: {len(all_findings)}**")
+
+        if extraction_errors:
+            s7.append(f"\n\n### Reports Not Included in Consolidation")
+            s7.append(f"\n{len(extraction_errors)} per-section report(s) could not be automatically extracted into this consolidated report. ")
+            s7.append(f"Findings from these sections are available in the original per-section reports:\n")
+            s7.append("| Section | Per-Section Report |")
+            s7.append("|---------|-------------------|")
+            for rk in sorted(extraction_errors):
+                section_id = rk.replace(".md", "")
+                directory = report_dirs.get(rk, directories[0] if directories else "")
+                link = f"https://github.com/{owner}/{repo}/blob/main/{directory}/{rk}"
+                s7.append(f"| {section_id} | [{directory}/{rk}]({link}) |")
+
         s7.append("\n*End of Consolidated Security Audit Report*")
         consolidated_md += "\n".join(s7)
 
@@ -963,8 +975,8 @@ End with ---."""
         ISSUE_FMT = """---\n## Issue: FINDING-NNN - Title\n**Labels:** bug, security, priority:sev\n**Description:**\n### Summary\n### Details\n### Remediation\n### Acceptance Criteria\n- [ ] Fixed\n- [ ] Test added\n### References\n### Priority"""
 
         issues_parts = []
-        for bi in range(0, len(actionable), 75):
-            batch = actionable[bi:bi+75]
+        for bi in range(0, len(actionable), 40):
+            batch = actionable[bi:bi+40]
             is_first = (bi == 0)
             prompt = f"""Generate GitHub issues for {len(batch)} findings.\n{ISSUE_FMT}\n{"Start with: # Security Issues" if is_first else "Continue. No header."}\n\n{json.dumps(batch, indent=2, default=str)}"""
             for attempt in range(3):
