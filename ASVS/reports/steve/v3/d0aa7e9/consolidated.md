@@ -5,83 +5,87 @@
 | Field | Value |
 |---|---|
 | **Repository** | `apache/tooling-agents` |
-| **ASVS Level** | L3 (all L1, L2, and L3 requirements in scope) |
+| **ASVS Level** | L3 (includes L1 and L2 requirements) |
 | **Severity Threshold** | None — all findings included |
 | **Commit** | `d0aa7e9` |
 | **Date** | Apr 23, 2026 |
-| **Auditor** | Tooling Agents (automated ASVS analysis) |
+| **Auditor** | Tooling Agents |
 | **Source Reports** | 345 |
-| **Total Findings** | 235 |
+| **Total Findings** | 240 |
 
 ## Executive Summary
 
 ### Severity Distribution
 
-| Severity | Count | Percentage |
+| Severity | Count | Pct |
 |---|--:|--:|
-| **Critical** | 19 | 8.1% |
-| **High** | 73 | 31.1% |
-| **Medium** | 143 | 60.9% |
+| **Critical** | 21 | 8.8% |
+| **High** | 69 | 28.7% |
+| **Medium** | 150 | 62.5% |
 | **Low** | 0 | 0.0% |
 | **Info** | 0 | 0.0% |
-| **Total** | **235** | **100%** |
+| **Total** | **240** | **100%** |
 
-The finding distribution is top-heavy for an application that manages elections and processes encrypted votes. Nineteen critical findings indicate systemic architectural gaps in authorization, CSRF protection, output encoding, and cryptographic controls. The 73 high-severity findings cluster around session management, OAuth integration, TLS configuration, key lifecycle, and audit logging — areas where partial implementations exist but fail to meet ASVS requirements. The 143 medium-severity findings address defense-in-depth gaps, hardening omissions, and documentation deficiencies that compound the risk posture established by the critical and high findings.
+The finding population is dominated by Medium-severity issues (62.5%), but the 21 Critical findings represent fundamental control absences — not edge cases — in authorization, CSRF, XSS prevention, and audit logging. The absence of any Low or Informational findings reflects the severity profile of a pre-hardening codebase: the issues that exist tend to be structural rather than cosmetic.
 
 ### ASVS Level Coverage
 
-| Applicable Level | Finding Count | Percentage | Interpretation |
-|---|--:|--:|---|
-| **L1** (minimum baseline) | 47 | 20.0% | Foundational security controls missing |
-| **L2** (standard) | 116 | 49.4% | Core application security gaps |
-| **L3** (advanced / high-value) | 72 | 30.6% | Defense-in-depth and assurance gaps |
+The audit evaluated requirements across all three ASVS levels. Findings span the full level hierarchy:
 
-The 47 findings applicable at **L1** are the most consequential: they represent failures in controls that ASVS considers mandatory for *any* web application regardless of risk profile. These include missing authorization on management endpoints, absent CSRF validation, pervasive XSS, no session logout capability, and no TLS enforcement. Until L1 findings are resolved, higher-level controls provide limited incremental value.
+| Applicable Level | Findings | Notes |
+|---|--:|---|
+| **L1** (minimum) | ~45 | Fundamental controls — XSS, CSRF, TLS enforcement, session basics |
+| **L2** (standard) | ~185 | Authorization policy, logging, OAuth integration, header hardening |
+| **L3** (advanced) | ~120 | Concurrency, cryptographic governance, secrets management, isolation |
 
-The 116 **L2** findings affect an application that processes election data and should be treated as standard-risk at minimum. Critical gaps include the absence of session timeouts, no structured security logging, missing security headers, incomplete OAuth validation, and no secrets management.
+Many findings are tagged at multiple levels (e.g., a Critical authorization bypass is relevant at L1 *and* L2), indicating that foundational gaps persist into higher assurance tiers rather than being confined to one level.
 
-The 72 **L3** findings are directly relevant given that the application handles encrypted ballots, election cryptographic key material, and voter eligibility records — all of which warrant high-assurance controls. Key gaps include race conditions in election state transitions, absence of process isolation for tallying, no concurrency controls on cryptographic operations, and missing post-quantum migration planning.
+### Top 5 Risks
 
-### Top 5 Risk Themes
+**1. Complete Absence of Authorization on Election Management Endpoints**
+*(FINDING-006, -010, -011, -012, -049, -051, -073)*
 
-**1. Broken Authorization — Any Authenticated User Can Manage Any Election**
+No ownership or role verification exists on any election management operation. Any authenticated user — regardless of relationship to an election — can modify its properties, add or remove issues, open or close voting, delete the election, and submit votes on behalf of others. The `authz` field is defined in the schema and documented but is never evaluated in any access-control decision. Combined with the missing voter-eligibility check on the vote submission endpoint, this constitutes a total authorization control failure for the application's primary asset: election integrity.
 
-No owner-level authorization check exists on any election management endpoint (FINDING-006). Combined with cross-election data access through unscoped queries (FINDING-009), missing voter eligibility enforcement on vote submission (FINDING-049), and an `authz` field defined in the schema but never evaluated (FINDING-050), the application enforces only a binary authenticated/unauthenticated boundary. Any authenticated ASF member can edit, open, close, delete, or tally any election created by any other user. This is the highest-impact architectural gap in the application: it collapses the entire election integrity model to a single trust boundary that the application itself documents as insufficient.
+**2. Systemic Cross-Site Scripting Across All Template-Rendered Pages**
+*(FINDING-001, -002, -003, -004, -022, -031, -091, -113, -114)*
 
-**2. Complete CSRF Protection Failure Across All State-Changing Operations**
+The EZT template engine does not apply HTML output encoding by default, and the vast majority of template substitutions render user-controlled data — election titles, issue descriptions, candidate names, flash messages, URL path parameters — as raw HTML. This produces stored XSS vectors on every listing and management page, and reflected XSS on error pages. Because elections are multi-user environments where administrators and voters view the same data, an attacker with election-creation privileges can target any authenticated user, including administrators. A partial mitigation exists (`[format "js,html"]`) but is applied only in isolated JavaScript attribute contexts, leaving the primary HTML body unprotected.
 
-CSRF defense is structurally absent. The CSRF token is a hardcoded placeholder string that the server never validates (FINDING-008). Compounding this, all irreversible election lifecycle operations — open, close, delete, tally — are mapped to GET endpoints (FINDING-007), which bypasses both SameSite=Lax cookie protections (FINDING-030) and any future token-based CSRF scheme. The vote submission endpoint, which uses POST, is equally unprotected (FINDING-033). POST endpoints also accept CORS-safelisted content types without cross-origin verification (FINDING-034). An attacker who can induce an authenticated election administrator to visit a malicious page can open, close, delete, or tally any election, or cast votes on behalf of any authenticated voter, through a single image tag or hidden form.
+**3. Non-Functional CSRF Protection Combined with GET-Based State Changes**
+*(FINDING-007, -008, -009, -033, -034, -036)*
 
-**3. Pervasive Cross-Site Scripting Across All Template Rendering Paths**
+The application's CSRF token is a hardcoded placeholder string that the server never validates, rendering form-based CSRF protection entirely inoperative. This is compounded by the use of GET requests for irreversible, state-changing operations — opening elections, closing elections, and deleting elections — which bypasses even theoretical CSRF defenses and exposes these operations to triggering via image tags, prefetch links, or any cross-origin resource embed. POST endpoints additionally accept CORS-safelisted content types without origin verification. Together, these gaps allow any external website visited by an authenticated administrator to silently manipulate election state.
 
-Output encoding is systemically absent from EZT templates (FINDING-001). Election titles are rendered without HTML escaping across all listing pages (FINDING-004). Issue descriptions are inserted as raw HTML (FINDING-003). Server-side data is interpolated directly into JavaScript object literals in the STV voting interface (FINDING-002). Flash messages containing user input are rendered unencoded (FINDING-093). Error pages reflect URL path parameters without escaping (FINDING-021). While the codebase demonstrates awareness of context-specific encoding — `[format "js,html"]` is correctly applied in a small number of `onclick` handlers — the default rendering path performs no encoding, making stored XSS achievable through any user-controlled text field that reaches a template. In the context of an election application with broken authorization, XSS provides a reliable escalation path from voter to election administrator.
+**4. Election State Machine Enforced by Removable `assert` Statements**
+*(FINDING-005, -025, -082, -087, -088)*
 
-**4. Unreliable Election Lifecycle State Enforcement**
+The election lifecycle state machine — the core control preventing vote acceptance after closure, premature tallying, or modifications to finalized elections — is enforced exclusively through Python `assert` statements. These are silently and completely removed when the Python interpreter runs with the `-O` (optimize) flag, a common production deployment practice. No database-level state guards, no application-level exception-based checks, and no SQL `WHERE` clauses enforce state constraints on the critical paths for election open, close, delete, and vote-accept operations. A separate TOCTOU race condition in the close and delete paths further allows concurrent requests to bypass the state check even when assertions are active.
 
-The election state machine — the core business logic that prevents votes from being cast on unopened elections, tallies from running on open elections, or modifications after closure — is enforced primarily through Python `assert` statements (FINDING-005). These are stripped entirely when Python runs with the `-O` (optimize) flag, a common production configuration. Even where `assert` is not used, state checks occur before transactions begin, creating TOCTOU race windows that allow vote insertion after closure (FINDING-024), state corruption during concurrent election opening (FINDING-019), and race conditions during deletion (FINDING-090). The election close operation lacks an atomic state guard in SQL (FINDING-089). Batch vote submission has no transactional atomicity (FINDING-023). The database schema includes a `prevent_open_close_update` trigger that protects advisory timestamps but does not enforce the state machine itself. The net result is that election lifecycle integrity depends on single-threaded, non-optimized execution with no concurrent access — conditions that cannot be guaranteed in any production deployment.
+**5. Absence of Audit Logging, Session Lifecycle Controls, and Cryptographic Governance**
+*(FINDING-019, -042, -062, -068, -070, -079, -080, -083)*
 
-**5. Cryptographic and Key Management Deficiencies in a Voting System**
+The application has no logout endpoint, no session inactivity or absolute timeout, no mechanism for administrators to terminate sessions, and no session regeneration on authentication state changes — meaning compromised sessions persist indefinitely. Tally operations (the most sensitive post-election action) produce no audit trail identifying who initiated them or when. Authorization failures, authentication events, and business-logic bypass attempts are not logged. No cryptographic inventory or algorithm migration plan exists despite active use of both legacy (AES-128-CBC/Fernet) and modern (XChaCha20-Poly1305) primitives, with the election master key stored in the same database as the encrypted votes it protects.
 
-The application's vote encryption uses AES-128-CBC via Fernet (FINDING-012) rather than an approved AEAD cipher, despite an incomplete migration path to XChaCha20-Poly1305 being visible in the codebase. The master election key (`opened_key`) is stored in the same application database as the encrypted votes it protects (FINDING-070). No cryptographic inventory or post-quantum migration plan exists (FINDING-062). No secrets management solution is used for backend cryptographic material (FINDING-068). Election key material is persisted indefinitely after use with no destruction lifecycle (FINDING-069, FINDING-076). Argon2d is used instead of the OWASP/NIST-recommended Argon2id variant (FINDING-182), and tamper detection uses non-constant-time comparison (FINDING-181). Decrypted vote plaintext is held in memory in bulk without cleanup (FINDING-234), and no application-level memory protection exists for sensitive cryptographic material (FINDING-092). For an application whose security value proposition centers on ballot confidentiality and election integrity, these deficiencies undermine the cryptographic assurance model at every layer: algorithm selection, key storage, key lifecycle, side-channel resistance, and runtime memory protection.
+### Positive Controls Identified
 
-### Recognized Positive Controls
+Despite the severity of the findings above, the audit identified multiple well-implemented defensive controls that materially reduce the application's attack surface in several categories.
 
-Despite the findings above, the audit identified substantive security controls that demonstrate architectural awareness and reduce the attack surface in several important categories:
+**Input and Injection Prevention**
 
-| Control | Evidence | Impact |
-|---|---|---|
-| **100% parameterized SQL queries** | All database operations use `?` placeholder binding via `asfpy.db` and `queries.yaml`. Zero string-concatenated queries found. | Eliminates SQL injection as an attack class. |
-| **Memory-safe language runtime** | Python eliminates buffer overflows, dangling pointers, stack smashing, and string corruption at the language level. | Removes entire categories of memory corruption vulnerabilities. |
-| **Zero command injection surface** | No imports or usage of `os.system()`, `subprocess`, `eval()`, `exec()`, `compile()`, or `pickle` deserialization across the entire codebase. | Eliminates OS command injection and unsafe deserialization attack classes. |
-| **Database-level integrity constraints** | SQLite STRICT mode, CHECK constraints, foreign keys with `ON DELETE RESTRICT`, AUTOINCREMENT vote ordering, and a `prevent_open_close_update` trigger provide defense-in-depth. | Enforces data type safety, referential integrity, and partial state immutability independent of application logic. |
-| **Cryptographic vote anonymization** | Per-voter salts and derived vote tokens (`opened_key` + `pid` + `iid` + `salt`) decouple voter identity from vote content. Votes are shuffled before tallying. Sensitive fields (`salt`, `opened_key`) are explicitly excluded from API responses. | Provides meaningful ballot secrecy even if the application database is disclosed, and prevents vote-ordering correlation. |
-| **Safe template engine (EZT)** | EZT supports only substitution, iteration, and conditionals — no code execution capability. Inherently prevents server-side template injection (SSTI). | Eliminates SSTI as an attack class regardless of input content. |
-| **Safe deserialization exclusively** | `json.loads()`/`json.dumps()` for structured data and `yaml.safe_load()` for configuration. No unsafe deserialization paths. | Eliminates object injection via deserialization. |
-| **Path traversal protection** | File serving uses Quart's `send_from_directory()`, which enforces directory scoping. | Prevents directory traversal in document download paths. |
-| **Subresource integrity (SRI)** | CDN-loaded CSS and JavaScript resources include `integrity=` attributes in templates. | Detects and blocks tampered third-party resources delivered via CDN. |
-| **Tamper detection mechanism** | `is_tampered()` method cryptographically binds election metadata at opening time via `opened_key` recomputation, enabling detection of post-opening modifications. | Provides a cryptographic integrity check for election data (though invocation gaps are noted in FINDING-104). |
+The application achieves strong injection resistance in its data layer. All SQL queries across `queries.yaml` use parameterized `?` placeholders via the `asfpy.db` wrapper, with zero instances of string concatenation in query construction. The codebase contains no usage of `os.system()`, `subprocess`, `eval()`, `exec()`, `compile()`, or `pickle` deserialization — eliminating OS command injection, code injection, and unsafe deserialization as attack classes entirely. YAML parsing uses `yaml.safe_load()`. LDAP filters are hardcoded constants with no user-derived components. The single regex pattern (`r'doc:([^\s]+)'`) is static with O(n) complexity and no backtracking risk. Python as the implementation language provides inherent memory safety, eliminating buffer overflows, use-after-free, and stack-based attacks. Data is stored in canonical (raw) form without pre-encoding, and the Quart framework performs URL decoding exactly once, satisfying the single-decode principle.
 
-These controls represent a solid foundation. The parameterized query discipline, zero-eval policy, and memory-safe runtime eliminate three of the most historically exploited vulnerability classes. The cryptographic vote anonymization design is architecturally sound. The primary audit theme is not the absence of security awareness but rather **incomplete and inconsistent application** of controls across the authorization, session, output encoding, CSRF, and cryptographic lifecycle domains.
+**Cryptographic Design for Vote Anonymity**
+
+The vote anonymization architecture is well-designed. Per-voter, per-issue cryptographic salts drive vote-token derivation through `(opened_key, pid, iid, salt)`, providing strong separation between voter identity and vote content. Votes are shuffled (`crypto.shuffle()`) before tallying to prevent database-insertion-order leakage. Cryptographic parameters (Argon2, HKDF) are hardcoded constants, preventing user-controlled manipulation at the cryptographic boundary. A tamper-detection mechanism (`is_tampered()`) recomputes the `opened_key` binding from current election data to detect post-opening modifications.
+
+**Data Integrity and Schema Enforcement**
+
+SQLite tables use `STRICT` mode with explicit type constraints, foreign key constraints with `ON DELETE RESTRICT`, and a database trigger (`prevent_open_close_update`) that prevents modification of advisory timestamps after election closure. Election and issue IDs are generated via `crypto.create_id()` with collision-safe retry loops catching `IntegrityError`. Multi-step modifications use explicit `BEGIN TRANSACTION` / `COMMIT` boundaries. The `MAX(vid)` ordering scheme for re-voting preserves full vote history while ensuring only the latest vote counts.
+
+**Defense in Depth**
+
+External CDN resources carry Subresource Integrity (SRI) attributes. File serving uses Quart's `send_from_directory()`, providing framework-level path-traversal prevention. The EZT template engine supports only substitution, iteration, and conditionals — with no code-execution capability — inherently preventing server-side template injection. Context-specific escaping (`[format "js,html"]`) is correctly applied in JavaScript attribute contexts in management templates. A client-side `escapeHtml()` function provides additional defense for dynamically generated DOM content. API response methods (`get_metadata()`, `get_issue()`) explicitly exclude sensitive fields (`salt`, `opened_key`) with documented intent. All data-modifying endpoints require authentication via `@asfquart.auth.require`. LDAP communication uses `ldaps://` for transport encryption.
 
 ---
 
@@ -99,7 +103,7 @@ These controls represent a solid foundation. The parameterized query discipline,
 | **ASVS Sections** | 1.1.1, 1.1.2, 1.2.1, 1.3.4, 1.3.5 |
 | **Files** | `v3/server/templates/manage.ezt:176,180,241,283`&lt;br&gt;`v3/server/templates/manage-stv.ezt:134,175,196`&lt;br&gt;`v3/server/templates/admin.ezt:19`&lt;br&gt;`v3/server/templates/voter.ezt:35,49,88,96`&lt;br&gt;`v3/server/templates/vote-on.ezt:88,108,109,131,163`&lt;br&gt;`v3/server/templates/e_bad_eid.ezt:8`&lt;br&gt;`v3/server/templates/e_bad_iid.ezt:8`&lt;br&gt;`v3/server/templates/e_bad_pid.ezt:8`&lt;br&gt;`v3/server/pages.py:174-225,240` |
 | **Source Reports** | 1.1.1.md, 1.1.2.md, 1.2.1.md, 1.3.4.md, 1.3.5.md |
-| **Related** | FINDING-002, FINDING-003, FINDING-004, FINDING-020, FINDING-021, FINDING-027, FINDING-031, FINDING-093, FINDING-114 |
+| **Related** | FINDING-002, FINDING-003, FINDING-004, FINDING-022, FINDING-028, FINDING-031, FINDING-091, FINDING-113, FINDING-114 |
 
 **Description:**
 
@@ -121,7 +125,7 @@ Apply `[format "html"]` to all user-controlled variables in HTML body contexts. 
 | **ASVS Sections** | 1.1.1, 1.1.2, 1.2.1, 1.2.3, 1.3.10, 1.3.5, 1.3.7, 1.3.3, 3.2.2 |
 | **Files** | `v3/server/templates/vote-on.ezt:within <script> block (STV_CANDIDATES object)`&lt;br&gt;`v3/server/pages.py:258-263` |
 | **Source Reports** | 1.1.1.md, 1.1.2.md, 1.2.1.md, 1.2.3.md, 1.3.10.md, 1.3.5.md, 1.3.7.md, 1.3.3.md, 3.2.2.md |
-| **Related** | FINDING-001, FINDING-003, FINDING-004, FINDING-020, FINDING-021, FINDING-027, FINDING-031, FINDING-093, FINDING-114 |
+| **Related** | FINDING-001, FINDING-003, FINDING-004, FINDING-022, FINDING-028, FINDING-031, FINDING-091, FINDING-113, FINDING-114 |
 
 **Description:**
 
@@ -140,10 +144,10 @@ Apply `[format "js"]` to all server-supplied values in JavaScript contexts: `con
 | **Severity** | 🔴 Critical |
 | **ASVS Level(s)** | L1, L2 |
 | **CWE** | CWE-79 |
-| **ASVS Sections** | 1.3.1, 1.3.4, 1.3.5, 1.3.10, 3.2.2 |
+| **ASVS Sections** | 1.3.1, 1.3.4, 1.3.5, 1.3.10, 1.1.1, 1.1.2, 1.2.1, 1.2.2, 1.2.9, 3.2.2 |
 | **Files** | `v3/server/pages.py:54-61,466,485,39-48,325-326,27-35`&lt;br&gt;`v3/server/templates/vote-on.ezt:N/A`&lt;br&gt;`v3/server/templates/manage.ezt:N/A`&lt;br&gt;`v3/server/templates/manage-stv.ezt:N/A`&lt;br&gt;`v3/steve/election.py:202` |
-| **Source Reports** | 1.3.1.md, 1.3.10.md, 1.3.4.md, 1.3.5.md, 1.3.9.md, 1.3.3.md, 3.2.2.md |
-| **Related** | FINDING-001, FINDING-002, FINDING-004, FINDING-020, FINDING-021, FINDING-027, FINDING-031, FINDING-093, FINDING-114 |
+| **Source Reports** | 1.3.1.md, 1.3.10.md, 1.3.4.md, 1.3.5.md, 1.3.9.md, 1.3.3.md, 1.1.1.md, 1.1.2.md, 1.2.1.md, 1.2.2.md, 1.2.9.md, 3.2.2.md |
+| **Related** | FINDING-001, FINDING-002, FINDING-004, FINDING-022, FINDING-028, FINDING-031, FINDING-091, FINDING-113, FINDING-114 |
 
 **Description:**
 
@@ -196,7 +200,7 @@ Note: Option B alone is insufficient for vote-on.ezt because rewrite_description
 | **ASVS Sections** | 1.3.1, 1.3.4, 1.3.5, 1.3.10 |
 | **Files** | `v3/server/pages.py:405,410,147,353`&lt;br&gt;`v3/server/templates/admin.ezt:N/A`&lt;br&gt;`v3/server/templates/voter.ezt:N/A`&lt;br&gt;`v3/server/templates/manage.ezt:N/A`&lt;br&gt;`v3/server/templates/vote-on.ezt:N/A`&lt;br&gt;`v3/server/templates/flashes.ezt:N/A` |
 | **Source Reports** | 1.3.1.md, 1.3.10.md, 1.3.4.md, 1.3.5.md |
-| **Related** | FINDING-001, FINDING-002, FINDING-003, FINDING-020, FINDING-021, FINDING-027, FINDING-031, FINDING-093, FINDING-114 |
+| **Related** | FINDING-001, FINDING-002, FINDING-003, FINDING-022, FINDING-028, FINDING-031, FINDING-091, FINDING-113, FINDING-114 |
 
 **Description:**
 
@@ -266,11 +270,11 @@ Replace all assert statements used for security validation with explicit if/rais
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🔴 Critical |
-| **ASVS Level(s)** | L1, L2, L3 |
+| **ASVS Level(s)** | L2, L3, L1 |
 | **CWE** | CWE-862 |
-| **ASVS Sections** | 2.3.2, 2.3.5, 2.1.2, 2.1.3, 8.1.1, 8.1.2, 8.1.4, 8.2.2, 8.2.3, 8.3.1, 8.3.3, 8.4.1, 4.4.3, 14.1.2, 14.2.4, 7.2.1, 10.3.2, 10.4.11 |
+| **ASVS Sections** | 2.3.2, 2.3.5, 2.1.2, 2.1.3, 4.4.3, 7.2.1, 8.1.1, 8.1.2, 8.1.4, 8.2.2, 8.2.3, 8.3.1, 8.3.3, 8.4.1, 14.1.2, 14.2.4 |
 | **Files** | `v3/server/pages.py:193,215,218,98,81,336,388,404,422,439,461,481,489,508,526,550,572,425,331,486,510,533,451,468,375,382,398-401,404-407,170-193,196-227`&lt;br&gt;`v3/schema.sql:68,73,68-75` |
-| **Source Reports** | 2.3.2.md, 2.3.5.md, 2.1.2.md, 2.1.3.md, 8.1.1.md, 8.1.2.md, 8.1.4.md, 8.2.2.md, 8.2.3.md, 8.3.1.md, 8.3.3.md, 8.4.1.md, 4.4.3.md, 14.1.2.md, 14.2.4.md, 7.2.1.md, 10.3.2.md, 10.4.11.md |
+| **Source Reports** | 2.3.2.md, 2.3.5.md, 2.1.2.md, 2.1.3.md, 4.4.3.md, 7.2.1.md, 8.1.1.md, 8.1.2.md, 8.1.4.md, 8.2.2.md, 8.2.3.md, 8.3.1.md, 8.3.3.md, 8.4.1.md, 14.1.2.md, 14.2.4.md |
 | **Related** | FINDING-049 |
 
 **Description:**
@@ -288,12 +292,12 @@ Implement authorization checks in the load_election decorator to verify that the
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🔴 Critical |
-| **ASVS Level(s)** | L1, L2, L3 |
+| **ASVS Level(s)** | L2, L3 |
 | **CWE** | CWE-352 |
-| **ASVS Sections** | 2.3.2, 2.3.5, 2.1.2, 2.1.3, 4.1.4, 3.5.1, 3.5.2, 3.5.3, 14.1.1, 14.1.2, 14.2.4, 8.1.4, 8.3.1, 8.3.2, 10.2.1 |
+| **ASVS Sections** | 2.3.2, 2.3.5, 2.1.2, 2.1.3, 3.3.2, 4.1.4, 4.4.3, 8.1.4, 8.3.1, 8.3.2, 10.2.1, 14.1.1, 14.1.2, 14.2.4 |
 | **Files** | `v3/server/pages.py:404,422,479-480,499-500,447,464,485,505`&lt;br&gt;`v3/server/templates/manage.ezt:267` |
-| **Source Reports** | 2.3.2.md, 2.3.5.md, 2.1.2.md, 2.1.3.md, 4.1.4.md, 3.5.1.md, 3.5.2.md, 3.5.3.md, 14.1.1.md, 14.1.2.md, 14.2.4.md, 8.1.4.md, 8.3.1.md, 8.3.2.md, 10.2.1.md |
-| **Related** | FINDING-008, FINDING-029, FINDING-030, FINDING-033, FINDING-034, FINDING-110, FINDING-140 |
+| **Source Reports** | 2.3.2.md, 2.3.5.md, 2.1.2.md, 2.1.3.md, 3.3.2.md, 4.1.4.md, 4.4.3.md, 8.1.4.md, 8.3.1.md, 8.3.2.md, 10.2.1.md, 14.1.1.md, 14.1.2.md, 14.2.4.md |
+| **Related** | FINDING-008, FINDING-009, FINDING-030, FINDING-033, FINDING-034, FINDING-109 |
 
 **Description:**
 
@@ -301,7 +305,7 @@ Critical state-changing operations (opening and closing elections) are implement
 
 **Remediation:**
 
-Change /do-open/&lt;eid&gt; and /do-close/&lt;eid&gt; from GET to POST endpoints with CSRF token validation. Update the JavaScript event handlers in manage.ezt to use form submission with POST method instead of window.location.href. Include CSRF token in the dynamically created form before submission. This will require preflight checks and proper token validation, preventing trivial exploitation via image tags or links. Add comprehensive logging for election state transitions with user ID, timestamp, and IP address. Consider implementing Sec-Fetch-* header validation middleware as defense-in-depth.
+1. Immediate: Convert do_open_endpoint() and do_close_endpoint() to POST method with CSRF token validation. 2. Update manage.ezt template to use form submission instead of window.location.href navigation. 3. Short-term: Add audit logging (structured, not access logging) for state changes with partial election IDs only. 4. Long-term: Implement classification-aware routing policy with validate_route() method that validates HTTP method is appropriate for data classification (CRITICAL/SENSITIVE/INTERNAL identifiers require POST for state changes).
 
 ---
 
@@ -313,9 +317,9 @@ Change /do-open/&lt;eid&gt; and /do-close/&lt;eid&gt; from GET to POST endpoints
 | **ASVS Level(s)** | L1, L2 |
 | **CWE** | CWE-352 |
 | **ASVS Sections** | 3.5.1, 10.2.1 |
-| **Files** | `v3/server/pages.py:95,438,478`&lt;br&gt;`v3/server/templates/manage.ezt:null`&lt;br&gt;`v3/server/templates/vote-on.ezt:null`&lt;br&gt;`v3/server/templates/admin.ezt:null` |
+| **Files** | `v3/server/pages.py:95,438,478`&lt;br&gt;`v3/server/templates/manage.ezt`&lt;br&gt;`v3/server/templates/vote-on.ezt`&lt;br&gt;`v3/server/templates/admin.ezt` |
 | **Source Reports** | 3.5.1.md, 10.2.1.md |
-| **Related** | FINDING-007, FINDING-029, FINDING-030, FINDING-033, FINDING-034, FINDING-110, FINDING-140 |
+| **Related** | FINDING-007, FINDING-009, FINDING-030, FINDING-033, FINDING-034, FINDING-109 |
 
 **Description:**
 
@@ -327,7 +331,29 @@ Implement real CSRF token generation using secrets.token_hex(32) stored in sessi
 
 ---
 
-#### FINDING-009: Cross-Election Issue Data Access and Modification via Unscoped Queries
+#### FINDING-009: Election Open and Close Operations Use GET Method for Irreversible State Changes
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🔴 Critical |
+| **ASVS Level(s)** | L1 |
+| **CWE** | CWE-352 |
+| **ASVS Sections** | 3.5.1, 3.5.2, 3.5.3 |
+| **Files** | `v3/server/pages.py:504,523,536-553,555-571,448-466,469-484`&lt;br&gt;`v3/server/templates/manage.ezt:285,297`&lt;br&gt;`v3/steve/election.py:73,94` |
+| **Source Reports** | 3.5.1.md, 3.5.2.md, 3.5.3.md |
+| **Related** | FINDING-007, FINDING-008, FINDING-030, FINDING-033, FINDING-034, FINDING-109 |
+
+**Description:**
+
+Two critical state-changing operations (opening and closing elections) are implemented as GET requests, making them trivially exploitable through image tags, link prefetch, or simple hyperlinks. The /do-open/&lt;eid&gt; and /do-close/&lt;eid&gt; endpoints permanently and irreversibly change election state without any CSRF protection, custom headers, or preflight checks. GET requests are always considered 'simple requests' by the browser and will never initiate a preflight OPTIONS request, regardless of origin. This bypasses even SameSite=Lax cookie protections, violates REST semantics, and makes it impossible to use CORS preflight as a cross-origin protection mechanism. An attacker who knows or can guess an election ID can trick an authenticated committer into prematurely opening or closing any election they have access to.
+
+**Remediation:**
+
+Change /do-open/&lt;eid&gt; and /do-close/&lt;eid&gt; from GET to POST endpoints with CSRF token validation. Update the JavaScript event handlers in manage.ezt to use form submission with POST method instead of window.location.href. Include CSRF token in the dynamically created form before submission. This will require preflight checks and proper token validation, preventing trivial exploitation via image tags or links. Add comprehensive logging for election state transitions with user ID, timestamp, and IP address. Consider implementing Sec-Fetch-* header validation middleware as defense-in-depth.
+
+---
+
+#### FINDING-010: Cross-Election Issue Data Access and Modification via Unscoped Queries
 
 | Attribute | Value |
 |-----------|-------|
@@ -337,7 +363,7 @@ Implement real CSRF token generation using secrets.token_hex(32) stored in sessi
 | **ASVS Sections** | 8.2.2, 8.3.3, 8.4.1 |
 | **Files** | `v3/queries.yaml:N/A`&lt;br&gt;`v3/steve/election.py:145,151,160,161,170,171`&lt;br&gt;`v3/server/pages.py:495,515,175,193-221` |
 | **Source Reports** | 8.2.2.md, 8.3.3.md, 8.4.1.md |
-| **Related** | FINDING-051, FINDING-053, FINDING-154 |
+| **Related** | FINDING-051, FINDING-053, FINDING-153 |
 
 **Description:**
 
@@ -349,15 +375,100 @@ Add election scoping to issue queries in queries.yaml by adding 'AND eid = ?' to
 
 ---
 
-#### FINDING-010: No TLS Protocol Version Enforcement — Server May Accept Deprecated TLS 1.0/1.1 Connections
+#### FINDING-011: Vote Submission Endpoint Lacks Voter Eligibility Authorization Check
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🔴 Critical |
+| **ASVS Level(s)** | L2 |
+| **CWE** | - |
+| **ASVS Sections** | 10.3.2, 10.4.11 |
+| **Files** | `v3/server/pages.py:424-467,426,411-456` |
+| **Source Reports** | 10.3.2.md, 10.4.11.md |
+| **Related** | None |
+
+**Description:**
+
+The vote submission endpoint fails to verify that the authenticated user (`sub` claim from OAuth token, stored as `uid` in session) is eligible to vote in the target election. While the GET handler (`vote_on_page`) correctly checks voter eligibility using `election.q_find_issues.perform(result.uid, election.eid)`, the POST handler that actually records votes performs no such check. The endpoint has an explicit `### check authz` comment stub at line 426, indicating the developers intended to implement this check but never did. Any authenticated committer can vote in any election, even those they are not eligible for, compromising the integrity of election results.
+
+**Remediation:**
+
+Add voter eligibility verification in the `do_vote_endpoint` function before recording votes:
+
+```python
+@APP.post('/do-vote/<eid>')
+@asfquart.auth.require({R.committer})
+@load_election
+async def do_vote_endpoint(election):
+    result = await basic_info()
+
+    # Verify voter is eligible for this election
+    election.q_find_issues.perform(result.uid, election.eid)
+    if not election.q_find_issues.fetchall():
+        await flash_danger('You are not authorized to vote in this election.')
+        return quart.redirect('/voter', code=303)
+
+    form = edict(await quart.request.form)
+    ...
+```
+
+Deploy immediately to prevent unauthorized vote manipulation.
+
+---
+
+#### FINDING-012: Election Management Endpoints Missing Ownership Authorization
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🔴 Critical |
+| **ASVS Level(s)** | L2 |
+| **CWE** | - |
+| **ASVS Sections** | 10.3.2, 10.4.11 |
+| **Files** | `v3/server/pages.py:493,498,515,520,410,98,417,534,539,559,564,583,588,355,195,97,193,217,227,487,508,527,554,581` |
+| **Source Reports** | 10.3.2.md, 10.4.11.md |
+| **Related** | None |
+
+**Description:**
+
+All election management endpoints fail to verify that the authenticated user (identified by the `sub` claim from the OAuth token, stored as `uid` in the session) owns the election being modified. The `uid` claim is available throughout the application but is never compared against election ownership. The `Election.owned_elections(DB_FNAME, result.uid)` query exists and is used in `admin_page` for display purposes, but is never used as an enforcement gate for state-changing operations. Any authenticated committer can tamper with elections they don't own — opening elections prematurely, closing them early to suppress votes, deleting issues, or modifying election content.
+
+**Remediation:**
+
+Implement ownership verification in the `load_election` decorator to protect all management endpoints:
+
+```python
+def load_election(func):
+    @functools.wraps(func)
+    async def loader(eid):
+        try:
+            e = steve.election.Election(DB_FNAME, eid)
+        except steve.election.ElectionNotFound:
+            ...
+
+        # Enforce ownership: verify the authenticated user's uid matches
+        # the election owner (using 'sub' claim from token/session)
+        s = await asfquart.session.read()
+        metadata = e.get_metadata()
+        if metadata.owner_pid != s['uid']:
+            quart.abort(403)
+
+        return await func(e)
+    return loader
+```
+
+This single fix protects all 8 management endpoints.
+
+---
+
+#### FINDING-013: No TLS Protocol Version Enforcement — Server May Accept Deprecated TLS 1.0/1.1 Connections
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🔴 Critical |
 | **ASVS Level(s)** | L1, L2 |
-| **CWE** | None |
+| **CWE** | - |
 | **ASVS Sections** | 12.1.1, 12.3.1 |
-| **Files** | `v3/server/main.py:83-91,99-118,76-82`&lt;br&gt;`v3/server/config.yaml.example:null` |
+| **Files** | `v3/server/main.py:83-91,99-118,76-82`&lt;br&gt;`v3/server/config.yaml.example` |
 | **Source Reports** | 12.1.1.md, 12.3.1.md |
 | **Related** | None |
 
@@ -371,7 +482,7 @@ Create an explicit ssl.SSLContext with enforced minimum version and pass it to t
 
 ---
 
-#### FINDING-011: Application Falls Back to Plain HTTP When TLS Not Configured
+#### FINDING-014: Application Falls Back to Plain HTTP When TLS Not Configured
 
 | Attribute | Value |
 |-----------|-------|
@@ -381,7 +492,7 @@ Create an explicit ssl.SSLContext with enforced minimum version and pass it to t
 | **ASVS Sections** | 12.2.1, 12.3.1, 12.3.3, 4.4.1 |
 | **Files** | `v3/server/main.py:84-90,98-117,77-80,98-104`&lt;br&gt;`v3/server/config.yaml.example:27-31,28-31` |
 | **Source Reports** | 12.2.1.md, 12.3.1.md, 12.3.3.md, 4.4.1.md |
-| **Related** | FINDING-180 |
+| **Related** | FINDING-178 |
 
 **Description:**
 
@@ -393,29 +504,29 @@ Make TLS mandatory by enforcing certificate validation at startup - fail with cr
 
 ---
 
-#### FINDING-012: AES-128-CBC (Fernet) Used Instead of Approved AEAD Cipher; Incomplete Migration to XChaCha20-Poly1305
+#### FINDING-015: AES-128-CBC (Fernet) Used Instead of Approved AEAD Cipher; Incomplete Migration to XChaCha20-Poly1305
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🔴 Critical |
-| **ASVS Level(s)** | L1, L2, L3 |
-| **CWE** | None |
-| **ASVS Sections** | 11.3.2, 11.3.3, 11.3.4, 11.3.5, 11.6.1, 11.6.2, 11.1.1, 11.1.2, 11.1.3, 11.2.1 |
+| **ASVS Level(s)** | L1 |
+| **CWE** | - |
+| **ASVS Sections** | 11.3.2 |
 | **Files** | `v3/steve/crypto.py:63-75,77-80,84-88`&lt;br&gt;`v3/steve/election.py:236,271` |
-| **Source Reports** | 11.3.2.md, 11.3.3.md, 11.3.4.md, 11.3.5.md, 11.6.1.md, 11.6.2.md, 11.1.1.md, 11.1.2.md, 11.1.3.md, 11.2.1.md |
+| **Source Reports** | 11.3.2.md |
 | **Related** | None |
 
 **Description:**
 
-The HKDF info parameter, which provides cryptographic domain separation per NIST SP 800-56C / RFC 5869, identifies the derived key as 'xchacha20_key' while the actual encryption uses Fernet (AES-128-CBC + HMAC-SHA256). This violates the principle of accurate domain separation in key derivation and creates a latent key reuse vulnerability. If XChaCha20-Poly1305 is later added alongside Fernet (as the comment suggests), both would derive keys with info=b'xchacha20_key', meaning the same key material feeds two different algorithms — a key reuse violation per NIST SP 800-57 §5.2. The mismatch between code labels and actual behavior makes cryptographic inventory inaccurate, directly contradicting ASVS 11.1.1's requirement for accurate key documentation. This creates two problems: (1) Inventory Falsification: Any automated or manual inventory reading the info field would incorrectly record XChaCha20-Poly1305 as the encryption algorithm; (2) Unsafe Algorithm Migration: When the planned migration to XChaCha20-Poly1305 occurs, if the same info value is retained, the derived keys will be identical to the current Fernet keys, eliminating cryptographic domain separation between old and new algorithms. The HKDF `info` parameter provides cryptographic domain separation to ensure keys derived for different purposes are cryptographically independent. Using b'xchacha20_key' when the actual cipher is Fernet creates future collision risk if XChaCha20-Poly1305 is later added (as comments suggest) with the same info label, and causes audit confusion by self-documenting an algorithm that is not in use.
+The application uses Fernet (AES-128-CBC + HMAC-SHA256) for vote encryption, which violates ASVS 11.3.2's requirement for approved AEAD cipher modes such as AES-GCM or ChaCha20-Poly1305. Evidence of an incomplete cryptographic migration exists: the key derivation function is explicitly configured for XChaCha20-Poly1305 (HKDF with info=b'xchacha20_key', 32-byte key length), but the actual encryption operations still use Fernet. This represents a Type B gap where the control exists but is not applied, creating false confidence that an approved cipher is in use. Fernet uses AES-128-CBC (not an approved AEAD mode), splits the 32-byte key into 16 bytes for HMAC-SHA256 and 16 bytes for AES-128 encryption, and while the encrypt-then-MAC construction mitigates classic padding oracle attacks, CBC mode remains vulnerable to implementation-level side channels. All vote ciphertext stored in the vote table uses this unapproved cipher mode.
 
 **Remediation:**
 
-Change the HKDF info parameter from b'xchacha20_key' to b'fernet_vote_key_v1' (or b'steve_fernet_vote_key_v1') to accurately reflect the actual encryption algorithm in use. Add version suffix to support future algorithm migrations. Update comment from '32-byte key for XChaCha20-Poly1305' to '32 bytes: 16-byte signing key + 16-byte AES-128 key (Fernet spec)'. Document algorithm migration strategy before switching from Fernet to XChaCha20-Poly1305. When migrating to XChaCha20-Poly1305, use a distinct info value like b'xchacha20_vote_key_v2' to maintain proper domain separation. CRITICAL NOTE: Changing the info parameter changes all derived keys and requires coordinated migration similar to the Argon2 type change. Existing encrypted votes will become undecryptable. This change requires a coordinated migration: (1) For new elections: will automatically use corrected HKDF after deployment; (2) For open elections: existing votes cannot be decrypted; must implement dual-algorithm support or complete tallying before upgrade; (3) For closed elections: historical data remains valid. Document this in the cryptographic inventory with version tracking and algorithm migration history.
+Complete the migration indicated by the code comments. Replace Fernet with XChaCha20-Poly1305 (as the HKDF is already configured for) using a library like pynacl/nacl.secret.SecretBox, or alternatively use AES-256-GCM from the cryptography library. Update the _derive_vote_key(), create_vote(), and decrypt_votestring() functions to use the approved AEAD cipher. Update the HKDF info parameter to match the chosen cipher. Implement a re-encryption strategy for existing vote data or a version-aware decryption path to handle the migration of stored ciphertext.
 
 ---
 
-#### FINDING-013: Complete Absence of Authenticated Data Clearing from Client Storage
+#### FINDING-016: Complete Absence of Authenticated Data Clearing from Client Storage
 
 | Attribute | Value |
 |-----------|-------|
@@ -425,7 +536,7 @@ Change the HKDF info parameter from b'xchacha20_key' to b'fernet_vote_key_v1' (o
 | **ASVS Sections** | 14.3.1 |
 | **Files** | `v3/server/pages.py:85-95,148,186,528` |
 | **Source Reports** | 14.3.1.md |
-| **Related** | FINDING-073 |
+| **Related** | FINDING-072 |
 
 **Description:**
 
@@ -437,7 +548,7 @@ The application completely lacks mechanisms to clear authenticated data from cli
 
 ---
 
-#### FINDING-014: Complete Absence of SBOM, Dependency Manifest, and Remediation Timeframes for Security-Critical Dependencies
+#### FINDING-017: Complete Absence of SBOM, Dependency Manifest, and Remediation Timeframes for Security-Critical Dependencies
 
 | Attribute | Value |
 |-----------|-------|
@@ -445,7 +556,7 @@ The application completely lacks mechanisms to clear authenticated data from cli
 | **ASVS Level(s)** | L1, L2 |
 | **CWE** | CWE-1395 |
 | **ASVS Sections** | 15.1.1, 15.1.2, 15.2.1 |
-| **Files** | `v3/server/main.py:1,29,37-38`&lt;br&gt;`v3/steve/crypto.py:21-24,58-94`&lt;br&gt;`v3/steve/election.py:24-25` |
+| **Files** | `v3/server/main.py:1`&lt;br&gt;`v3/steve/crypto.py:21-24,58-94`&lt;br&gt;`v3/steve/election.py:24-25`&lt;br&gt;`v3/server/main.py:29,37-38` |
 | **Source Reports** | 15.1.1.md, 15.1.2.md, 15.2.1.md |
 | **Related** | None |
 
@@ -459,13 +570,13 @@ The application has no Software Bill of Materials (SBOM), no dependency version 
 
 ---
 
-#### FINDING-015: Tampering Detection Event Bypasses Structured Logging Framework
+#### FINDING-018: Tampering Detection Event Bypasses Structured Logging Framework
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🔴 Critical |
 | **ASVS Level(s)** | L2 |
-| **CWE** | None |
+| **CWE** | - |
 | **ASVS Sections** | 16.1.1, 16.2.1, 16.2.3, 16.2.4, 16.3.3 |
 | **Files** | `v3/server/bin/tally.py:153-155,119,129,133-136,140-141,145-147,151,161-162` |
 | **Source Reports** | 16.1.1.md, 16.2.1.md, 16.2.3.md, 16.2.4.md, 16.3.3.md |
@@ -481,13 +592,13 @@ Replace print() statement with _LOGGER.critical() to log tampering detection wit
 
 ---
 
-#### FINDING-016: Tally Operations Create No Audit Trail With Operator Identity
+#### FINDING-019: Tally Operations Create No Audit Trail With Operator Identity
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🔴 Critical |
 | **ASVS Level(s)** | L2, L3 |
-| **CWE** | None |
+| **CWE** | - |
 | **ASVS Sections** | 16.1.1, 16.2.1, 16.3.1, 16.3.2, 16.3.3, 16.2.2 |
 | **Files** | `v3/server/bin/tally.py:136-160,102-133,88-142,76-113,116-142,120-150,85-115,138-165,98-135,145-171` |
 | **Source Reports** | 16.1.1.md, 16.2.1.md, 16.3.1.md, 16.3.2.md, 16.3.3.md, 16.2.2.md, 16.2.4.md |
@@ -503,7 +614,7 @@ Add comprehensive audit logging for tally lifecycle: (1) Log tally initiation wi
 
 ---
 
-#### FINDING-017: No Global Error Handler Defined - Unhandled Exceptions Expose Internal Details
+#### FINDING-020: No Global Error Handler Defined - Unhandled Exceptions Expose Internal Details
 
 | Attribute | Value |
 |-----------|-------|
@@ -513,7 +624,7 @@ Add comprehensive audit logging for tally lifecycle: (1) Log tally initiation wi
 | **ASVS Sections** | 16.5.1 |
 | **Files** | `v3/server/pages.py:1`&lt;br&gt;`v3/server/main.py:38-44`&lt;br&gt;`v3/server/pages.py:95-117` |
 | **Source Reports** | 16.5.1.md |
-| **Related** | FINDING-018, FINDING-223 |
+| **Related** | FINDING-021, FINDING-226 |
 
 **Description:**
 
@@ -525,7 +636,7 @@ Register a global error handler in main.py create_app() or pages.py using @APP.e
 
 ---
 
-#### FINDING-018: Error Handling Pattern Not Applied to State-Changing Endpoints
+#### FINDING-021: Error Handling Pattern Not Applied to State-Changing Endpoints
 
 | Attribute | Value |
 |-----------|-------|
@@ -535,7 +646,7 @@ Register a global error handler in main.py create_app() or pages.py using @APP.e
 | **ASVS Sections** | 16.5.1 |
 | **Files** | `v3/server/pages.py:498,520,538,563,586`&lt;br&gt;`v3/steve/election.py:75-89,122-128,190-207,209-220,222-233` |
 | **Source Reports** | 16.5.1.md |
-| **Related** | FINDING-017, FINDING-223 |
+| **Related** | FINDING-020, FINDING-226 |
 
 **Description:**
 
@@ -547,67 +658,23 @@ Option A: Apply try-except pattern to each endpoint (consistent with do_vote_end
 
 ---
 
-#### FINDING-019: Race Condition in Election Opening Can Corrupt Cryptographic State
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🔴 Critical |
-| **ASVS Level(s)** | L3 |
-| **CWE** | CWE-362 |
-| **ASVS Sections** | 15.4.1, 15.4.2 |
-| **Files** | `v3/steve/election.py:76-90,68-77`&lt;br&gt;`v3/server/pages.py:461` |
-| **Source Reports** | 15.4.1.md, 15.4.2.md |
-| **Related** | FINDING-022, FINDING-023, FINDING-089 |
-
-**Description:**
-
-The election opening process performs multiple separate database operations without transactional protection, creating a critical race condition window. The state check (is_editable()), salt generation (add_salts()), and final state transition (c_open.perform()) are not atomic, allowing concurrent open requests to corrupt the cryptographic state. Concurrent requests can overwrite per-voter salts and election keys, resulting in mismatched cryptographic state where the election opened_key will not match recomputed key during tamper detection, making vote decryption fail during tally and causing complete loss of election integrity.
-
-**Remediation:**
-
-Wrap the entire open operation in a single transaction with an atomic state check using BEGIN IMMEDIATE TRANSACTION. Move the state check inside the transaction, add atomic WHERE clause to the UPDATE statement (WHERE eid=? AND salt IS NULL AND opened_key IS NULL), and verify rowcount == 1 after execution to ensure the state transition succeeded.
-
----
-
 ### 3.2 High
 
-#### FINDING-020: HTML Injection in rewrite_description() - Output Encoding Not Performed Before HTML Construction
+#### FINDING-022: 🟠 Reflected XSS via URL Path Parameters in Error Templates Without Escaping
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟠 High |
-| **ASVS Level(s)** | L1, L2 |
+| **ASVS Level(s)** | L2 |
 | **CWE** | CWE-79 |
-| **ASVS Sections** | 1.1.1, 1.1.2, 1.2.1, 1.2.2, 1.2.9 |
-| **Files** | `v3/server/pages.py:38-63`, `v3/server/templates/vote-on.ezt:108` |
-| **Source Reports** | 1.1.1.md, 1.1.2.md, 1.2.1.md, 1.2.2.md, 1.2.9.md |
-| **Related** | FINDING-001, FINDING-002, FINDING-003, FINDING-004, FINDING-021, FINDING-027, FINDING-031, FINDING-093, FINDING-114 |
-
-**Description:**
-
-The `rewrite_description()` function constructs HTML by wrapping user-controlled issue descriptions in `<pre>` tags and converting `doc:filename` patterns to anchor tags. No HTML encoding is applied to the user-controlled text before constructing the HTML, violating ASVS 1.1.1's requirement that encoding should occur before further processing. The function creates three injection points: (1) raw description placed inside &lt;pre&gt; without HTML encoding, (2) filename extracted from description placed in href attribute without URL encoding, (3) filename placed as link text without HTML encoding. This creates stored XSS affecting all voters viewing the election ballot page.
-
-**Remediation:**
-
-HTML-encode the description FIRST using `html.escape()` before regex processing and HTML construction. Example: `import html` and `from urllib.parse import quote`. Then: `desc = html.escape(issue.description)` before regex substitution. In the replacement function: `return f'<a href=\"/docs/{html.escape(issue.iid)}/{quote(filename)}\">{html.escape(filename)}</a>'`. Finally: `issue.description = f'<pre>{desc}</pre>'`. This ensures encoding occurs before HTML construction, satisfying ASVS 1.1.1 architecture requirements.
-
----
-
-#### FINDING-021: Reflected XSS via URL Path Parameters in Error Templates Without Escaping
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟠 High |
-| **ASVS Level(s)** | L1, L2 |
-| **CWE** | CWE-79 |
-| **ASVS Sections** | 1.3.10, 1.3.5, 1.3.7, 1.3.3, 3.2.2 |
+| **ASVS Sections** | 1.3.10, 1.3.5, 1.3.7, 1.3.3 |
 | **Files** | `v3/server/pages.py:163-166`, `v3/server/pages.py:185-188`, `v3/server/pages.py:199-202`, `v3/server/pages.py:142-153`, `v3/server/templates/e_bad_eid.ezt:8`, `v3/server/templates/e_bad_iid.ezt:8`, `v3/server/templates/e_bad_pid.ezt:N/A` |
-| **Source Reports** | 1.3.10.md, 1.3.5.md, 1.3.7.md, 1.3.3.md, 3.2.2.md |
-| **Related** | FINDING-001, FINDING-002, FINDING-003, FINDING-004, FINDING-020, FINDING-027, FINDING-031, FINDING-093, FINDING-114 |
+| **Source Reports** | 1.3.10.md, 1.3.5.md, 1.3.7.md, 1.3.3.md |
+| **Related** | FINDING-001, FINDING-002, FINDING-003, FINDING-004, FINDING-028, FINDING-031, FINDING-091, FINDING-113, FINDING-114 |
 
 **Description:**
 
-Multiple flash messages interpolate user-provided input (form.title, iid from form keys) directly into message strings without HTML escaping. Flash messages are stored in the session via quart.flash() and retrieved via get_flashed_messages() in basic_info(), then rendered as raw HTML in templates. For title-based vectors, an admin submitting a form with HTML in the title field will see that HTML executed when the success message is displayed. For iid-based vectors (e.g., in do_vote_endpoint), a crafted form key like 'vote-&lt;img src=x onerror="alert(1)"&gt;' directly injects into the flash message when an invalid issue ID error occurs.
+URL path parameters (election ID and issue ID) are extracted from the request path and passed directly to error templates without HTML entity escaping. When an invalid ID is provided, the error template renders the raw parameter value in the HTML body, enabling reflected XSS attacks through crafted URLs. An attacker can craft malicious URLs containing JavaScript payloads that execute when error pages are rendered.
 
 **Remediation:**
 
@@ -635,17 +702,17 @@ if not EID_PATTERN.match(eid):
 
 ---
 
-#### FINDING-022: Election Opening Operation Lacks Atomic Transaction Control
+#### FINDING-023: 🟠 Election Opening Operation Lacks Atomic Transaction Control
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟠 High |
-| **ASVS Level(s)** | L2 |
+| **ASVS Level(s)** | L2, L3 |
 | **CWE** | CWE-362 |
-| **ASVS Sections** | 2.3.3, 2.3.4 |
+| **ASVS Sections** | 2.3.3, 2.3.4, 15.4.1, 15.4.2 |
 | **Files** | `v3/steve/election.py:74-89`, `v3/steve/election.py:126-140`, `v3/steve/election.py:73-84`, `v3/steve/election.py:121-139`, `v3/server/pages.py:472` |
-| **Source Reports** | 2.3.3.md, 2.3.4.md |
-| **Related** | FINDING-019, FINDING-023, FINDING-089 |
+| **Source Reports** | 2.3.3.md, 2.3.4.md, 15.4.1.md, 15.4.2.md |
+| **Related** | FINDING-024, FINDING-087 |
 
 **Description:**
 
@@ -657,17 +724,17 @@ Wrap the entire open() operation in a single transaction using IMMEDIATE mode to
 
 ---
 
-#### FINDING-023: Batch Vote Submission Lacks Transactional Atomicity
+#### FINDING-024: 🟠 Batch Vote Submission Lacks Transactional Atomicity
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟠 High |
 | **ASVS Level(s)** | L2, L3 |
 | **CWE** | CWE-362 |
-| **ASVS Sections** | 2.3.3, 2.3.4, 15.4.1, 15.4.2, 15.4.3, 16.5.2, 16.5.3 |
+| **ASVS Sections** | 2.3.3, 2.3.4, 15.4.1, 15.4.2, 15.4.3 |
 | **Files** | `v3/server/pages.py:376-417`, `v3/server/pages.py:403-446`, `v3/steve/election.py:201-212`, `v3/steve/election.py:258-269` |
-| **Source Reports** | 2.3.3.md, 2.3.4.md, 15.4.1.md, 15.4.2.md, 15.4.3.md, 16.5.2.md, 16.5.3.md |
-| **Related** | FINDING-019, FINDING-022, FINDING-089 |
+| **Source Reports** | 2.3.3.md, 2.3.4.md, 15.4.1.md, 15.4.2.md, 15.4.3.md |
+| **Related** | FINDING-023, FINDING-087 |
 
 **Description:**
 
@@ -679,7 +746,7 @@ Create a new add_votes() method in election.py that accepts a dictionary of {iid
 
 ---
 
-#### FINDING-024: TOCTOU Race Condition Allows Vote Insertion After Election Closure
+#### FINDING-025: 🟠 TOCTOU Race Condition Allows Vote Insertion After Election Closure
 
 | Attribute | Value |
 |-----------|-------|
@@ -689,7 +756,7 @@ Create a new add_votes() method in election.py that accepts a dictionary of {iid
 | **ASVS Sections** | 2.3.4, 15.4.1, 15.4.2, 15.4.3 |
 | **Files** | `v3/steve/election.py:258-269`, `v3/steve/election.py:113-119`, `v3/server/pages.py:403-446`, `v3/schema.sql:179` |
 | **Source Reports** | 2.3.4.md, 15.4.1.md, 15.4.2.md, 15.4.3.md |
-| **Related** | FINDING-090 |
+| **Related** | FINDING-088 |
 
 **Description:**
 
@@ -701,17 +768,17 @@ Wrap the entire check-and-write in a transaction with IMMEDIATE mode to acquire 
 
 ---
 
-#### FINDING-025: No Multi-User Approval for Irreversible Election State Transitions
+#### FINDING-026: 🟠 No Multi-User Approval for Irreversible Election State Transitions
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟠 High |
 | **ASVS Level(s)** | L3 |
-| **CWE** | null |
+| **CWE** | - |
 | **ASVS Sections** | 2.3.5 |
 | **Files** | `v3/server/pages.py:479-515`, `v3/steve/election.py:70-120` |
 | **Source Reports** | 2.3.5.md |
-| **Related** | |
+| **Related** | - |
 
 **Description:**
 
@@ -723,17 +790,17 @@ Implement a two-phase approval workflow: (1) Add approval_request table to schem
 
 ---
 
-#### FINDING-026: No Throttling or Timing Enforcement on Vote Submission Endpoint
+#### FINDING-027: 🟠 No Throttling or Timing Enforcement on Vote Submission Endpoint
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟠 High |
 | **ASVS Level(s)** | L2, L3 |
-| **CWE** | null |
+| **CWE** | - |
 | **ASVS Sections** | 2.4.1, 2.4.2 |
 | **Files** | `v3/server/pages.py:426-470`, `v3/server/pages.py:412-460` |
 | **Source Reports** | 2.4.1.md, 2.4.2.md |
-| **Related** | |
+| **Related** | - |
 
 **Description:**
 
@@ -745,7 +812,7 @@ Implement per-user rate limiting on `/do-vote/<eid>` with: (1) A sliding window 
 
 ---
 
-#### FINDING-027: User-Uploaded Documents Served Without Content Interpretation Controls
+#### FINDING-028: 🟠 User-Uploaded Documents Served Without Content Interpretation Controls
 
 | Attribute | Value |
 |-----------|-------|
@@ -755,7 +822,7 @@ Implement per-user rate limiting on `/do-vote/<eid>` with: (1) A sliding window 
 | **ASVS Sections** | 3.2.1 |
 | **Files** | `v3/server/pages.py:593-608`, `v3/server/pages.py:28-35` |
 | **Source Reports** | 3.2.1.md |
-| **Related** | FINDING-001, FINDING-002, FINDING-003, FINDING-004, FINDING-020, FINDING-021, FINDING-031, FINDING-093, FINDING-114 |
+| **Related** | FINDING-001, FINDING-002, FINDING-003, FINDING-004, FINDING-022, FINDING-031, FINDING-091, FINDING-113, FINDING-114 |
 
 **Description:**
 
@@ -767,17 +834,17 @@ Add Content-Disposition: attachment header, Content-Security-Policy: sandbox dir
 
 ---
 
-#### FINDING-028: Session Cookies Lack Secure Attribute Configuration
+#### FINDING-029: 🟠 Session Cookies Lack Secure Attribute Configuration
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟠 High |
 | **ASVS Level(s)** | L1 |
-| **CWE** | null |
+| **CWE** | - |
 | **ASVS Sections** | 3.3.1 |
 | **Files** | `v3/server/main.py:30-44`, `v3/server/pages.py:86`, `v3/server/main.py:77-80` |
 | **Source Reports** | 3.3.1.md |
-| **Related** | |
+| **Related** | - |
 
 **Description:**
 
@@ -789,7 +856,7 @@ Set SESSION_COOKIE_SECURE = True in the create_app() function in main.py. Additi
 
 ---
 
-#### FINDING-029: Session Cookie Missing Explicit SameSite Attribute Configuration
+#### FINDING-030: 🟠 Session Cookie Missing Explicit SameSite Attribute Configuration
 
 | Attribute | Value |
 |-----------|-------|
@@ -799,7 +866,7 @@ Set SESSION_COOKIE_SECURE = True in the create_app() function in main.py. Additi
 | **ASVS Sections** | 3.3.2 |
 | **Files** | `v3/server/main.py:33-49` |
 | **Source Reports** | 3.3.2.md |
-| **Related** | FINDING-007, FINDING-008, FINDING-030, FINDING-033, FINDING-034, FINDING-110, FINDING-140 |
+| **Related** | FINDING-007, FINDING-008, FINDING-009, FINDING-033, FINDING-034, FINDING-109 |
 
 **Description:**
 
@@ -811,29 +878,7 @@ Explicitly configure session cookie security attributes in the create_app() func
 
 ---
 
-#### FINDING-030: State-Changing GET Endpoints Bypass SameSite=Lax Protection
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟠 High |
-| **ASVS Level(s)** | L2 |
-| **CWE** | CWE-352 |
-| **ASVS Sections** | 3.3.2 |
-| **Files** | `v3/server/pages.py:464`, `v3/server/pages.py:484` |
-| **Source Reports** | 3.3.2.md |
-| **Related** | FINDING-007, FINDING-008, FINDING-029, FINDING-033, FINDING-034, FINDING-110, FINDING-140 |
-
-**Description:**
-
-Two critical election state-changing operations (open and close) are implemented as GET endpoints. This design bypasses the protection offered by SameSite=Lax cookies, as Lax explicitly permits cookies to be sent with top-level GET navigations, even cross-site. An attacker can prematurely open an election before issues and voters are finalized (which generates the anti-tamper key and locks the election from editing), or prematurely close an election, cutting off legitimate voters. Both operations are irreversible (enforced by state machine assertions in election.py). Even if SameSite=Lax were properly configured, these endpoints would remain vulnerable because Lax explicitly permits cookies on top-level GET navigations.
-
-**Remediation:**
-
-Change these endpoints from GET to POST methods. Update the corresponding templates to use form submission instead of links with proper CSRF token when implemented. Use 303 redirects after POST operations.
-
----
-
-#### FINDING-031: Stored XSS via Election/Issue Titles Rendered Without HTML Escaping
+#### FINDING-031: 🟠 Stored XSS via Election/Issue Titles Rendered Without HTML Escaping
 
 | Attribute | Value |
 |-----------|-------|
@@ -843,7 +888,7 @@ Change these endpoints from GET to POST methods. Update the corresponding templa
 | **ASVS Sections** | 3.2.2 |
 | **Files** | `v3/server/templates/admin.ezt:14`, `v3/server/templates/manage.ezt:8`, `v3/server/templates/manage.ezt:187`, `v3/server/templates/manage-stv.ezt:6`, `v3/server/templates/manage-stv.ezt:137`, `v3/server/templates/vote-on.ezt:9`, `v3/server/templates/vote-on.ezt:49`, `v3/server/templates/voter.ezt:33`, `v3/server/templates/voter.ezt:67`, `v3/server/pages.py:456`, `v3/server/pages.py:518` |
 | **Source Reports** | 3.2.2.md |
-| **Related** | FINDING-001, FINDING-002, FINDING-003, FINDING-004, FINDING-020, FINDING-021, FINDING-027, FINDING-093, FINDING-114 |
+| **Related** | FINDING-001, FINDING-002, FINDING-003, FINDING-004, FINDING-022, FINDING-028, FINDING-091, FINDING-113, FINDING-114 |
 
 **Description:**
 
@@ -855,17 +900,17 @@ Apply [format "html"] to ALL user-provided values in HTML body context: &lt;h2&g
 
 ---
 
-#### FINDING-032: Missing Content-Security-Policy frame-ancestors Directive on All Endpoints
+#### FINDING-032: 🟠 Missing Content-Security-Policy frame-ancestors Directive on All Endpoints
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟠 High |
 | **ASVS Level(s)** | L2 |
-| **CWE** | null |
+| **CWE** | - |
 | **ASVS Sections** | 3.4.6, 3.4.3 |
 | **Files** | `v3/server/main.py:27-42`, `v3/server/pages.py:119-123`, `v3/server/pages.py:223-277`, `v3/server/pages.py:460-477`, `v3/server/pages.py:480-495`, `v3/server/pages.py:682-684` |
 | **Source Reports** | 3.4.6.md, 3.4.3.md |
-| **Related** | |
+| **Related** | - |
 
 **Description:**
 
@@ -877,7 +922,7 @@ Option A (L2 compliance): Implement global CSP via after_request hook in create_
 
 ---
 
-#### FINDING-033: Vote Submission Endpoint Lacks CSRF Protection, Enabling Vote Manipulation
+#### FINDING-033: 🟠 Vote Submission Endpoint Lacks CSRF Protection, Enabling Vote Manipulation
 
 | Attribute | Value |
 |-----------|-------|
@@ -887,7 +932,7 @@ Option A (L2 compliance): Implement global CSP via after_request hook in create_
 | **ASVS Sections** | 3.5.1 |
 | **Files** | `v3/server/pages.py:438`, `v3/server/templates/vote-on.ezt:null` |
 | **Source Reports** | 3.5.1.md |
-| **Related** | FINDING-007, FINDING-008, FINDING-029, FINDING-030, FINDING-034, FINDING-110, FINDING-140 |
+| **Related** | FINDING-007, FINDING-008, FINDING-009, FINDING-030, FINDING-034, FINDING-109 |
 
 **Description:**
 
@@ -899,7 +944,7 @@ Add CSRF token validation as the first operation in do_vote_endpoint() before an
 
 ---
 
-#### FINDING-034: POST Endpoints Accept CORS-Safelisted Content Types Without Cross-Origin Verification
+#### FINDING-034: 🟠 POST Endpoints Accept CORS-Safelisted Content Types Without Cross-Origin Verification
 
 | Attribute | Value |
 |-----------|-------|
@@ -909,7 +954,7 @@ Add CSRF token validation as the first operation in do_vote_endpoint() before an
 | **ASVS Sections** | 3.5.2, 3.5.4 |
 | **Files** | `v3/server/pages.py:380-423`, `v3/server/pages.py:425-446`, `v3/server/pages.py:490-514`, `v3/server/pages.py:516-538`, `v3/server/pages.py:540-558`, `v3/server/pages.py:410`, `v3/server/pages.py:457`, `v3/server/pages.py:515`, `v3/server/pages.py:538`, `v3/server/pages.py:559`, `v3/server/pages.py:93` |
 | **Source Reports** | 3.5.2.md, 3.5.4.md |
-| **Related** | FINDING-007, FINDING-008, FINDING-029, FINDING-030, FINDING-033, FINDING-110, FINDING-140 |
+| **Related** | FINDING-007, FINDING-008, FINDING-009, FINDING-030, FINDING-033, FINDING-109 |
 
 **Description:**
 
@@ -921,17 +966,17 @@ Implement one or more of the following cross-origin protections: (Option A) Enfo
 
 ---
 
-#### FINDING-035: Cross-Origin Resource Loading of Authenticated Documents Without Sec-Fetch-* Validation
+#### FINDING-035: 🟠 Cross-Origin Resource Loading of Authenticated Documents Without Sec-Fetch-* Validation
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟠 High |
 | **ASVS Level(s)** | L3 |
-| **CWE** | null |
+| **CWE** | - |
 | **ASVS Sections** | 3.5.8 |
 | **Files** | `v3/server/pages.py:587-603` |
 | **Source Reports** | 3.5.8.md |
-| **Related** | |
+| **Related** | - |
 
 **Description:**
 
@@ -943,17 +988,17 @@ Validate Sec-Fetch-* headers to ensure same-origin navigation. Only allow same-o
 
 ---
 
-#### FINDING-036: State-Changing GET Endpoints Vulnerable to Cross-Origin Resource Embedding
+#### FINDING-036: 🟠 State-Changing GET Endpoints Vulnerable to Cross-Origin Resource Embedding
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟠 High |
 | **ASVS Level(s)** | L3 |
-| **CWE** | null |
+| **CWE** | - |
 | **ASVS Sections** | 3.5.8 |
 | **Files** | `v3/server/pages.py:462`, `v3/server/pages.py:481`, `v3/server/templates/manage.ezt:277`, `v3/server/templates/manage.ezt:285` |
 | **Source Reports** | 3.5.8.md |
-| **Related** | |
+| **Related** | - |
 
 **Description:**
 
@@ -965,17 +1010,17 @@ Change /do-open/&lt;eid&gt; and /do-close/&lt;eid&gt; from GET to POST methods. 
 
 ---
 
-#### FINDING-037: No Per-Message Digital Signatures on Vote Submission
+#### FINDING-037: 🟠 No Per-Message Digital Signatures on Vote Submission
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟠 High |
 | **ASVS Level(s)** | L3 |
-| **CWE** | null |
+| **CWE** | - |
 | **ASVS Sections** | 4.1.5 |
 | **Files** | `v3/server/pages.py:422-469`, `v3/steve/election.py:229-240`, `v3/steve/crypto.py:67-72`, `v3/steve/crypto.py:44-54` |
 | **Source Reports** | 4.1.5.md |
-| **Related** | |
+| **Related** | - |
 
 **Description:**
 
@@ -987,17 +1032,17 @@ Implement client-side signing of vote payloads using Web Crypto API with Ed25519
 
 ---
 
-#### FINDING-038: Document Serving Endpoint Lacks Comprehensive Filename Validation and Safe-Download Controls
+#### FINDING-038: 🟠 Document Serving Endpoint Lacks Comprehensive Filename Validation and Safe-Download Controls
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟠 High |
 | **ASVS Level(s)** | L1, L2 |
 | **CWE** | CWE-434 |
-| **ASVS Sections** | 5.1.1, 5.2.2, 5.3.1, 5.4.1, 1.3.6, 2.1.3 |
+| **ASVS Sections** | 5.1.1, 5.2.2, 5.3.1, 5.4.1, 2.1.3 |
 | **Files** | `v3/server/pages.py:576-580`, `v3/server/pages.py:594-609`, `v3/server/pages.py:428-441`, `v3/server/pages.py:602-618`, `v3/server/pages.py:47` |
-| **Source Reports** | 5.1.1.md, 5.2.2.md, 5.3.1.md, 5.4.1.md, 1.3.6.md, 2.1.3.md |
-| **Related** | |
+| **Source Reports** | 5.1.1.md, 5.2.2.md, 5.3.1.md, 5.4.1.md, 2.1.3.md |
+| **Related** | - |
 
 **Description:**
 
@@ -1005,38 +1050,11 @@ The serve_doc() function serves arbitrary files from the DOCSDIR / iid directory
 
 **Remediation:**
 
-Implement explicit allowlist validation for the `docname` parameter using a regex pattern that only permits safe characters (alphanumeric, hyphens, underscores, dots). Explicitly reject path traversal components like `..` or leading dots. Example implementation:
-
-```python
-import re
-
-# Allowlist for document filenames: alphanumeric, hyphens, underscores, dots
-SAFE_DOCNAME = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9._-]{0,254}$')
-
-@APP.get('/docs/<iid>/<docname>')
-@asfquart.auth.require
-async def serve_doc(iid, docname):
-    result = await basic_info()
-
-    # Validate docname against allowlist
-    if not SAFE_DOCNAME.match(docname):
-        quart.abort(400, 'Invalid document name')
-    
-    # Reject path traversal components explicitly
-    if '..' in docname or docname.startswith('.'):
-        quart.abort(400, 'Invalid document name')
-
-    db = steve.election.Election.open_database(DB_FNAME)
-    row = db.q_get_mayvote.first_row(result.uid, iid)
-    if not row:
-        quart.abort(404)
-
-    return await quart.send_from_directory(DOCSDIR / iid, docname)
-```
+First, create the documentation (Finding FILE_PATH-1). Then implement comprehensive validation: (1) Define ALLOWED_DOC_EXTENSIONS allowlist ({'.pdf', '.txt', '.md', '.png', '.jpg', '.jpeg', '.gif'}), (2) Validate filename format using regex (alphanumeric, hyphens, underscores, single dot for extension) - pattern: ^[a-zA-Z0-9][a-zA-Z0-9._-]*$, (3) Validate extension against allowlist, (4) Serve with explicit Content-Type from SAFE_CONTENT_TYPES mapping, (5) Add Content-Disposition: attachment header using as_attachment=True parameter, (6) Add X-Content-Type-Options: nosniff header, (7) Add Content-Security-Policy: default-src 'none' header for defense-in-depth, (8) Log all validation failures with user ID and filename, (9) Return HTTP 403 for invalid requests. For full ASVS 5.2.2 compliance, add content validation using magic byte validation with libraries like python-magic to verify file content matches its extension before accepting.
 
 ---
 
-#### FINDING-039: User-Controlled `iid` Used in Directory Path Construction Without Path Validation
+#### FINDING-039: 🟠 User-Controlled `iid` Used in Directory Path Construction Without Path Validation
 
 | Attribute | Value |
 |-----------|-------|
@@ -1046,7 +1064,7 @@ async def serve_doc(iid, docname):
 | **ASVS Sections** | 5.3.2 |
 | **Files** | `v3/server/pages.py:585-600`, `v3/server/pages.py:600`, `v3/server/pages.py:597` |
 | **Source Reports** | 5.3.2.md |
-| **Related** | FINDING-102 |
+| **Related** | FINDING-101 |
 
 **Description:**
 
@@ -1058,17 +1076,17 @@ Add explicit path validation for both `iid` and `docname` before any filesystem 
 
 ---
 
-#### FINDING-040: No Brute-Force or Credential Stuffing Protection on Authentication Flow
+#### FINDING-040: 🟠 No Brute-Force or Credential Stuffing Protection on Authentication Flow
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟠 High |
 | **ASVS Level(s)** | L1 |
-| **CWE** | null |
+| **CWE** | - |
 | **ASVS Sections** | 6.3.1 |
 | **Files** | `v3/server/main.py:36-44`, `v3/server/pages.py:entire file (all @asfquart.auth.require decorated endpoints)` |
 | **Source Reports** | 6.3.1.md |
-| **Related** | |
+| **Related** | - |
 
 **Description:**
 
@@ -1080,17 +1098,17 @@ Implement rate limiting middleware at the application level using quart_rate_lim
 
 ---
 
-#### FINDING-041: No Session Inactivity Timeout or Absolute Maximum Session Lifetime Implemented
+#### FINDING-041: 🟠 No Session Inactivity Timeout or Absolute Maximum Session Lifetime Implemented
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟠 High |
 | **ASVS Level(s)** | L2 |
-| **CWE** | null |
+| **CWE** | - |
 | **ASVS Sections** | 7.1.1, 7.3.1, 7.3.2, 7.1.3, 7.6.1 |
 | **Files** | `v3/server/pages.py:44-71`, `v3/server/pages.py:62-88`, `v3/server/main.py:33-46` |
 | **Source Reports** | 7.1.1.md, 7.3.1.md, 7.3.2.md, 7.1.3.md, 7.6.1.md |
-| **Related** | |
+| **Related** | - |
 
 **Description:**
 
@@ -1102,16 +1120,16 @@ Implement session lifetime controls: (1) Store 'created_at', 'last_activity', an
 
 ---
 
-#### FINDING-042: No Session Logout/Termination Endpoint Exists
+#### FINDING-042: 🟠 No Session Logout/Termination Endpoint Exists
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟠 High |
 | **ASVS Level(s)** | L1, L2, L3 |
 | **CWE** | CWE-613 |
-| **ASVS Sections** | 7.1.3, 7.2.4, 7.3.1, 7.4.1, 10.4.9, 10.6.2, 7.6.1 |
+| **ASVS Sections** | 7.1.3, 7.2.4, 7.3.1, 7.4.1, 7.6.1, 10.6.2 |
 | **Files** | `v3/server/pages.py:entire file` |
-| **Source Reports** | 7.1.3.md, 7.2.4.md, 7.3.1.md, 7.4.1.md, 10.4.9.md, 10.6.2.md, 7.6.1.md |
+| **Source Reports** | 7.1.3.md, 7.2.4.md, 7.3.1.md, 7.4.1.md, 7.6.1.md, 10.6.2.md |
 | **Related** | FINDING-047 |
 
 **Description:**
@@ -1124,7 +1142,7 @@ The application configures itself as an OIDC/OAuth Relying Party against oauth.a
 
 ---
 
-#### FINDING-043: No Session Regeneration on Authentication or Re-authentication
+#### FINDING-043: 🟠 No Session Regeneration on Authentication or Re-authentication
 
 | Attribute | Value |
 |-----------|-------|
@@ -1134,7 +1152,7 @@ The application configures itself as an OIDC/OAuth Relying Party against oauth.a
 | **ASVS Sections** | 7.2.4 |
 | **Files** | `v3/server/pages.py:78-90`, `v3/server/main.py:38-42` |
 | **Source Reports** | 7.2.4.md |
-| **Related** | |
+| **Related** | - |
 
 **Description:**
 
@@ -1146,7 +1164,7 @@ Add explicit session regeneration in the authentication callback. If asfquart pr
 
 ---
 
-#### FINDING-044: No Re-authentication Required Before Critical Operations
+#### FINDING-044: 🟠 No Re-authentication Required Before Critical Operations
 
 | Attribute | Value |
 |-----------|-------|
@@ -1156,7 +1174,7 @@ Add explicit session regeneration in the authentication callback. If asfquart pr
 | **ASVS Sections** | 7.1.3, 7.2.4, 7.5.3, 7.6.1 |
 | **Files** | `v3/server/pages.py:372-413`, `v3/server/pages.py:436`, `v3/server/pages.py:455`, `v3/server/pages.py:466-468`, `v3/server/pages.py:539-561`, `v3/server/pages.py:416`, `v3/server/pages.py:472`, `v3/server/pages.py:497` |
 | **Source Reports** | 7.1.3.md, 7.2.4.md, 7.5.3.md, 7.6.1.md |
-| **Related** | FINDING-164 |
+| **Related** | FINDING-163 |
 
 **Description:**
 
@@ -1168,17 +1186,17 @@ Implement a re-authentication gate for critical operations: (1) Store 'auth_time
 
 ---
 
-#### FINDING-045: No Session Termination When User Account Is Deleted or Disabled
+#### FINDING-045: 🟠 No Session Termination When User Account Is Deleted or Disabled
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟠 High |
 | **ASVS Level(s)** | L1 |
-| **CWE** | null |
+| **CWE** | - |
 | **ASVS Sections** | 7.4.2 |
 | **Files** | `v3/steve/persondb.py:51-61`, `v3/server/pages.py:78-92`, `v3/steve/persondb.py:28-73` |
 | **Source Reports** | 7.4.2.md |
-| **Related** | |
+| **Related** | - |
 
 **Description:**
 
@@ -1190,17 +1208,17 @@ When user accounts are deleted via PersonDB.delete_person(), no mechanism exists
 
 ---
 
-#### FINDING-046: No Mechanism to Terminate Sessions After Authentication Factor Changes
+#### FINDING-046: 🟠 No Mechanism to Terminate Sessions After Authentication Factor Changes
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟠 High |
 | **ASVS Level(s)** | L2 |
-| **CWE** | null |
+| **CWE** | - |
 | **ASVS Sections** | 7.4.3 |
 | **Files** | `v3/server/pages.py:63-76`, `v3/server/pages.py:506-520`, `v3/server/pages.py:514-520` |
 | **Source Reports** | 7.4.3.md |
-| **Related** | |
+| **Related** | - |
 
 **Description:**
 
@@ -1212,7 +1230,7 @@ The application provides no functionality to terminate all other active sessions
 
 ---
 
-#### FINDING-047: No Administrator Capability to Terminate User Sessions
+#### FINDING-047: 🟠 No Administrator Capability to Terminate User Sessions
 
 | Attribute | Value |
 |-----------|-------|
@@ -1234,17 +1252,17 @@ The application provides no mechanism for administrators to terminate active ses
 
 ---
 
-#### FINDING-048: Complete Absence of Active Session Viewing and Termination Capability for Users
+#### FINDING-048: 🟠 Complete Absence of Active Session Viewing and Termination Capability for Users
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟠 High |
 | **ASVS Level(s)** | L2 |
-| **CWE** | null |
+| **CWE** | - |
 | **ASVS Sections** | 7.5.2 |
 | **Files** | `v3/server/pages.py:537-549`, `v3/server/pages.py:68-78` |
 | **Source Reports** | 7.5.2.md |
-| **Related** | |
+| **Related** | - |
 
 **Description:**
 
@@ -1256,16 +1274,16 @@ Users cannot view their active sessions or terminate them. The application defin
 
 ---
 
-#### FINDING-049: Missing Explicit Voter Eligibility Check on Vote Submission Endpoint
+#### FINDING-049: 🟠 Missing Explicit Voter Eligibility Check on Vote Submission Endpoint
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟠 High |
 | **ASVS Level(s)** | L1, L2, L3 |
 | **CWE** | CWE-862 |
-| **ASVS Sections** | 8.1.1, 8.1.2, 8.1.4, 8.2.2, 8.3.2, 8.3.3, 8.4.1, 10.3.2, 10.4.11 |
+| **ASVS Sections** | 8.1.1, 8.1.2, 8.1.4, 8.2.2, 8.3.2, 8.3.3, 8.4.1 |
 | **Files** | `v3/server/pages.py:285-307`, `v3/server/pages.py:257`, `v3/server/pages.py:376`, `v3/server/pages.py:308`, `v3/server/pages.py:324`, `v3/server/pages.py:389-419`, `v3/server/pages.py:390-427`, `v3/steve/election.py:201-207`, `v3/steve/election.py:229`, `v3/steve/election.py:254-268` |
-| **Source Reports** | 8.1.1.md, 8.1.2.md, 8.1.4.md, 8.2.2.md, 8.3.2.md, 8.3.3.md, 8.4.1.md, 10.3.2.md, 10.4.11.md |
+| **Source Reports** | 8.1.1.md, 8.1.2.md, 8.1.4.md, 8.2.2.md, 8.3.2.md, 8.3.3.md, 8.4.1.md |
 | **Related** | FINDING-006 |
 
 **Description:**
@@ -1274,40 +1292,21 @@ The vote viewing page (vote_on_page) correctly checks voter eligibility using q_
 
 **Remediation:**
 
-Add voter eligibility verification in the `do_vote_endpoint` function before recording votes:
-
-```python
-@APP.post('/do-vote/<eid>')
-@asfquart.auth.require({R.committer})
-@load_election
-async def do_vote_endpoint(election):
-    result = await basic_info()
-
-    # Verify voter is eligible for this election
-    election.q_find_issues.perform(result.uid, election.eid)
-    if not election.q_find_issues.fetchall():
-        await flash_danger('You are not authorized to vote in this election.')
-        return quart.redirect('/voter', code=303)
-
-    form = edict(await quart.request.form)
-    ...
-```
-
-Deploy immediately to prevent unauthorized vote manipulation.
+Add explicit voter eligibility check in do_vote_endpoint before processing any votes. Verify the user has mayvote entries for the election using q_find_issues. Check each submitted issue ID against the eligible_issues set. Return proper 403 Forbidden responses with clear error messages for ineligible voters instead of relying on exception handling. Add explicit None check in add_vote() method with a descriptive VoterNotEligible exception. Include security logging for all unauthorized vote attempts with user ID, election ID, and attempted issue ID.
 
 ---
 
-#### FINDING-050: authz Field Defined in Schema and Documented but Never Evaluated in Access Control Decisions
+#### FINDING-050: 🟠 authz Field Defined in Schema and Documented but Never Evaluated in Access Control Decisions
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🟠 High |
-| ASVS Level(s) | L2, L3 |
-| CWE | CWE-285 |
-| ASVS Sections | 8.1.2, 8.1.3 |
-| Files | `v3/schema.sql:52`, `v3/docs/schema.md:N/A`, `v3/steve/election.py:143`, `v3/server/pages.py:N/A` |
-| Source Reports | 8.1.2.md, 8.1.3.md |
-| Related Findings | - |
+| **Severity** | 🟠 High |
+| **ASVS Level(s)** | L2, L3 |
+| **CWE** | CWE-285 |
+| **ASVS Sections** | 8.1.2, 8.1.3 |
+| **Files** | `v3/schema.sql:52`, `v3/docs/schema.md:N/A`, `v3/steve/election.py:143`, `v3/server/pages.py:N/A` |
+| **Source Reports** | 8.1.2.md, 8.1.3.md |
+| **Related** | - |
 
 **Description:**
 
@@ -1319,17 +1318,17 @@ Create an authorization policy document and implement authz group checks in the 
 
 ---
 
-#### FINDING-051: Per-Issue Voter Eligibility Not Enforced — Issue Properties Exposed Without Field-Level Authorization
+#### FINDING-051: 🟠 Per-Issue Voter Eligibility Not Enforced — Issue Properties Exposed Without Field-Level Authorization
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🟠 High |
-| ASVS Level(s) | L2 |
-| CWE | CWE-639 |
-| ASVS Sections | 8.2.3 |
-| Files | `v3/server/pages.py:225-272`, `v3/server/pages.py:236-241`, `v3/server/pages.py:247`, `v3/steve/election.py:183-191`, `v3/steve/election.py:196-207` |
-| Source Reports | 8.2.3.md |
-| Related Findings | FINDING-009, FINDING-053, FINDING-154 |
+| **Severity** | 🟠 High |
+| **ASVS Level(s)** | L2 |
+| **CWE** | CWE-639 |
+| **ASVS Sections** | 8.2.3 |
+| **Files** | `v3/server/pages.py:225-272`, `v3/server/pages.py:236-241`, `v3/server/pages.py:247`, `v3/steve/election.py:183-191`, `v3/steve/election.py:196-207` |
+| **Source Reports** | 8.2.3.md |
+| **Related** | FINDING-010, FINDING-053, FINDING-153 |
 
 **Description:**
 
@@ -1351,7 +1350,7 @@ Filter issues by user eligibility in vote_on_page: query q_find_issues to get el
 | ASVS Sections | 10.3.5, 10.4.14 |
 | Files | `v3/server/main.py:37-41`, `v3/server/pages.py:multiple (all 21 protected endpoints)`, `v3/server/main.py:77-80`, `v3/server/main.py:82-84` |
 | Source Reports | 10.3.5.md, 10.4.14.md |
-| Related Findings | - |
+| Related | - |
 
 **Description:**
 
@@ -1383,7 +1382,7 @@ Interim compensating controls: reduce token lifetime, implement IP address bindi
 | ASVS Sections | 10.4.13, 10.4.15 |
 | Files | `v3/server/main.py:37-42`, `v3/server/main.py:38-42` |
 | Source Reports | 10.4.13.md, 10.4.15.md |
-| Related Findings | FINDING-009, FINDING-051, FINDING-154 |
+| Related | FINDING-010, FINDING-051, FINDING-153 |
 
 **Description:**
 
@@ -1405,7 +1404,7 @@ The application uses the OAuth authorization code grant type but constructs auth
 | ASVS Sections | 10.4.16 |
 | Files | `v3/server/main.py:38-43` |
 | Source Reports | 10.4.16.md |
-| Related Findings | - |
+| Related | - |
 
 **Description:**
 
@@ -1464,7 +1463,7 @@ def build_client_assertion(client_id, token_endpoint, private_key):
 | ASVS Sections | 10.5.2 |
 | Files | `v3/server/main.py:38-43` |
 | Source Reports | 10.5.2.md |
-| Related Findings | - |
+| Related | - |
 
 **Description:**
 
@@ -1486,7 +1485,7 @@ Migrate from the custom OAuth flow to standard OIDC, consuming and validating th
 | ASVS Sections | 10.5.4 |
 | Files | `v3/server/main.py:35-48`, `v3/server/pages.py:79` |
 | Source Reports | 10.5.4.md |
-| Related Findings | - |
+| Related | - |
 
 **Description:**
 
@@ -1508,7 +1507,7 @@ The application explicitly overrides OIDC behavior and implements custom OAuth U
 | ASVS Sections | 12.1.2, 12.3.1, 12.3.3, 12.3.4 |
 | Files | `v3/server/main.py:79-84`, `v3/server/main.py:83-89`, `v3/server/main.py:98-104` |
 | Source Reports | 12.1.2.md, 12.3.1.md, 12.3.3.md, 12.3.4.md |
-| Related Findings | - |
+| Related | - |
 
 **Description:**
 
@@ -1530,7 +1529,7 @@ Create a properly configured SSLContext with restricted cipher suites, TLS 1.2+ 
 | ASVS Sections | 12.1.4 |
 | Files | `v3/server/main.py:93-100` |
 | Source Reports | 12.1.4.md |
-| Related Findings | - |
+| Related | - |
 
 **Description:**
 
@@ -1552,7 +1551,7 @@ Create an explicit ssl.SSLContext with OCSP Stapling support and pass it to the 
 | ASVS Sections | 12.1.5 |
 | Files | `v3/server/main.py:82-88`, `v3/server/config.yaml.example:28-31` |
 | Source Reports | 12.1.5.md |
-| Related Findings | - |
+| Related | - |
 
 **Description:**
 
@@ -1574,7 +1573,7 @@ ECH requires server-side support in the TLS library and DNS publication. Immedia
 | ASVS Sections | 12.1.3, 12.3.4, 12.3.5 |
 | Files | `v3/server/main.py:83-90`, `v3/server/main.py:79-87`, `v3/server/config.yaml.example:28-30`, `v3/server/config.yaml.example:28-31` |
 | Source Reports | 12.1.3.md, 12.3.4.md, 12.3.5.md |
-| Related Findings | - |
+| Related | - |
 
 **Description:**
 
@@ -1596,7 +1595,7 @@ Create an explicit `ssl.SSLContext` with proper configuration and provide mTLS c
 | ASVS Sections | 12.2.2 |
 | Files | `v3/server/main.py:87-91`, `v3/server/config.yaml.example:31-33`, `v3/server/main.py:97-117` |
 | Source Reports | 12.2.2.md |
-| Related Findings | - |
+| Related | - |
 
 **Description:**
 
@@ -1618,7 +1617,7 @@ The TLS control exists (certificate paths can be configured) but is never enforc
 | ASVS Sections | 11.1.1, 11.1.2, 11.1.3, 11.1.4 |
 | Files | `v3/steve/crypto.py:entire file`, `v3/steve/election.py:entire file`, `v3/schema.sql`, `All files in codebase:N/A` |
 | Source Reports | 11.1.1.md, 11.1.2.md, 11.1.3.md, 11.1.4.md |
-| Related Findings | - |
+| Related | - |
 
 **Description:**
 
@@ -1640,7 +1639,7 @@ Create a formal CRYPTO_INVENTORY.md document at the repository root that include
 | ASVS Sections | 11.2.2 |
 | Files | `v3/steve/crypto.py:62`, `v3/steve/crypto.py:69`, `v3/steve/crypto.py:53`, `v3/steve/crypto.py:77`, `v3/steve/crypto.py:38` |
 | Source Reports | 11.2.2.md |
-| Related Findings | - |
+| Related | - |
 
 **Description:**
 
@@ -1662,7 +1661,7 @@ Introduce a crypto provider abstraction with configuration-driven algorithm sele
 | ASVS Sections | 13.1.2, 13.2.6 |
 | Files | `v3/steve/election.py:42-48`, `v3/server/config.yaml.example` |
 | Source Reports | 13.1.2.md, 13.2.6.md |
-| Related Findings | - |
+| Related | - |
 
 **Description:**
 
@@ -1679,20 +1678,20 @@ The Election class opens a new, independent SQLite database connection for every
 | Attribute | Value |
 |-----------|-------|
 | Severity | 🟠 High |
-| ASVS Level(s) | L3 |
+| ASVS Level(s) | L2, L3 |
 | CWE | - |
-| ASVS Sections | 13.1.2 |
+| ASVS Sections | 13.1.2, 15.1.3, 15.2.2 |
 | Files | `v3/steve/crypto.py:88-98`, `v3/steve/election.py:230-243` |
-| Source Reports | 13.1.2.md |
-| Related Findings | - |
+| Source Reports | 13.1.2.md, 15.1.3.md, 15.2.2.md |
+| Related | - |
 
 **Description:**
 
-Each vote submission (add_vote) triggers Argon2 hashing with memory_cost=65536 (64 MiB) per invocation. There are no documented or implemented limits on concurrent cryptographic operations. An authenticated attacker can submit concurrent vote requests, each consuming 64 MiB of memory with no cap, leading to memory exhaustion and denial of service. This constitutes an undocumented resource consumption pattern for an internal service (the cryptographic subsystem). With 20 concurrent vote submissions, the application allocates 20 × 64 MiB = 1.28 GiB of memory simultaneously for Argon2 alone. The tally_issue method is worse—it calls gen_vote_token once per eligible voter in a loop (line 266), meaning tallying an election with 1,000 voters allocates 64 GiB sequentially (or concurrently if multiple tallies run). No documentation defines these resource requirements or maximum concurrent operation limits.
+The application uses Argon2 key derivation with significant resource requirements (64MB memory, ~200-500ms CPU time per invocation) in multiple web request paths without any documentation identifying these operations as resource-intensive, documented defenses against availability loss, or documented strategies to avoid response times exceeding consumer timeouts. This directly violates ASVS 15.1.3. The application uses Quart (async framework) but calls synchronous CPU-bound Argon2 operations directly within the async event loop without offloading to a thread pool, blocking the entire event loop during cryptographic operations. Resource impact scenarios: (1) Vote submission (add_vote): 1× Argon2 per request — 10 concurrent submissions = 640MB peak memory + CPU saturation, (2) Ballot status (has_voted_upon): N × Argon2 where N = number of issues — 20 issues = ~10 seconds response time likely exceeding client timeout, (3) Tally operation (tally_issue): O(N) where N = eligible voters — 100 voters = ~50s, 1000 voters = ~500s with no documented timeout or processing strategy. During the 500ms Argon2 execution, the entire async event loop is blocked and no other requests (including health checks) can be served. There is no documentation of expected execution time, no guidance on maximum supported election sizes, no documented timeout or processing strategy, and no documented mitigation for event loop blocking.
 
 **Remediation:**
 
-1. Document the resource profile of cryptographic operations in config.yaml or operations documentation: argon2_memory_mb (64), max_concurrent_hash_ops (4), and behavior when limit reached (queue requests, return 429 after 10s timeout). 2. Implement a semaphore to bound concurrent Argon2 operations using asyncio.Semaphore(4) to limit max 4 concurrent operations (256 MiB max) with async wrapper bounded_hash() that uses asyncio.to_thread() for synchronous _hash() calls.
+1. Create an operations/architecture document that: (a) Identifies each resource-intensive operation with its CPU/memory profile (Vote Submission: 1× Argon2 = 64MB RAM + ~500ms CPU; Ballot Status: N × Argon2 where N = issues; Tally: N × Argon2 where N = eligible voters), (b) Documents maximum concurrent requests the server can handle based on Argon2 memory, (c) Specifies recommended reverse proxy timeout settings (client timeout ≥ 2s for vote submission, N × 0.5s for ballot status), (d) Describes recommended deployment configuration (worker count, memory limits), (e) Documents expected execution times for various voter counts in tally operations. 2. Implement asyncio.run_in_executor() for all Argon2-calling paths using a bounded ThreadPoolExecutor (e.g., max_workers=4 to limit concurrent operations: 4 concurrent × 64MB = 256MB Argon2 budget). Convert synchronous methods like add_vote() to async versions (add_vote_async()) that offload CPU-bound operations. 3. Document the thread pool size as the concurrency control mechanism: 'Argon2 operations are offloaded to a bounded thread pool (max_workers=4). This limits peak memory to 256MB and prevents event loop blocking. Excess requests queue at the executor.' 4. Implement rate limiting at the web layer using quart_rate_limiter (e.g., 5 votes per minute per user). 5. Add maximum issue count check (e.g., MAX_ISSUES_PER_CHECK = 100) in has_voted_upon(). 6. For tally operations: document as CLI-only, add logging of expected resource consumption based on voter count, implement progress callback mechanism, consider running in separate process with CPU affinity. 7. Document operational planning guidance: 'For elections > 200 voters, schedule tallying during low-usage windows. Maximum supported: tested up to N voters.'
 
 ---
 
@@ -1706,7 +1705,7 @@ Each vote submission (add_vote) triggers Argon2 hashing with memory_cost=65536 (
 | ASVS Sections | 13.1.4 |
 | Files | `v3/server/config.yaml.example:1-22`, `v3/steve/crypto.py:13-77`, `v3/steve/election.py:82-94, 143-151`, `v3/server/main.py:38-49` |
 | Source Reports | 13.1.4.md |
-| Related Findings | FINDING-152, FINDING-191 |
+| Related | FINDING-151, FINDING-190 |
 
 **Description:**
 
@@ -1728,7 +1727,7 @@ Create SECURITY.md in repository root with comprehensive secrets inventory inclu
 | ASVS Sections | 13.1.4 |
 | Files | `v3/steve/crypto.py:68-77`, `v3/steve/election.py:82-94, 143-151, 282-295` |
 | Source Reports | 13.1.4.md |
-| Related Findings | FINDING-070 |
+| Related | FINDING-069 |
 
 **Description:**
 
@@ -1745,12 +1744,12 @@ Document rotation schedule and constraints in SECURITY.md with rotation frequenc
 | Attribute | Value |
 |-----------|-------|
 | Severity | 🟠 High |
-| ASVS Level(s) | L2 |
+| ASVS Level(s) | L2, L3 |
 | CWE | - |
-| ASVS Sections | 13.3.1 |
+| ASVS Sections | 13.3.1, 13.3.4 |
 | Files | `v3/steve/election.py:75-88`, `v3/steve/election.py:258-274`, `v3/server/main.py:77-78`, `v3/server/config.yaml.example:28-29` |
-| Source Reports | 13.3.1.md |
-| Related Findings | - |
+| Source Reports | 13.3.1.md, 13.3.4.md |
+| Related | - |
 
 **Description:**
 
@@ -1758,33 +1757,11 @@ ASVS 13.3.1 (L2) requires a secrets management solution (e.g., key vault) to sec
 
 **Remediation:**
 
-Integrate a secrets management solution to protect at minimum the election master key. Example implementation using HashiCorp Vault: Create a SecretManager class with wrap_key() and unwrap_key() methods using vault transit engine. In election.py open() method, wrap the opened_key before storing in database. In election.py add_vote() method, unwrap the key from vault when needed. For TLS keys and OAuth secrets, source them from vault rather than filesystem/config by referencing vault paths in config.yaml instead of file paths.
-
----
-
-#### FINDING-069: No Secret Destruction or Lifecycle Management for Election Key Material
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🟠 High |
-| ASVS Level(s) | L2, L3 |
-| CWE | - |
-| ASVS Sections | 13.3.1, 13.3.4 |
-| Files | `v3/steve/election.py:119-125`, `v3/steve/election.py:52-73` |
-| Source Reports | 13.3.1.md, 13.3.4.md |
-| Related Findings | - |
-
-**Description:**
-
-Once an election's opened_key is generated and stored in the database, it persists indefinitely. There is no mechanism to destroy, expire, or rotate the cryptographic key material after tallying is complete. ASVS 13.3.1 explicitly requires the ability to 'destroy backend secrets'. The close() method only flips a flag while opened_key and all salts remain in database. The delete() method only works for editable (never-opened) elections. After tallying is complete and results are finalized, the full cryptographic chain (opened_key → vote_token → Fernet key → plaintext vote) remains reconstructable from the database. An attacker who gains database access months or years later can still decrypt all votes. This violates the principle of data minimization and the ASVS requirement for secret destruction capability.
-
-**Remediation:**
-
 Add a post-tally key destruction step with a destroy_key_material() method that: asserts the election is closed, begins a database transaction, destroys the election master key, destroys per-voter salts, destroys vote tokens and ciphertexts, commits the transaction, executes VACUUM to force SQLite to reclaim space and overwrite deleted pages, and logs the key material destruction event. This should be called after tallying is complete and results are finalized. Add a purge_crypto() method and integrate it into the post-tally lifecycle. Add an 'archived' state to the election lifecycle to track when cryptographic material has been destroyed.
 
 ---
 
-#### FINDING-070: Master Election Key (opened_key) Stored in Application Database Co-located with Encrypted Votes
+#### FINDING-069: Master Election Key (opened_key) Stored in Application Database Co-located with Encrypted Votes
 
 | Attribute | Value |
 |-----------|-------|
@@ -1794,7 +1771,7 @@ Add a post-tally key destruction step with a destroy_key_material() method that:
 | ASVS Sections | 13.3.3 |
 | Files | `v3/steve/election.py:67-84`, `v3/steve/election.py:118-131`, `v3/steve/election.py:222-236`, `v3/steve/election.py:257-299`, `v3/steve/election.py:238-256` |
 | Source Reports | 13.3.3.md |
-| Related Findings | FINDING-067 |
+| Related | FINDING-067 |
 
 **Description:**
 
@@ -1806,7 +1783,7 @@ Store the opened_key in an external secrets manager (HashiCorp Vault, AWS Secret
 
 ---
 
-#### FINDING-071: Absence of Formal Sensitive Data Classification and Protection Levels
+#### FINDING-070: Absence of Formal Sensitive Data Classification and Protection Levels
 
 | Attribute | Value |
 |-----------|-------|
@@ -1816,7 +1793,7 @@ Store the opened_key in an external secrets manager (HashiCorp Vault, AWS Secret
 | ASVS Sections | 14.1.1 |
 | Files | `v3/steve/election.py:146-157`, `v3/steve/election.py:163`, `v3/steve/persondb.py:38`, `v3/server/pages.py:57`, `v3/server/pages.py:603`, `v3/schema.sql` |
 | Source Reports | 14.1.1.md |
-| Related Findings | - |
+| Related | - |
 
 **Description:**
 
@@ -1828,7 +1805,7 @@ The system processes at least six distinct categories of sensitive data (electio
 
 ---
 
-#### FINDING-072: Potential Sensitive Data Leakage Through Exception Logging During Vote Processing
+#### FINDING-071: Potential Sensitive Data Leakage Through Exception Logging During Vote Processing
 
 | Attribute | Value |
 |-----------|-------|
@@ -1838,7 +1815,7 @@ The system processes at least six distinct categories of sensitive data (electio
 | ASVS Sections | 14.1.2 |
 | Files | `v3/server/pages.py:~425-432`, `v3/steve/election.py:~207` |
 | Source Reports | 14.1.2.md |
-| Related Findings | - |
+| Related | FINDING-200 |
 
 **Description:**
 
@@ -1850,7 +1827,7 @@ Remove exception details from logging. Replace the current logging statement wit
 
 ---
 
-#### FINDING-073: Complete Absence of Cache-Control Headers on All Sensitive Endpoints
+#### FINDING-072: Complete Absence of Cache-Control Headers on All Sensitive Endpoints
 
 | Attribute | Value |
 |-----------|-------|
@@ -1860,7 +1837,7 @@ Remove exception details from logging. Replace the current logging statement wit
 | ASVS Sections | 14.1.2, 14.2.2, 14.2.4, 14.2.5, 14.3.2, 14.1.1 |
 | Files | `v3/server/pages.py:60`, `v3/server/pages.py:137`, `v3/server/pages.py:220`, `v3/server/pages.py:283`, `v3/server/pages.py:320`, `v3/server/pages.py:343`, `v3/server/pages.py:530`, `v3/server/pages.py:540`, `v3/server/pages.py:156`, `v3/server/pages.py:240`, `v3/server/pages.py:299`, `v3/server/pages.py:333`, `v3/server/pages.py:353`, `v3/server/pages.py:537`, `v3/server/pages.py:545`, `v3/server/pages.py:223`, `v3/server/pages.py:119`, `v3/server/pages.py:286`, `v3/server/pages.py:238`, `v3/server/pages.py:151`, `v3/server/pages.py:302`, `v3/server/pages.py:328`, `v3/server/pages.py:348` |
 | Source Reports | 14.1.2.md, 14.2.2.md, 14.2.4.md, 14.2.5.md, 14.3.2.md, 14.1.1.md |
-| Related Findings | FINDING-013 |
+| Related | FINDING-016 |
 
 **Description:**
 
@@ -1872,7 +1849,7 @@ Add an after-request handler to set Cache-Control: no-store on all authenticated
 
 ---
 
-#### FINDING-074: Election Management Endpoints Lack Ownership Authorization
+#### FINDING-073: Election Management Endpoints Lack Ownership Authorization
 
 | Attribute | Value |
 |-----------|-------|
@@ -1882,7 +1859,7 @@ Add an after-request handler to set Cache-Control: no-store on all authenticated
 | ASVS Sections | 14.2.6 |
 | Files | `v3/server/pages.py:308`, `v3/server/pages.py:355`, `v3/server/pages.py:361`, `v3/server/pages.py:423`, `v3/server/pages.py:441`, `v3/server/pages.py:457`, `v3/server/pages.py:479`, `v3/server/pages.py:500` |
 | Source Reports | 14.2.6.md |
-| Related Findings | - |
+| Related | - |
 
 **Description:**
 
@@ -1894,7 +1871,7 @@ Implement ownership/authz verification on all management endpoints. Add authoriz
 
 ---
 
-#### FINDING-075: No Data Retention Classification for Any Sensitive Data Category
+#### FINDING-074: No Data Retention Classification for Any Sensitive Data Category
 
 | Attribute | Value |
 |-----------|-------|
@@ -1904,7 +1881,7 @@ Implement ownership/authz verification on all management endpoints. Add authoriz
 | ASVS Sections | 14.2.7 |
 | Files | `v3/schema.sql:vote table definition`, `v3/schema.sql:person table definition`, `v3/steve/election.py:180-200`, `v3/steve/election.py:64-78`, `v3/steve/persondb.py:51-64`, `v3/server/pages.py:past_elections feature` |
 | Source Reports | 14.2.7.md |
-| Related Findings | - |
+| Related | - |
 
 **Description:**
 
@@ -1916,17 +1893,17 @@ The system handles multiple categories of sensitive data — encrypted votes, vo
 
 ---
 
-#### FINDING-076: Election Cryptographic Key Material Persisted Indefinitely After Use
+#### FINDING-075: Election Cryptographic Key Material Persisted Indefinitely After Use
 
 | Attribute | Value |
 |-----------|-------|
 | Severity | 🟠 High |
-| ASVS Level(s) | L3, L2 |
+| ASVS Level(s) | L2, L3 |
 | CWE | - |
 | ASVS Sections | 14.2.7, 11.2.2 |
 | Files | `v3/schema.sql:election table definition`, `v3/schema.sql:mayvote table definition`, `v3/steve/election.py:64-78`, `v3/steve/election.py:80-90`, `v3/steve/election.py:217-255`, `v3/steve/election.py:50-60` |
 | Source Reports | 14.2.7.md, 11.2.2.md |
-| Related Findings | - |
+| Related | - |
 
 **Description:**
 
@@ -1938,7 +1915,7 @@ Add algorithm version fields to all tables storing cryptographic material. For t
 
 ---
 
-#### FINDING-077: No Documentation Classifying Third-Party Component Risk Levels
+#### FINDING-076: No Documentation Classifying Third-Party Component Risk Levels
 
 | Attribute | Value |
 |-----------|-------|
@@ -1948,7 +1925,7 @@ Add algorithm version fields to all tables storing cryptographic material. For t
 | ASVS Sections | 15.1.4 |
 | Files | `v3/steve/crypto.py:25-28`, `v3/steve/election.py:22-24`, `v3/steve/election.py:146-156`, `v3/steve/election.py:216`, `v3/steve/election.py:259`, `v3/steve/election.py:310`, `v3/server/main.py:37` |
 | Source Reports | 15.1.4.md |
-| Related Findings | - |
+| Related | - |
 
 **Description:**
 
@@ -1960,29 +1937,7 @@ Create a dependency risk assessment document (e.g., DEPENDENCIES.md or integrate
 
 ---
 
-#### FINDING-078: Missing Documentation of Resource-Intensive Argon2 Operations and Availability Defenses
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🟠 High |
-| ASVS Level(s) | L2 |
-| CWE | - |
-| ASVS Sections | 15.1.3, 15.2.2 |
-| Files | `v3/steve/crypto.py:91-102`, `v3/steve/election.py:266-280`, `v3/steve/election.py:270-285`, `v3/steve/election.py:282-348`, `v3/steve/election.py:287-351`, `v3/steve/election.py:306-340`, `v3/steve/election.py:350-375`, `v3/steve/election.py:353-378`, `v3/server/main.py:39` |
-| Source Reports | 15.1.3.md, 15.2.2.md |
-| Related Findings | - |
-
-**Description:**
-
-The application uses Argon2 key derivation with significant resource requirements (64MB memory, ~200-500ms CPU time per invocation) in multiple web request paths without any documentation identifying these operations as resource-intensive, documented defenses against availability loss, or documented strategies to avoid response times exceeding consumer timeouts. This directly violates ASVS 15.1.3. The application uses Quart (async framework) but calls synchronous CPU-bound Argon2 operations directly within the async event loop without offloading to a thread pool, blocking the entire event loop during cryptographic operations. Resource impact scenarios: (1) Vote submission (add_vote): 1× Argon2 per request — 10 concurrent submissions = 640MB peak memory + CPU saturation, (2) Ballot status (has_voted_upon): N × Argon2 where N = number of issues — 20 issues = ~10 seconds response time likely exceeding client timeout, (3) Tally operation (tally_issue): O(N) where N = eligible voters — 100 voters = ~50s, 1000 voters = ~500s with no documented timeout or processing strategy. During the 500ms Argon2 execution, the entire async event loop is blocked and no other requests (including health checks) can be served. There is no documentation of expected execution time, no guidance on maximum supported election sizes, no documented timeout or processing strategy, and no documented mitigation for event loop blocking.
-
-**Remediation:**
-
-1. Create an operations/architecture document that: (a) Identifies each resource-intensive operation with its CPU/memory profile (Vote Submission: 1× Argon2 = 64MB RAM + ~500ms CPU; Ballot Status: N × Argon2 where N = issues; Tally: N × Argon2 where N = eligible voters), (b) Documents maximum concurrent requests the server can handle based on Argon2 memory, (c) Specifies recommended reverse proxy timeout settings (client timeout ≥ 2s for vote submission, N × 0.5s for ballot status), (d) Describes recommended deployment configuration (worker count, memory limits), (e) Documents expected execution times for various voter counts in tally operations. 2. Implement asyncio.run_in_executor() for all Argon2-calling paths using a bounded ThreadPoolExecutor (e.g., max_workers=4 to limit concurrent operations: 4 concurrent × 64MB = 256MB Argon2 budget). Convert synchronous methods like add_vote() to async versions (add_vote_async()) that offload CPU-bound operations. 3. Document the thread pool size as the concurrency control mechanism: 'Argon2 operations are offloaded to a bounded thread pool (max_workers=4). This limits peak memory to 256MB and prevents event loop blocking. Excess requests queue at the executor.' 4. Implement rate limiting at the web layer using quart_rate_limiter (e.g., 5 votes per minute per user). 5. Add maximum issue count check (e.g., MAX_ISSUES_PER_CHECK = 100) in has_voted_upon(). 6. For tally operations: document as CLI-only, add logging of expected resource consumption based on voter count, implement progress callback mechanism, consider running in separate process with CPU affinity. 7. Document operational planning guidance: 'For elections > 200 voters, schedule tallying during low-usage windows. Maximum supported: tested up to N voters.'
-
----
-
-#### FINDING-079: cryptography.hazmat and argon2.low_level API Usage Not Documented as Dangerous Functionality
+#### FINDING-077: cryptography.hazmat and argon2.low_level API Usage Not Documented as Dangerous Functionality
 
 | Attribute | Value |
 |-----------|-------|
@@ -1992,7 +1947,7 @@ The application uses Argon2 key derivation with significant resource requirement
 | ASVS Sections | 15.1.5 |
 | Files | `v3/steve/crypto.py:23`, `v3/steve/crypto.py:25`, `v3/steve/crypto.py:26`, `v3/steve/crypto.py:62`, `v3/steve/crypto.py:92-103` |
 | Source Reports | 15.1.5.md |
-| Related Findings | - |
+| Related | - |
 
 **Description:**
 
@@ -2002,17 +1957,19 @@ The codebase uses two explicitly dangerous low-level cryptographic APIs without 
 
 Create a SECURITY.md or architecture document section that inventories dangerous functionality: (1) Document cryptography.hazmat (HKDF-SHA256 in _b64_vote_key): Purpose - Used for key stretching of vote tokens. Justification - Low-level API required because Fernet needs specific key format. Risk - Incorrect parameter selection could weaken encryption keys. Parameters - SHA256, 32-byte output, salt from vote_token, info='xchacha20_key' (note: should match actual algorithm). (2) Document argon2.low_level (Argon2 hashing in _hash): Purpose - Used for opened_key generation and vote tokens. Justification - Low-level API required for raw byte output (high-level returns encoded string). Risk - Incorrect parameter tuning could weaken brute-force resistance. Parameters - time_cost=2, memory_cost=64MB, parallelism=4, Type=D (note: should be Type.ID per RFC 9106). (3) Include security review status and date of last cryptographic review. (4) Document that these modules require specialized cryptographic expertise for any modifications.
 
-#### FINDING-080: Vote Decryption/Tallying Functionality Lacks Process Isolation from Web Attack Surface
+---
+
+#### FINDING-078: Vote Decryption/Tallying Functionality Lacks Process Isolation from Web Attack Surface
 
 | Attribute | Value |
 |-----------|-------|
-| **Severity** | 🟠 High |
-| **ASVS Level(s)** | L3 |
-| **CWE** | N/A |
-| **ASVS Sections** | 15.2.5 |
-| **Files** | `v3/steve/election.py:56`, `v3/steve/election.py:284-349`, `v3/steve/crypto.py:82-87` |
-| **Source Reports** | 15.2.5.md |
-| **Related** | None |
+| Severity | 🟠 High |
+| ASVS Level(s) | L3 |
+| CWE | - |
+| ASVS Sections | 15.2.5, 11.7.2 |
+| Files | `v3/steve/election.py:56`, `v3/steve/election.py:284-349`, `v3/steve/crypto.py:82-87` |
+| Source Reports | 15.2.5.md, 11.7.2.md |
+| Related | - |
 
 **Description:**
 
@@ -2024,17 +1981,17 @@ Implement process-level separation for tallying operations. Option A (recommende
 
 ---
 
-#### FINDING-081: Authorization Failures Not Logged at Multiple Endpoints
+#### FINDING-079: Authorization Failures Not Logged at Multiple Endpoints
 
 | Attribute | Value |
 |-----------|-------|
-| **Severity** | 🟠 High |
-| **ASVS Level(s)** | L2, L3 |
-| **CWE** | N/A |
-| **ASVS Sections** | 16.1.1, 16.2.1, 16.3.1, 16.3.2, 16.3.3 |
-| **Files** | `v3/server/pages.py:250`, `v3/server/pages.py:294-299`, `v3/server/pages.py:356-366`, `v3/server/pages.py:274-279`, `v3/server/pages.py:241-247`, `v3/server/pages.py:274-354`, `v3/server/pages.py:308`, `v3/server/pages.py:547`, `v3/server/pages.py:607-611`, `v3/server/pages.py:494-499`, `v3/server/pages.py:589-625`, `v3/server/pages.py:246-251`, `v3/server/pages.py:610-614` |
-| **Source Reports** | 16.1.1.md, 16.2.1.md, 16.3.1.md, 16.3.2.md, 16.3.3.md |
-| **Related** | None |
+| Severity | 🟠 High |
+| ASVS Level(s) | L2, L3 |
+| CWE | - |
+| ASVS Sections | 16.1.1, 16.2.1, 16.3.1, 16.3.2, 16.3.3 |
+| Files | `v3/server/pages.py:250`, `v3/server/pages.py:294-299`, `v3/server/pages.py:356-366`, `v3/server/pages.py:274-279`, `v3/server/pages.py:241-247`, `v3/server/pages.py:274-354`, `v3/server/pages.py:308`, `v3/server/pages.py:547`, `v3/server/pages.py:607-611`, `v3/server/pages.py:494-499`, `v3/server/pages.py:589-625`, `v3/server/pages.py:246-251`, `v3/server/pages.py:610-614` |
+| Source Reports | 16.1.1.md, 16.2.1.md, 16.3.1.md, 16.3.2.md, 16.3.3.md |
+| Related | - |
 
 **Description:**
 
@@ -2046,17 +2003,17 @@ Add _LOGGER.warning() calls before all authorization failure responses to log us
 
 ---
 
-#### FINDING-082: No Authentication Event Logging Framework
+#### FINDING-080: No Authentication Event Logging Framework
 
 | Attribute | Value |
 |-----------|-------|
-| **Severity** | 🟠 High |
-| **ASVS Level(s)** | L2 |
-| **CWE** | N/A |
-| **ASVS Sections** | 16.3.1 |
-| **Files** | `v3/server/pages.py:63-92`, `v3/server/main.py:36-48` |
-| **Source Reports** | 16.3.1.md |
-| **Related** | None |
+| Severity | 🟠 High |
+| ASVS Level(s) | L2 |
+| CWE | - |
+| ASVS Sections | 16.3.1 |
+| Files | `v3/server/pages.py:63-92`, `v3/server/main.py:36-48` |
+| Source Reports | 16.3.1.md |
+| Related | - |
 
 **Description:**
 
@@ -2068,17 +2025,17 @@ Add before_request handler to log authentication outcomes for all requests to pr
 
 ---
 
-#### FINDING-083: Input Validation and Business Logic Bypass Attempts Not Logged
+#### FINDING-081: Input Validation and Business Logic Bypass Attempts Not Logged
 
 | Attribute | Value |
 |-----------|-------|
-| **Severity** | 🟠 High |
-| **ASVS Level(s)** | L2 |
-| **CWE** | N/A |
-| **ASVS Sections** | 16.3.3 |
-| **Files** | `v3/server/pages.py:420-422`, `v3/server/pages.py:413-415`, `v3/server/pages.py:107-111` |
-| **Source Reports** | 16.3.3.md |
-| **Related** | None |
+| Severity | 🟠 High |
+| ASVS Level(s) | L2 |
+| CWE | - |
+| ASVS Sections | 16.3.3 |
+| Files | `v3/server/pages.py:420-422`, `v3/server/pages.py:413-415`, `v3/server/pages.py:107-111` |
+| Source Reports | 16.3.3.md |
+| Related | - |
 
 **Description:**
 
@@ -2088,19 +2045,17 @@ ASVS 16.3.3 specifically requires logging of attempts to bypass security control
 
 Add _LOGGER.warning() calls for all input validation failures with context about the invalid input. Log user ID, election/issue ID, validation type that failed, and the invalid value (sanitized). Implement rate limiting on validation failures to prevent fuzzing attacks. Add SIEM rules to alert on high volumes of validation failures. Example: _LOGGER.warning('INPUT_VALIDATION_FAILED: User[U:%s] submitted vote with invalid issue[I:%s] in election[E:%s]. valid_issues=%s', result.uid, iid, election.eid, list(issue_dict.keys()))
 
----
-
-#### FINDING-084: Election State Violation Attempts Not Logged (Assert-Based Enforcement)
+#### FINDING-082: Election State Violation Attempts Not Logged (Assert-Based Enforcement)
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟠 High |
 | **ASVS Level(s)** | L2, L3 |
-| **CWE** | N/A |
+| **CWE** | - |
 | **ASVS Sections** | 16.3.3, 16.5.3 |
 | **Files** | `v3/steve/election.py:57`, `v3/steve/election.py:61`, `v3/steve/election.py:77`, `v3/steve/election.py:82`, `v3/steve/election.py:128`, `v3/steve/election.py:135`, `v3/steve/election.py:137`, `v3/steve/election.py:196`, `v3/steve/election.py:197`, `v3/steve/election.py:215`, `v3/steve/election.py:216`, `v3/steve/election.py:228`, `v3/steve/election.py:248`, `v3/steve/election.py:257`, `v3/steve/election.py:268` |
-| **Source Reports** | 16.3.3.md, 16.5.3.md |
-| **Related** | None |
+| **Source Reports** | `16.3.3.md`, `16.5.3.md` |
+| **Related** | - |
 
 **Description:**
 
@@ -2112,17 +2067,17 @@ Replace all assert statements used for security/business logic with explicit sta
 
 ---
 
-#### FINDING-085: No Log Immutability or Write-Protection Controls
+#### FINDING-083: No Log Immutability or Write-Protection Controls
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟠 High |
 | **ASVS Level(s)** | L2 |
-| **CWE** | N/A |
+| **CWE** | - |
 | **ASVS Sections** | 16.4.2, 16.4.3 |
 | **Files** | `v3/server/main.py:52-59`, `v3/server/main.py:84-91` |
-| **Source Reports** | 16.4.2.md, 16.4.3.md |
-| **Related** | None |
+| **Source Reports** | `16.4.2.md`, `16.4.3.md` |
+| **Related** | - |
 
 **Description:**
 
@@ -2134,17 +2089,17 @@ Configure a remote log handler in addition to local output. At minimum, add a Sy
 
 ---
 
-#### FINDING-086: Missing Vote Content Validation - Invalid Votes Stored Without Validation
+#### FINDING-084: Missing Vote Content Validation - Invalid Votes Stored Without Validation
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟠 High |
 | **ASVS Level(s)** | L3 |
-| **CWE** | N/A |
+| **CWE** | - |
 | **ASVS Sections** | 16.5.3 |
 | **Files** | `v3/steve/election.py:260`, `v3/server/pages.py:437` |
-| **Source Reports** | 16.5.3.md |
-| **Related** | None |
+| **Source Reports** | `16.5.3.md` |
+| **Related** | - |
 
 **Description:**
 
@@ -2156,17 +2111,17 @@ Implement vote content validation in the add_vote() method. Validate votestring 
 
 ---
 
-#### FINDING-087: CLI Tally Tool Lacks Top-Level Exception Handler
+#### FINDING-085: CLI Tally Tool Lacks Top-Level Exception Handler
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟠 High |
 | **ASVS Level(s)** | L3 |
-| **CWE** | N/A |
+| **CWE** | - |
 | **ASVS Sections** | 16.5.4 |
 | **Files** | `v3/server/bin/tally.py:172-185`, `v3/server/bin/tally.py:125-126` |
-| **Source Reports** | 16.5.4.md |
-| **Related** | None |
+| **Source Reports** | `16.5.4.md` |
+| **Related** | - |
 
 **Description:**
 
@@ -2178,17 +2133,17 @@ Wrap the main() call in a try/except block with structured logging. Catch Electi
 
 ---
 
-#### FINDING-088: add_vote Crashes on Missing Voter Eligibility Record Instead of Failing Securely
+#### FINDING-086: add_vote Crashes on Missing Voter Eligibility Record Instead of Failing Securely
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟠 High |
 | **ASVS Level(s)** | L2 |
-| **CWE** | N/A |
+| **CWE** | - |
 | **ASVS Sections** | 16.5.2 |
 | **Files** | `v3/steve/election.py:207-218` |
-| **Source Reports** | 16.5.2.md |
-| **Related** | None |
+| **Source Reports** | `16.5.2.md` |
+| **Related** | - |
 
 **Description:**
 
@@ -2200,7 +2155,7 @@ Add null check after q_get_mayvote.first_row() call. If the result is None, log 
 
 ---
 
-#### FINDING-089: Election Close Operation Not Atomic — No State Guard in SQL
+#### FINDING-087: Election Close Operation Not Atomic — No State Guard in SQL
 
 | Attribute | Value |
 |-----------|-------|
@@ -2209,8 +2164,8 @@ Add null check after q_get_mayvote.first_row() call. If the result is None, log 
 | **CWE** | CWE-362 |
 | **ASVS Sections** | 15.4.1, 15.4.2, 15.4.3 |
 | **Files** | `v3/steve/election.py:121-127`, `v3/steve/election.py:108-113`, `v3/steve/election.py:121-128`, `v3/server/pages.py:482`, `v3/server/pages.py:378` |
-| **Source Reports** | 15.4.1.md, 15.4.2.md, 15.4.3.md |
-| **Related** | FINDING-019, FINDING-022, FINDING-023 |
+| **Source Reports** | `15.4.1.md`, `15.4.2.md`, `15.4.3.md` |
+| **Related** | FINDING-023, FINDING-024 |
 
 **Description:**
 
@@ -2222,7 +2177,7 @@ Use an atomic UPDATE with a state-checking WHERE clause (UPDATE election SET clo
 
 ---
 
-#### FINDING-090: Election Delete — State Assertion Before Transaction Creates Race Window (TOCTOU)
+#### FINDING-088: Election Delete — State Assertion Before Transaction Creates Race Window (TOCTOU)
 
 | Attribute | Value |
 |-----------|-------|
@@ -2231,8 +2186,8 @@ Use an atomic UPDATE with a state-checking WHERE clause (UPDATE election SET clo
 | **CWE** | CWE-367 |
 | **ASVS Sections** | 15.4.2 |
 | **Files** | `v3/steve/election.py:48-65` |
-| **Source Reports** | 15.4.2.md |
-| **Related** | FINDING-024 |
+| **Source Reports** | `15.4.2.md` |
+| **Related** | FINDING-025 |
 
 **Description:**
 
@@ -2244,17 +2199,17 @@ Move the state check inside the transaction boundary. Use BEGIN IMMEDIATE before
 
 ---
 
-#### FINDING-091: Synchronous Blocking Database I/O in Async Event Loop Without Thread Pool
+#### FINDING-089: Synchronous Blocking Database I/O in Async Event Loop Without Thread Pool
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟠 High |
 | **ASVS Level(s)** | L3 |
-| **CWE** | N/A |
+| **CWE** | - |
 | **ASVS Sections** | 15.4.4 |
 | **Files** | `v3/steve/election.py:38-43`, `v3/server/pages.py:181`, `v3/server/pages.py:399-432`, `v3/server/pages.py:144-172` |
-| **Source Reports** | 15.4.4.md |
-| **Related** | None |
+| **Source Reports** | `15.4.4.md` |
+| **Related** | - |
 
 **Description:**
 
@@ -2266,17 +2221,17 @@ Wrap all synchronous Election method calls in asyncio.to_thread() to offload the
 
 ---
 
-#### FINDING-092: No Application-Level Memory Protection for Sensitive Cryptographic Material
+#### FINDING-090: No Application-Level Memory Protection for Sensitive Cryptographic Material
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟠 High |
 | **ASVS Level(s)** | L3 |
-| **CWE** | N/A |
-| **ASVS Sections** | 11.7.1, 11.7.2 |
+| **CWE** | - |
+| **ASVS Sections** | 11.7.1 |
 | **Files** | `v3/steve/crypto.py:60-71`, `v3/steve/crypto.py:74-79`, `v3/steve/crypto.py:82-87`, `v3/steve/crypto.py:40-50`, `v3/steve/election.py:262-320`, `v3/steve/election.py:247-260`, `v3/server/bin/tally.py:103-145` |
-| **Source Reports** | 11.7.1.md, 11.7.2.md |
-| **Related** | None |
+| **Source Reports** | `11.7.1.md` |
+| **Related** | - |
 
 **Description:**
 
@@ -2328,7 +2283,7 @@ Additionally, deploy with: OS-level memory encryption (Intel TME, AMD SME/SEV), 
 
 ### 3.3 Medium
 
-#### FINDING-093: Stored XSS via Flash Messages Containing Unencoded User Input
+#### FINDING-091: Stored XSS via Flash Messages Containing Unencoded User Input
 
 | Attribute | Value |
 |-----------|-------|
@@ -2338,7 +2293,7 @@ Additionally, deploy with: OS-level memory encryption (Intel TME, AMD SME/SEV), 
 | **ASVS Sections** | 1.1.1, 1.1.2, 1.2.1 |
 | **Files** | `v3/server/templates/flashes.ezt:1-6`&lt;br&gt;`v3/server/pages.py:413, 426, 447, 455, 504, 508, 518, 533, 535, 537, 598` |
 | **Source Reports** | 1.1.1.md, 1.1.2.md, 1.2.1.md |
-| **Related** | FINDING-001, FINDING-002, FINDING-003, FINDING-004, FINDING-020, FINDING-021, FINDING-027, FINDING-031, FINDING-114 |
+| **Related** | FINDING-001, FINDING-002, FINDING-003, FINDING-004, FINDING-022, FINDING-028, FINDING-031, FINDING-113, FINDING-114 |
 
 **Description:**
 
@@ -2350,7 +2305,7 @@ Either encode at the template level by changing `[flashes.message]` to `[format 
 
 ---
 
-#### FINDING-094: Missing Upper-Bound Range Validation on STV `seats` Integer Parameter
+#### FINDING-092: Missing Upper-Bound Range Validation on STV `seats` Integer Parameter
 
 | Attribute | Value |
 |-----------|-------|
@@ -2372,7 +2327,7 @@ Add range validation at multiple layers for defense-in-depth: (1) In `election.p
 
 ---
 
-#### FINDING-095: Database Connection Resource Leak in Class Methods
+#### FINDING-093: Database Connection Resource Leak in Class Methods
 
 | Attribute | Value |
 |-----------|-------|
@@ -2380,7 +2335,7 @@ Add range validation at multiple layers for defense-in-depth: (1) In `election.p
 | **ASVS Level(s)** | L2 |
 | **CWE** | - |
 | **ASVS Sections** | 1.4.3 |
-| **Files** | `v3/steve/election.py:393-408`&lt;br&gt;`v3/steve/election.py:414-423`&lt;br&gt;`v3/steve/election.py:425-436`&lt;br&gt;`v3/steve/election.py:438-447`&lt;br&gt;`v3/steve/election.py:449-456` |
+| **Files** | `v3/steve/election.py:393-408, 414-423, 425-436, 438-447, 449-456` |
 | **Source Reports** | 1.4.3.md |
 | **Related** | - |
 
@@ -2394,7 +2349,7 @@ Add explicit connection cleanup using try/finally blocks or implement context ma
 
 ---
 
-#### FINDING-096: No CSV/Formula Injection Protection Architecture
+#### FINDING-094: No CSV/Formula Injection Protection Architecture
 
 | Attribute | Value |
 |-----------|-------|
@@ -2416,7 +2371,7 @@ The application stores user-controllable data (election titles, issue titles, is
 
 ---
 
-#### FINDING-097: Missing Vote String Format Validation (Type B Gap)
+#### FINDING-095: Missing Vote String Format Validation (Type B Gap)
 
 | Attribute | Value |
 |-----------|-------|
@@ -2426,7 +2381,7 @@ The application stores user-controllable data (election titles, issue titles, is
 | **ASVS Sections** | 1.2.7, 1.3.8, 1.3.9, 1.3.3, 2.3.1, 2.3.2, 2.2.1, 2.2.2, 2.2.3, 2.1.2, 2.1.3 |
 | **Files** | `v3/steve/election.py:253-268`&lt;br&gt;`v3/server/pages.py:430-445` |
 | **Source Reports** | 1.2.7.md, 1.3.8.md, 1.3.9.md, 1.3.3.md, 2.3.1.md, 2.3.2.md, 2.2.1.md, 2.2.2.md, 2.2.3.md, 2.1.2.md, 2.1.3.md |
-| **Related** | FINDING-099, FINDING-100 |
+| **Related** | FINDING-098, FINDING-099 |
 
 **Description:**
 
@@ -2438,7 +2393,7 @@ Implement the missing validation step in the `add_vote()` method before encrypti
 
 ---
 
-#### FINDING-098: No SMTP Injection Sanitization Controls for User-Controlled Election Metadata
+#### FINDING-096: No SMTP Injection Sanitization Controls for User-Controlled Election Metadata
 
 | Attribute | Value |
 |-----------|-------|
@@ -2446,7 +2401,7 @@ Implement the missing validation step in the `add_vote()` method before encrypti
 | **ASVS Level(s)** | L2 |
 | **CWE** | CWE-93 |
 | **ASVS Sections** | 1.3.11 |
-| **Files** | `v3/steve/election.py:501-507`&lt;br&gt;`v3/steve/election.py:430-434`&lt;br&gt;`v3/server/pages.py:467-484`&lt;br&gt;`v3/server/pages.py:524-544`&lt;br&gt;`v3/server/pages.py:534-540`&lt;br&gt;`v3/server/pages.py:557-562` |
+| **Files** | `v3/steve/election.py:501-507, 430-434`&lt;br&gt;`v3/server/pages.py:467-484, 524-544, 534-540, 557-562` |
 | **Source Reports** | 1.3.11.md |
 | **Related** | - |
 
@@ -2460,7 +2415,56 @@ Add SMTP-specific sanitization for all user-controlled data before it reaches an
 
 ---
 
-#### FINDING-099: No Input Length Limits on User-Supplied Text Fields
+#### FINDING-097: Missing Path Sanitization/Validation for Document Serving Endpoint
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L2 |
+| **CWE** | - |
+| **ASVS Sections** | 1.3.6 |
+| **Files** | `v3/server/pages.py:527-543` |
+| **Source Reports** | 1.3.6.md |
+| **Related** | - |
+
+**Description:**
+
+The `docname` parameter is user-controllable via the URL and is passed directly to `quart.send_from_directory` without any application-level validation. The developer explicitly recognized this gap with the comment `### verify the propriety of DOCNAME.` but did not implement the control. This violates the ASVS 1.3.6 principle of validating untrusted data against an allowlist of paths and sanitizing dangerous characters before using the data to access a resource. Reliance on a single framework-level protection without defense-in-depth is a risk if a bypass is discovered in `safe_join`. While `safe_join` should block path traversal, null-byte or encoding bypasses in specific framework versions could allow access to unintended files within the DOCSDIR tree.
+
+**Remediation:**
+
+Implement explicit allowlist validation for the `docname` parameter using a regex pattern that only permits safe characters (alphanumeric, hyphens, underscores, dots). Explicitly reject path traversal components like `..` or leading dots. Example implementation:
+
+```python
+import re
+
+# Allowlist for document filenames: alphanumeric, hyphens, underscores, dots
+SAFE_DOCNAME = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9._-]{0,254}$')
+
+@APP.get('/docs/<iid>/<docname>')
+@asfquart.auth.require
+async def serve_doc(iid, docname):
+    result = await basic_info()
+
+    # Validate docname against allowlist
+    if not SAFE_DOCNAME.match(docname):
+        quart.abort(400, 'Invalid document name')
+    
+    # Reject path traversal components explicitly
+    if '..' in docname or docname.startswith('.'):
+        quart.abort(400, 'Invalid document name')
+
+    db = steve.election.Election.open_database(DB_FNAME)
+    row = db.q_get_mayvote.first_row(result.uid, iid)
+    if not row:
+        quart.abort(404)
+
+    return await quart.send_from_directory(DOCSDIR / iid, docname)
+```
+
+---
+
+#### FINDING-098: No Input Length Limits on User-Supplied Text Fields
 
 | Attribute | Value |
 |-----------|-------|
@@ -2468,9 +2472,9 @@ Add SMTP-specific sanitization for all user-controlled data before it reaches an
 | **ASVS Level(s)** | L2 |
 | **CWE** | CWE-20 |
 | **ASVS Sections** | 1.3.3 |
-| **Files** | `v3/server/pages.py:398`&lt;br&gt;`v3/server/pages.py:457`&lt;br&gt;`v3/server/pages.py:479`&lt;br&gt;`v3/server/templates/admin.ezt:N/A`&lt;br&gt;`v3/server/templates/manage.ezt:N/A` |
+| **Files** | `v3/server/pages.py:398, 457, 479`&lt;br&gt;`v3/server/templates/admin.ezt`&lt;br&gt;`v3/server/templates/manage.ezt` |
 | **Source Reports** | 1.3.3.md |
-| **Related** | FINDING-097, FINDING-100 |
+| **Related** | FINDING-095, FINDING-099 |
 
 **Description:**
 
@@ -2494,29 +2498,29 @@ Reject empty titles after trimming.
 
 ---
 
-#### FINDING-100: STV Vote String Parser Inconsistency Between Submission and Tallying
+#### FINDING-099: STV Vote String Parser Inconsistency Between Submission and Tallying
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟡 Medium |
 | **ASVS Level(s)** | L2, L3 |
 | **CWE** | CWE-20 |
-| **ASVS Sections** | 1.5.3, 14.2.4 |
+| **ASVS Sections** | 1.5.3, 15.2.2, 15.3.5 |
 | **Files** | `v3/steve/election.py:200-213`&lt;br&gt;`v3/steve/vtypes/stv.py:46-63`&lt;br&gt;`v3/server/pages.py:321` |
-| **Source Reports** | 1.5.3.md, 14.2.4.md |
-| **Related** | FINDING-097, FINDING-099 |
+| **Source Reports** | 1.5.3.md, 15.2.2.md, 15.3.5.md |
+| **Related** | FINDING-095, FINDING-098 |
 
 **Description:**
 
-Arbitrary strings are accepted as vote content and encrypted without validation against the issue's vote type. Invalid votes cannot be detected until decryption during tallying, when correction is impossible. The add_vote() function contains a comment '### validate VOTESTRING for ISSUE.TYPE voting' but no actual implementation. Invalid vote content (e.g., 'xyz' for a YNA vote, or 'a,a,a,b' with duplicates for STV) would either produce incorrect tallies or cause tally-time errors. Since votes are encrypted, invalid content cannot be detected until the offline tallying process when the election is closed.
+The add_vote() method accepts vote values from users without validating them against the expected vote type for the issue. The code contains an explicit TODO comment acknowledging this validation requirement, but the validation is not implemented. No validation of votestring length, format, or content against the issue's vote type occurs before passing the data to expensive cryptographic operations (Argon2 computation: 64 MiB memory, 4 CPU threads, ~100ms). This allows: (1) Arbitrary strings to be encrypted and stored as votes regardless of whether they match the issue's voting format (YNA, STV, etc.), (2) Voters to submit arbitrarily large or malformed votestrings that consume disproportionate resources during encryption, storage, and later decryption during tallying, (3) Repeated vote submissions to trigger unbounded Argon2 computation without throttling. A voter could submit a votestring of 10 MiB, which bypasses all vote-type validation, forces Fernet encryption of the full payload, stores the encrypted blob in SQLite, and must decrypt the full blob during tallying. Election integrity is compromised as invalid votes are encrypted and stored, then when tallied by vtypes modules, the behavior is unpredictable — tallying may crash, produce incorrect results, or silently discard/miscount votes.
 
 **Remediation:**
 
-Add a shared validation/normalization function called at submission time. Create a validate_votestring() function in stv.py or vtypes/__init__.py that validates and normalizes STV vote strings using the same comma-split and label validation logic used at tally time. Call this function in election.py add_vote() before encrypting and storing the vote. Return the normalized form to ensure consistent parsing. Validate against the labelmap and normalize whitespace.
+Implement explicit type and format validation in the add_vote method before expensive operations: 1. Implement hard limit on votestring size (e.g., MAX_VOTESTRING_LEN = 4096). 2. Validate that votestring is a string type: `if not isinstance(votestring, str): raise ValueError(f'votestring must be a string, got {type(votestring).__name__}')`. 3. Retrieve the issue and validate it exists before processing: `issue = self.q_get_issue.first_row(iid); if not issue: raise IssueNotFound(iid)`. 4. Use the vtypes module's validate_vote function to ensure the vote format matches the issue type: `m = vtypes.vtype_module(issue.type); if not m.validate_vote(votestring, self.json2kv(issue.kv)): raise ValueError(f'Invalid vote format for {issue.type}: {votestring!r}')`. 5. Consider short-circuit check if identical vote already exists before computing expensive token. 6. Implement rate limiting at the web layer using quart_rate_limiter with conservative limits (e.g., 5 votes per minute per user).
 
 ---
 
-#### FINDING-101: Election Date Serialization/Deserialization Inconsistency
+#### FINDING-100: Election Date Serialization/Deserialization Inconsistency
 
 | Attribute | Value |
 |-----------|-------|
@@ -2524,7 +2528,7 @@ Add a shared validation/normalization function called at submission time. Create
 | **ASVS Level(s)** | L3 |
 | **CWE** | CWE-838 |
 | **ASVS Sections** | 1.5.3 |
-| **Files** | `v3/server/pages.py:105-127`&lt;br&gt;`v3/server/pages.py:489-494`&lt;br&gt;`v3/server/bin/tally.py:79-81` |
+| **Files** | `v3/server/pages.py:105-127, 489-494`&lt;br&gt;`v3/server/bin/tally.py:79-81` |
 | **Source Reports** | 1.5.3.md |
 | **Related** | - |
 
@@ -2544,7 +2548,7 @@ timestamp = int(dt.timestamp())
 
 ---
 
-#### FINDING-102: Document URL Construction/Parsing Inconsistency
+#### FINDING-101: Document URL Construction/Parsing Inconsistency
 
 | Attribute | Value |
 |-----------|-------|
@@ -2552,7 +2556,7 @@ timestamp = int(dt.timestamp())
 | **ASVS Level(s)** | L3 |
 | **CWE** | CWE-22 |
 | **ASVS Sections** | 1.5.3 |
-| **Files** | `v3/server/pages.py:50-57`&lt;br&gt;`v3/server/pages.py:454-465` |
+| **Files** | `v3/server/pages.py:50-57, 454-465` |
 | **Source Reports** | 1.5.3.md |
 | **Related** | FINDING-039 |
 
@@ -2583,7 +2587,7 @@ if not DOCNAME_PATTERN.match(docname) or not IID_PATTERN.match(iid):
 
 ---
 
-#### FINDING-103: Missing ROLLBACK Handling in Transactional Methods
+#### FINDING-102: Missing ROLLBACK Handling in Transactional Methods
 
 | Attribute | Value |
 |-----------|-------|
@@ -2591,7 +2595,7 @@ if not DOCNAME_PATTERN.match(docname) or not IID_PATTERN.match(iid):
 | **ASVS Level(s)** | L2 |
 | **CWE** | - |
 | **ASVS Sections** | 2.3.3, 16.5.2 |
-| **Files** | `v3/steve/election.py:55-70`&lt;br&gt;`v3/steve/election.py:126-140` |
+| **Files** | `v3/steve/election.py:55-70, 126-140` |
 | **Source Reports** | 2.3.3.md, 16.5.2.md |
 | **Related** | - |
 
@@ -2605,7 +2609,7 @@ Add try/except blocks with explicit ROLLBACK logic to all methods using BEGIN TR
 
 ---
 
-#### FINDING-104: Tampering Detection Control Exists But Is Never Invoked Before Sensitive Operations
+#### FINDING-103: Tampering Detection Control Exists But Is Never Invoked Before Sensitive Operations
 
 | Attribute | Value |
 |-----------|-------|
@@ -2613,7 +2617,7 @@ Add try/except blocks with explicit ROLLBACK logic to all methods using BEGIN TR
 | **ASVS Level(s)** | L1, L2, L3 |
 | **CWE** | CWE-353 |
 | **ASVS Sections** | 2.3.2, 9.1.1, 11.6.2 |
-| **Files** | `v3/steve/election.py:316`&lt;br&gt;`v3/steve/election.py:236`&lt;br&gt;`v3/steve/election.py:252`&lt;br&gt;`v3/server/pages.py:336` |
+| **Files** | `v3/steve/election.py:316, 236, 252`&lt;br&gt;`v3/server/pages.py:336` |
 | **Source Reports** | 2.3.2.md, 9.1.1.md, 11.6.2.md |
 | **Related** | - |
 
@@ -2627,7 +2631,7 @@ Add tamper checks before every sensitive operation that relies on election data.
 
 ---
 
-#### FINDING-105: No Cross-Field Date Consistency Validation
+#### FINDING-104: No Cross-Field Date Consistency Validation
 
 | Attribute | Value |
 |-----------|-------|
@@ -2635,7 +2639,7 @@ Add tamper checks before every sensitive operation that relies on election data.
 | **ASVS Level(s)** | L2 |
 | **CWE** | - |
 | **ASVS Sections** | 2.1.2, 2.2.3 |
-| **Files** | `v3/server/pages.py:79-100`&lt;br&gt;`v3/server/pages.py:77-101`&lt;br&gt;`v3/server/pages.py:375`&lt;br&gt;`v3/server/pages.py:382` |
+| **Files** | `v3/server/pages.py:79-100, 77-101, 375, 382` |
 | **Source Reports** | 2.1.2.md, 2.2.3.md |
 | **Related** | - |
 
@@ -2649,7 +2653,7 @@ Add cross-field validation in _set_election_date() that: (1) Retrieves current e
 
 ---
 
-#### FINDING-106: Election Can Be Opened Without Issues or Eligible Voters
+#### FINDING-105: Election Can Be Opened Without Issues or Eligible Voters
 
 | Attribute | Value |
 |-----------|-------|
@@ -2671,7 +2675,7 @@ Add pre-condition checks in election.open() method before allowing state transit
 
 ---
 
-#### FINDING-107: No Business Logic Limits on Resource Creation or Vote Revisions
+#### FINDING-106: No Business Logic Limits on Resource Creation or Vote Revisions
 
 | Attribute | Value |
 |-----------|-------|
@@ -2679,7 +2683,7 @@ Add pre-condition checks in election.open() method before allowing state transit
 | **ASVS Level(s)** | L2 |
 | **CWE** | CWE-770 |
 | **ASVS Sections** | 2.1.3, 2.4.1 |
-| **Files** | `v3/server/pages.py:466`&lt;br&gt;`v3/server/pages.py:522`&lt;br&gt;`v3/server/pages.py:473-490`&lt;br&gt;`v3/server/pages.py:523-545`&lt;br&gt;`v3/steve/election.py:256` |
+| **Files** | `v3/server/pages.py:466, 522, 473-490, 523-545`&lt;br&gt;`v3/steve/election.py:256` |
 | **Source Reports** | 2.1.3.md, 2.4.1.md |
 | **Related** | - |
 
@@ -2693,7 +2697,7 @@ Define and document business logic limits (e.g., MAX_ELECTIONS_PER_USER=50, MAX_
 
 ---
 
-#### FINDING-108: Election Creation and State-Change Endpoints Lack Rate Limiting and Timing Controls
+#### FINDING-107: Election Creation and State-Change Endpoints Lack Rate Limiting and Timing Controls
 
 | Attribute | Value |
 |-----------|-------|
@@ -2701,7 +2705,7 @@ Define and document business logic limits (e.g., MAX_ELECTIONS_PER_USER=50, MAX_
 | **ASVS Level(s)** | L2, L3 |
 | **CWE** | - |
 | **ASVS Sections** | 2.4.1, 2.4.2 |
-| **Files** | `v3/server/pages.py:473-490`&lt;br&gt;`v3/server/pages.py:463-482`&lt;br&gt;`v3/server/pages.py:485-504`&lt;br&gt;`v3/server/pages.py:507-523` |
+| **Files** | `v3/server/pages.py:473-490, 463-482, 485-504, 507-523` |
 | **Source Reports** | 2.4.1.md, 2.4.2.md |
 | **Related** | - |
 
@@ -2715,7 +2719,7 @@ For election creation: Add per-user election creation quota (e.g., MAX_ELECTIONS
 
 ---
 
-#### FINDING-109: Missing Global Security Headers Framework
+#### FINDING-108: Missing Global Security Headers Framework
 
 | Attribute | Value |
 |-----------|-------|
@@ -2737,7 +2741,7 @@ Implement an after_request handler in the create_app function that sets X-Conten
 
 ---
 
-#### FINDING-110: API Endpoints Lack Sec-Fetch-* Context Validation
+#### FINDING-109: API Endpoints Lack Sec-Fetch-* Context Validation
 
 | Attribute | Value |
 |-----------|-------|
@@ -2745,9 +2749,9 @@ Implement an after_request handler in the create_app function that sets X-Conten
 | **ASVS Level(s)** | L1 |
 | **CWE** | CWE-352 |
 | **ASVS Sections** | 3.2.1 |
-| **Files** | `v3/server/pages.py:376`&lt;br&gt;`v3/server/pages.py:383`&lt;br&gt;`v3/server/pages.py:390` |
+| **Files** | `v3/server/pages.py:376, 383, 390` |
 | **Source Reports** | 3.2.1.md |
-| **Related** | FINDING-007, FINDING-008, FINDING-029, FINDING-030, FINDING-033, FINDING-034, FINDING-140 |
+| **Related** | FINDING-007, FINDING-008, FINDING-009, FINDING-030, FINDING-033, FINDING-034 |
 
 **Description:**
 
@@ -2759,7 +2763,7 @@ Create a require_fetch_context decorator that validates Sec-Fetch-Dest and Sec-F
 
 ---
 
-#### FINDING-111: Session Cookie Name Missing __Host- or __Secure- Prefix
+#### FINDING-110: Session Cookie Name Missing __Host- or __Secure- Prefix
 
 | Attribute | Value |
 |-----------|-------|
@@ -2767,7 +2771,7 @@ Create a require_fetch_context decorator that validates Sec-Fetch-Dest and Sec-F
 | **ASVS Level(s)** | L1, L2 |
 | **CWE** | - |
 | **ASVS Sections** | 3.3.1, 3.3.3 |
-| **Files** | `v3/server/main.py:30-44`&lt;br&gt;`v3/server/main.py:36-38`&lt;br&gt;`v3/server/main.py:44-46`&lt;br&gt;`v3/server/pages.py:70` |
+| **Files** | `v3/server/main.py:30-44, 36-38, 44-46`&lt;br&gt;`v3/server/pages.py:70` |
 | **Source Reports** | 3.3.1.md, 3.3.3.md |
 | **Related** | - |
 
@@ -2781,7 +2785,7 @@ Use __Host- prefix for maximum cookie security. The __Host- prefix requires: Sec
 
 ---
 
-#### FINDING-112: No Explicit HttpOnly Configuration on Session Cookie
+#### FINDING-111: No Explicit HttpOnly Configuration on Session Cookie
 
 | Attribute | Value |
 |-----------|-------|
@@ -2803,7 +2807,7 @@ Explicitly configure session cookie security attributes after app construction i
 
 ---
 
-#### FINDING-113: No Cookie Size Validation Control
+#### FINDING-112: No Cookie Size Validation Control
 
 | Attribute | Value |
 |-----------|-------|
@@ -2811,7 +2815,7 @@ Explicitly configure session cookie security attributes after app construction i
 | **ASVS Level(s)** | L3 |
 | **CWE** | - |
 | **ASVS Sections** | 3.3.5 |
-| **Files** | `v3/server/pages.py:63-94`&lt;br&gt;`v3/server/pages.py:73-78`&lt;br&gt;`v3/server/pages.py:121-128`&lt;br&gt;`v3/server/pages.py:356`&lt;br&gt;`v3/server/pages.py:519` |
+| **Files** | `v3/server/pages.py:63-94, 73-78, 121-128, 356, 519` |
 | **Source Reports** | 3.3.5.md |
 | **Related** | - |
 
@@ -2825,7 +2829,7 @@ Implement middleware that validates cookie size before the response is sent usin
 
 ---
 
-#### FINDING-114: Reflected XSS via URL Path Parameters in Error Pages
+#### FINDING-113: Reflected XSS via URL Path Parameters in Error Pages
 
 | Attribute | Value |
 |-----------|-------|
@@ -2835,7 +2839,7 @@ Implement middleware that validates cookie size before the response is sent usin
 | **ASVS Sections** | 3.2.2 |
 | **Files** | `v3/server/templates/e_bad_eid.ezt`&lt;br&gt;`v3/server/templates/e_bad_iid.ezt`&lt;br&gt;`v3/server/pages.py:172` |
 | **Source Reports** | 3.2.2.md |
-| **Related** | FINDING-001, FINDING-002, FINDING-003, FINDING-004, FINDING-020, FINDING-021, FINDING-027, FINDING-031, FINDING-093 |
+| **Related** | FINDING-001, FINDING-002, FINDING-003, FINDING-004, FINDING-022, FINDING-028, FINDING-031, FINDING-091, FINDING-114 |
 
 **Description:**
 
@@ -2844,6 +2848,28 @@ Error templates e_bad_eid.ezt and e_bad_iid.ezt render URL path parameters (eid 
 **Remediation:**
 
 Apply [format "html"] to error template outputs. In e_bad_eid.ezt: The Election ID ([format "html"][eid][end]) does not exist. In e_bad_iid.ezt: The Issue ID ([format "html"][iid][end]) does not exist. Apply same fix to e_bad_pid.ezt if it exists.
+
+---
+
+#### FINDING-114: Reflected XSS via Flash Messages Containing User-Provided Input
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L1 |
+| **CWE** | CWE-79 |
+| **ASVS Sections** | 3.2.2 |
+| **Files** | `v3/server/pages.py:459, 521, 543, 427, 435, 73-77` |
+| **Source Reports** | 3.2.2.md |
+| **Related** | FINDING-001, FINDING-002, FINDING-003, FINDING-004, FINDING-022, FINDING-028, FINDING-031, FINDING-091, FINDING-113 |
+
+**Description:**
+
+Multiple flash messages interpolate user-provided input (form.title, iid from form keys) directly into message strings without HTML escaping. Flash messages are stored in the session via quart.flash() and retrieved via get_flashed_messages() in basic_info(), then rendered as raw HTML in templates. For title-based vectors, an admin submitting a form with HTML in the title field will see that HTML executed when the success message is displayed. For iid-based vectors (e.g., in do_vote_endpoint), a crafted form key like 'vote-&lt;img src=x onerror="alert(1)"&gt;' directly injects into the flash message when an invalid issue ID error occurs.
+
+**Remediation:**
+
+Option 1 - Server-side escaping in pages.py: import html; await flash_success(f'Created election: {html.escape(form.title)}'). Option 2 - Template-side escaping: &lt;div class="alert alert-[flashes.category]"&gt;[format "html"][flashes.message][end]&lt;/div&gt;. Option 1 is preferred to ensure all flash messages are safe by default.
 
 ---
 
@@ -2877,7 +2903,7 @@ Wrap steve.js in an IIFE with 'use strict' and expose functions through a namesp
 | **ASVS Level(s)** | L3 |
 | **CWE** | - |
 | **ASVS Sections** | 3.2.3 |
-| **Files** | `v3/server/templates/manage.ezt:inline script block`&lt;br&gt;`v3/server/templates/manage-stv.ezt:inline script block`&lt;br&gt;`v3/server/templates/admin.ezt:inline script block` |
+| **Files** | `v3/server/templates/manage.ezt`&lt;br&gt;`v3/server/templates/manage-stv.ezt`&lt;br&gt;`v3/server/templates/admin.ezt` |
 | **Source Reports** | 3.2.3.md |
 | **Related** | - |
 
@@ -2899,7 +2925,7 @@ Wrap all template inline scripts in IIFEs with strict mode, matching the pattern
 | **ASVS Level(s)** | L3 |
 | **CWE** | - |
 | **ASVS Sections** | 3.2.3 |
-| **Files** | `v3/server/static/js/steve.js:31`&lt;br&gt;`v3/server/static/js/steve.js:42`&lt;br&gt;`v3/server/static/js/steve.js:49`&lt;br&gt;`v3/server/templates/manage.ezt:inline script - csrf-token access`&lt;br&gt;`v3/server/templates/vote-on.ezt:inline script - multiple instances` |
+| **Files** | `v3/server/static/js/steve.js:31, 42, 49`&lt;br&gt;`v3/server/templates/manage.ezt`&lt;br&gt;`v3/server/templates/vote-on.ezt` |
 | **Source Reports** | 3.2.3.md |
 | **Related** | - |
 
@@ -2921,7 +2947,7 @@ Implement a safe element lookup utility function that performs null and type che
 | **ASVS Level(s)** | L1, L2, L3 |
 | **CWE** | - |
 | **ASVS Sections** | 3.4.1, 3.7.4, 3.1.1 |
-| **Files** | `v3/server/main.py:31-47`&lt;br&gt;`v3/server/pages.py:all routes`&lt;br&gt;`v3/server/config.yaml.example:all`&lt;br&gt;`v3/ARCHITECTURE.md:all` |
+| **Files** | `v3/server/main.py:31-47`&lt;br&gt;`v3/server/pages.py`&lt;br&gt;`v3/server/config.yaml.example`&lt;br&gt;`v3/ARCHITECTURE.md` |
 | **Source Reports** | 3.4.1.md, 3.7.4.md, 3.1.1.md |
 | **Related** | - |
 
@@ -2961,7 +2987,7 @@ async def enforce_https():
 | **ASVS Sections** | 3.4.4 |
 | **Files** | `v3/server/main.py:28-43`&lt;br&gt;`v3/server/pages.py:134, 144, 180, 259, 299, 323, 353, 359, 365, 400, 423, 445, 463, 486, 511, 531, 540, 548, 553-562, 565-566, 570-571, 653-654, 92-112` |
 | **Source Reports** | 3.4.4.md |
-| **Related** | FINDING-109 |
+| **Related** | FINDING-108 |
 
 **Description:**
 
@@ -2993,8 +3019,6 @@ The application does not set a Referrer-Policy HTTP response header on any respo
 
 Add a global after_request handler that sets Referrer-Policy on all responses. For an election system, 'strict-origin-when-cross-origin' (minimum) or 'no-referrer' (strictest) is recommended: response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'. For maximum protection (recommended for a voting system): response.headers['Referrer-Policy'] = 'no-referrer'. Alternatively, if templates are controlled, a fallback HTML meta tag can be added in the base template: &lt;meta name="referrer" content="strict-origin-when-cross-origin"&gt;
 
----
-
 #### FINDING-121: Missing Content-Security-Policy Header with Violation Reporting Directive
 
 | Attribute | Value |
@@ -3002,10 +3026,10 @@ Add a global after_request handler that sets Referrer-Policy on all responses. F
 | **Severity** | 🟡 Medium |
 | **ASVS Level(s)** | L3 |
 | **CWE** | - |
-| **ASVS Sections** | 3.4.7 |
-| **Files** | `v3/server/main.py:29-40`&lt;br&gt;`v3/server/pages.py:135-653` |
-| **Source Reports** | 3.4.7.md |
-| **Related** | - |
+| **ASVS Sections** | 3.4.7, 3.1.1 |
+| **Files** | `v3/server/main.py:29-40`, `v3/server/pages.py:135-653` |
+| **Source Reports** | 3.4.7.md, 3.1.1.md |
+| **Related Findings** | - |
 
 **Description:**
 
@@ -3013,7 +3037,34 @@ The application does not configure a Content-Security-Policy header with a viola
 
 **Remediation:**
 
-Add an after_request handler in main.py that sets the CSP header with a reporting directive on all responses. Initial implementation should use Content-Security-Policy-Report-Only mode to collect violations without breaking functionality. Policy should include: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; frame-ancestors 'none'; form-action 'self'; report-uri /csp-report; report-to csp-endpoint. Also add a Reporting-Endpoints header for modern browser support and create a /csp-report endpoint to collect and log violations. After analyzing collected violations and tuning directives, switch from Report-Only to enforcing Content-Security-Policy mode.
+In main.py create_app(), add after_request handler:
+```python
+def create_app():
+    app = asfquart.construct('steve', app_dir=THIS_DIR, static_folder=None)
+
+    @app.after_request
+    async def set_security_headers(response):
+        response.headers['Content-Security-Policy'] = (
+            "default-src 'self'; "
+            "script-src 'self'; "
+            "style-src 'self'; "
+            "img-src 'self'; "
+            "frame-ancestors 'none'; "
+            "form-action 'self'; "
+            "base-uri 'self'"
+        )
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+        response.headers['X-Frame-Options'] = 'DENY'
+        response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+        response.headers['Permissions-Policy'] = (
+            'camera=(), microphone=(), geolocation=()'
+        )
+        return response
+
+    import pages
+    import api
+    return app
+```
 
 ---
 
@@ -3025,9 +3076,9 @@ Add an after_request handler in main.py that sets the CSP header with a reportin
 | **ASVS Level(s)** | L3 |
 | **CWE** | - |
 | **ASVS Sections** | 3.4.8 |
-| **Files** | `v3/server/main.py:32-47`&lt;br&gt;`v3/server/pages.py:659, 125, 133, 222, 280, 320, 343, 551, 559, 567, 575` |
+| **Files** | `v3/server/main.py:32-47`, `v3/server/pages.py:659`, `v3/server/pages.py:125`, `v3/server/pages.py:133`, `v3/server/pages.py:222`, `v3/server/pages.py:280`, `v3/server/pages.py:320`, `v3/server/pages.py:343`, `v3/server/pages.py:551`, `v3/server/pages.py:559`, `v3/server/pages.py:567`, `v3/server/pages.py:575` |
 | **Source Reports** | 3.4.8.md |
-| **Related** | - |
+| **Related Findings** | - |
 
 **Description:**
 
@@ -3037,6 +3088,8 @@ The application does not set the Cross-Origin-Opener-Policy (COOP) header on any
 
 Add a global after_request hook in the application factory to set the Cross-Origin-Opener-Policy header on all HTML responses. In v3/server/main.py, inside create_app(), add an after_request handler that checks content type and sets 'Cross-Origin-Opener-Policy: same-origin' for text/html responses. Also update the raise_404 function in v3/server/pages.py to include the header on manual responses. Use same-origin as the default directive. If the application requires popup interactions (e.g., OAuth flows using popups), use same-origin-allow-popups instead. Given the ASF OAuth flow appears to use redirects rather than popups, same-origin is the appropriate choice.
 
+---
+
 #### FINDING-123: JSON Endpoints Lack Explicit Content-Type Validation (Incidental Protection Only)
 
 | Attribute | Value |
@@ -3044,8 +3097,8 @@ Add a global after_request hook in the application factory to set the Cross-Orig
 | **Severity** | 🟡 Medium |
 | **ASVS Level(s)** | L1 |
 | **CWE** | - |
-| **ASVS Section(s)** | 3.5.2 |
-| **Affected Files** | v3/server/pages.py:88-108, v3/server/pages.py:368-372, v3/server/pages.py:374-378 |
+| **ASVS Sections** | 3.5.2 |
+| **Files** | `v3/server/pages.py:88-108`, `v3/server/pages.py:368-372`, `v3/server/pages.py:374-378` |
 | **Source Reports** | 3.5.2.md |
 | **Related Findings** | - |
 
@@ -3066,8 +3119,8 @@ Make the Content-Type requirement explicit by adding explicit validation that ch
 | **Severity** | 🟡 Medium |
 | **ASVS Level(s)** | L3 |
 | **CWE** | - |
-| **ASVS Section(s)** | 3.5.8 |
-| **Affected Files** | v3/server/pages.py:all endpoints |
+| **ASVS Sections** | 3.5.8 |
+| **Files** | `v3/server/pages.py:all endpoints` |
 | **Source Reports** | 3.5.8.md |
 | **Related Findings** | - |
 
@@ -3088,8 +3141,8 @@ Implement global @APP.after_request middleware that sets Cross-Origin-Resource-P
 | **Severity** | 🟡 Medium |
 | **ASVS Level(s)** | L3 |
 | **CWE** | - |
-| **ASVS Section(s)** | 3.7.3 |
-| **Affected Files** | v3/server/pages.py:52-59, v3/server/pages.py:349-350 |
+| **ASVS Sections** | 3.7.3 |
+| **Files** | `v3/server/pages.py:52-59`, `v3/server/pages.py:349-350` |
 | **Source Reports** | 3.7.3.md |
 | **Related Findings** | - |
 
@@ -3110,8 +3163,8 @@ Implement a three-part solution: (1) Server-side redirect proxy route that valid
 | **Severity** | 🟡 Medium |
 | **ASVS Level(s)** | L3 |
 | **CWE** | - |
-| **ASVS Section(s)** | 3.7.5 |
-| **Affected Files** | v3/server/static/js/steve.js:1-76 |
+| **ASVS Sections** | 3.7.5 |
+| **Files** | `v3/server/static/js/steve.js:1-76` |
 | **Source Reports** | 3.7.5.md |
 | **Related Findings** | - |
 
@@ -3132,8 +3185,8 @@ Add a browser security feature detection module to steve.js that runs on page lo
 | **Severity** | 🟡 Medium |
 | **ASVS Level(s)** | L1 |
 | **CWE** | - |
-| **ASVS Section(s)** | 4.1.1 |
-| **Affected Files** | v3/server/pages.py:764-766, v3/server/pages.py:183, v3/server/pages.py:211, v3/server/pages.py:222, v3/server/pages.py:318, v3/server/pages.py:390 |
+| **ASVS Sections** | 4.1.1 |
+| **Files** | `v3/server/pages.py:764-766`, `v3/server/pages.py:183`, `v3/server/pages.py:211`, `v3/server/pages.py:222`, `v3/server/pages.py:318`, `v3/server/pages.py:390` |
 | **Source Reports** | 4.1.1.md |
 | **Related Findings** | - |
 
@@ -3143,7 +3196,8 @@ The `raise_404` function creates explicit HTML responses without specifying a ch
 
 **Remediation:**
 
-Change the `raise_404` function to use `content_type='text/html; charset=utf-8'` instead of `mimetype='text/html'`. Example: ```python
+Change the `raise_404` function to use `content_type='text/html; charset=utf-8'` instead of `mimetype='text/html'`. Example: 
+```python
 def raise_404(template, data):
     content = asfquart.utils.render(template, data)
     quart.abort(quart.Response(
@@ -3162,8 +3216,8 @@ def raise_404(template, data):
 | **Severity** | 🟡 Medium |
 | **ASVS Level(s)** | L1 |
 | **CWE** | - |
-| **ASVS Section(s)** | 4.1.1 |
-| **Affected Files** | v3/server/pages.py, v3/server/main.py, v3/server/pages.py:93, v3/server/pages.py:679 |
+| **ASVS Sections** | 4.1.1 |
+| **Files** | `v3/server/pages.py`, `v3/server/main.py`, `v3/server/pages.py:93`, `v3/server/pages.py:679` |
 | **Source Reports** | 4.1.1.md |
 | **Related Findings** | - |
 
@@ -3173,7 +3227,8 @@ The application has no centralized mechanism to ensure all HTTP responses includ
 
 **Remediation:**
 
-Add an `after_request` hook to enforce Content-Type charset on all text-based responses. Example: ```python
+Add an `after_request` hook to enforce Content-Type charset on all text-based responses. Example: 
+```python
 @APP.after_request
 async def set_content_type_charset(response):
     """Ensure all text-based responses include charset=utf-8."""
@@ -3189,7 +3244,8 @@ async def set_content_type_charset(response):
         if needs_charset and 'charset' not in content_type.lower():
             response.content_type = f'{mime}; charset=utf-8'
     return response
-``` Add this to main.py create_app() or pages.py module level.
+``` 
+Add this to main.py create_app() or pages.py module level.
 
 ---
 
@@ -3200,8 +3256,8 @@ async def set_content_type_charset(response):
 | **Severity** | 🟡 Medium |
 | **ASVS Level(s)** | L2 |
 | **CWE** | - |
-| **ASVS Section(s)** | 4.1.2 |
-| **Affected Files** | v3/server/main.py:76-82, v3/server/pages.py:all route definitions, v3/server/config.yaml.example:24-30 |
+| **ASVS Sections** | 4.1.2 |
+| **Files** | `v3/server/main.py:76-82`, `v3/server/pages.py:all route definitions`, `v3/server/config.yaml.example:24-30` |
 | **Source Reports** | 4.1.2.md |
 | **Related Findings** | - |
 
@@ -3222,8 +3278,8 @@ Implement middleware that enforces HTTPS on action/API endpoints and only redire
 | **Severity** | 🟡 Medium |
 | **ASVS Level(s)** | L2 |
 | **CWE** | - |
-| **ASVS Section(s)** | 4.1.2 |
-| **Affected Files** | v3/server/pages.py:/do-open/&lt;eid&gt;, v3/server/pages.py:/do-close/&lt;eid&gt; |
+| **ASVS Sections** | 4.1.2 |
+| **Files** | `v3/server/pages.py:/do-open/<eid>`, `v3/server/pages.py:/do-close/<eid>` |
 | **Source Reports** | 4.1.2.md |
 | **Related Findings** | - |
 
@@ -3244,8 +3300,8 @@ Convert state-changing operations to POST method. Change @APP.get('/do-open/&lt;
 | **Severity** | 🟡 Medium |
 | **ASVS Level(s)** | L2 |
 | **CWE** | - |
-| **ASVS Section(s)** | 4.1.3 |
-| **Affected Files** | v3/server/main.py:34-53, v3/server/main.py:78-95, v3/server/main.py:96-113 |
+| **ASVS Sections** | 4.1.3 |
+| **Files** | `v3/server/main.py:34-53`, `v3/server/main.py:78-95`, `v3/server/main.py:96-113` |
 | **Source Reports** | 4.1.3.md |
 | **Related Findings** | - |
 
@@ -3280,8 +3336,8 @@ app.asgi_app = ProxyFixMiddleware(
 | **Severity** | 🟡 Medium |
 | **ASVS Level(s)** | L3 |
 | **CWE** | - |
-| **ASVS Section(s)** | 4.1.5 |
-| **Affected Files** | v3/server/pages.py:496-517, v3/server/pages.py:520-538, v3/steve/election.py:269-282, v3/steve/election.py:285-296, v3/steve/crypto.py:31-41 |
+| **ASVS Sections** | 4.1.5 |
+| **Files** | `v3/server/pages.py:496-517`, `v3/server/pages.py:520-538`, `v3/steve/election.py:269-282`, `v3/steve/election.py:285-296`, `v3/steve/crypto.py:31-41` |
 | **Source Reports** | 4.1.5.md |
 | **Related Findings** | - |
 
@@ -3302,8 +3358,8 @@ Change /do-open/&lt;eid&gt; and /do-close/&lt;eid&gt; to POST methods with signe
 | **Severity** | 🟡 Medium |
 | **ASVS Level(s)** | L2 |
 | **CWE** | - |
-| **ASVS Section(s)** | 4.2.1 |
-| **Affected Files** | v3/server/main.py:31-44, v3/server/pages.py:403, v3/server/pages.py:96, v3/server/pages.py:440, v3/server/pages.py:504, v3/server/pages.py:531 |
+| **ASVS Sections** | 4.2.1 |
+| **Files** | `v3/server/main.py:31-44`, `v3/server/pages.py:403`, `v3/server/pages.py:96`, `v3/server/pages.py:440`, `v3/server/pages.py:504`, `v3/server/pages.py:531` |
 | **Source Reports** | 4.2.1.md |
 | **Related Findings** | - |
 
@@ -3324,8 +3380,8 @@ Set `app.config['MAX_CONTENT_LENGTH'] = 1 * 1024 * 1024` (1 MB) in the `create_a
 | **Severity** | 🟡 Medium |
 | **ASVS Level(s)** | L2 |
 | **CWE** | - |
-| **ASVS Section(s)** | 4.2.1 |
-| **Affected Files** | v3/server/pages.py:453-470, v3/server/pages.py:475-492 |
+| **ASVS Sections** | 4.2.1 |
+| **Files** | `v3/server/pages.py:453-470`, `v3/server/pages.py:475-492` |
 | **Source Reports** | 4.2.1.md |
 | **Related Findings** | - |
 
@@ -3346,8 +3402,8 @@ Convert state-changing operations to POST with CSRF protection. Change `@APP.get
 | **Severity** | 🟡 Medium |
 | **ASVS Level(s)** | L3 |
 | **CWE** | - |
-| **ASVS Section(s)** | 4.2.3 |
-| **Affected Files** | v3/server/main.py:33-48, v3/server/main.py:43, v3/server/main.py:77-78, v3/server/main.py:91-110, v3/server/pages.py:93, v3/server/pages.py:441, v3/server/pages.py:499, v3/server/pages.py:520 |
+| **ASVS Sections** | 4.2.3 |
+| **Files** | `v3/server/main.py:33-48`, `v3/server/main.py:43`, `v3/server/main.py:77-78`, `v3/server/main.py:91-110`, `v3/server/pages.py:93`, `v3/server/pages.py:441`, `v3/server/pages.py:499`, `v3/server/pages.py:520` |
 | **Source Reports** | 4.2.3.md |
 | **Related Findings** | - |
 
@@ -3368,8 +3424,8 @@ Add ASGI middleware to validate and strip connection-specific headers for HTTP/2
 | **Severity** | 🟡 Medium |
 | **ASVS Level(s)** | L3 |
 | **CWE** | - |
-| **ASVS Section(s)** | 4.2.4 |
-| **Affected Files** | v3/server/pages.py:114-628, v3/server/main.py:90-107 |
+| **ASVS Sections** | 4.2.4 |
+| **Files** | `v3/server/pages.py:114-628`, `v3/server/main.py:90-107` |
 | **Source Reports** | 4.2.4.md |
 | **Related Findings** | - |
 
@@ -3406,8 +3462,8 @@ async def validate_headers_no_crlf():
 | **Severity** | 🟡 Medium |
 | **ASVS Level(s)** | L3 |
 | **CWE** | - |
-| **ASVS Section(s)** | 4.2.4 |
-| **Affected Files** | v3/server/pages.py:303, v3/server/pages.py:363, v3/server/pages.py:413, v3/server/pages.py:416, v3/server/pages.py:434, v3/server/pages.py:455, v3/server/pages.py:477, v3/server/pages.py:496, v3/server/pages.py:521, v3/server/pages.py:547, v3/server/pages.py:567 |
+| **ASVS Sections** | 4.2.4 |
+| **Files** | `v3/server/pages.py:303`, `v3/server/pages.py:363`, `v3/server/pages.py:413`, `v3/server/pages.py:416`, `v3/server/pages.py:434`, `v3/server/pages.py:455`, `v3/server/pages.py:477`, `v3/server/pages.py:496`, `v3/server/pages.py:521`, `v3/server/pages.py:547`, `v3/server/pages.py:567` |
 | **Source Reports** | 4.2.4.md |
 | **Related Findings** | - |
 
@@ -3452,8 +3508,8 @@ async def validate_response_headers(response):
 | **Severity** | 🟡 Medium |
 | **ASVS Level(s)** | L3 |
 | **CWE** | - |
-| **ASVS Section(s)** | 4.2.5 |
-| **Affected Files** | v3/server/pages.py:385-395, v3/server/pages.py:424, v3/server/pages.py:485, v3/server/pages.py:505, v3/server/pages.py:369, v3/server/pages.py:410, v3/server/pages.py:467, v3/server/pages.py:489 |
+| **ASVS Sections** | 4.2.5 |
+| **Files** | `v3/server/pages.py:385-395`, `v3/server/pages.py:424`, `v3/server/pages.py:485`, `v3/server/pages.py:505`, `v3/server/pages.py:369`, `v3/server/pages.py:410`, `v3/server/pages.py:467`, `v3/server/pages.py:489` |
 | **Source Reports** | 4.2.5.md |
 | **Related Findings** | - |
 
@@ -3474,8 +3530,8 @@ Apply length limits at three levels: (1) Truncate user input before including in
 | **Severity** | 🟡 Medium |
 | **ASVS Level(s)** | L2 |
 | **CWE** | - |
-| **ASVS Section(s)** | 4.4.2 |
-| **Affected Files** | v3/server/main.py:36-51 |
+| **ASVS Sections** | 4.4.2 |
+| **Files** | `v3/server/main.py:36-51` |
 | **Source Reports** | 4.4.2.md |
 | **Related Findings** | - |
 
@@ -3519,37 +3575,15 @@ server:
 
 ---
 
-#### FINDING-140: State-Changing Operations via GET Requests Bypass Session Security
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L2 |
-| **CWE** | CWE-352 |
-| **ASVS Section(s)** | 4.4.3 |
-| **Affected Files** | v3/server/pages.py:323, v3/server/pages.py:340 |
-| **Source Reports** | 4.4.3.md |
-| **Related Findings** | FINDING-007, FINDING-008, FINDING-029, FINDING-030, FINDING-033, FINDING-034, FINDING-110 |
-
-**Description:**
-
-The /do-open/&lt;eid&gt; and /do-close/&lt;eid&gt; endpoints perform critical state-changing operations (opening and closing elections) via HTTP GET requests. When combined with cookie-based session management, GET requests are inherently vulnerable to cross-site request forgery through simple link injection, image tags, or browser prefetching. These endpoints cannot carry request body tokens, making them structurally impossible to protect with CSRF tokens. An attacker can craft malicious pages with embedded image tags or links that automatically trigger these endpoints when visited by an authenticated committer, causing irreversible election state changes without user knowledge or consent.
-
-**Remediation:**
-
-Convert the /do-open/&lt;eid&gt; and /do-close/&lt;eid&gt; endpoints from GET to POST methods. Implement CSRF token validation by checking form.get('csrf_token') against a valid token generated in the session. Replace the placeholder CSRF token implementation in basic_info() with a real CSRF token generator. Ensure all state-changing operations require POST with valid CSRF tokens. Example: Change @APP.get to @APP.post, retrieve form data via await quart.request.form, validate CSRF token before processing, and abort with 403 if validation fails.
-
----
-
-#### FINDING-141: Complete Absence of File Handling Documentation for Document Serving Feature
+#### FINDING-140: Complete Absence of File Handling Documentation for Document Serving Feature
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟡 Medium |
 | **ASVS Level(s)** | L2 |
 | **CWE** | - |
-| **ASVS Section(s)** | 5.1.1 |
-| **Affected Files** | v3/docs/schema.md, v3/ARCHITECTURE.md:18, v3/server/pages.py:562-580 |
+| **ASVS Sections** | 5.1.1 |
+| **Files** | `v3/docs/schema.md`, `v3/ARCHITECTURE.md:18`, `v3/server/pages.py:562-580` |
 | **Source Reports** | 5.1.1.md |
 | **Related Findings** | - |
 
@@ -3563,15 +3597,15 @@ Create a file handling specification document and reference it from ARCHITECTURE
 
 ---
 
-#### FINDING-142: Issue Description Doc-Link Rewriting Generates Unvalidated File References
+#### FINDING-141: Issue Description Doc-Link Rewriting Generates Unvalidated File References
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟡 Medium |
 | **ASVS Level(s)** | L2 |
 | **CWE** | - |
-| **ASVS Section(s)** | 5.1.1 |
-| **Affected Files** | v3/server/pages.py:52-58 |
+| **ASVS Sections** | 5.1.1 |
+| **Files** | `v3/server/pages.py:52-58` |
 | **Source Reports** | 5.1.1.md |
 | **Related Findings** | - |
 
@@ -3585,15 +3619,15 @@ Validate the filename in rewrite_description() against the documented allowlist.
 
 ---
 
-#### FINDING-143: Files Served to Voters Undergo No Antivirus or Malicious Content Scanning
+#### FINDING-142: Files Served to Voters Undergo No Antivirus or Malicious Content Scanning
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟡 Medium |
 | **ASVS Level(s)** | L2 |
 | **CWE** | - |
-| **ASVS Section(s)** | 5.4.3 |
-| **Affected Files** | v3/server/pages.py:638-658, v3/server/pages.py:52, v3/server/pages.py:308 |
+| **ASVS Sections** | 5.4.3 |
+| **Files** | `v3/server/pages.py:638-658`, `v3/server/pages.py:52`, `v3/server/pages.py:308` |
 | **Source Reports** | 5.4.3.md |
 | **Related Findings** | - |
 
@@ -3607,15 +3641,15 @@ Integrate antivirus scanning at the point where files are placed into DOCSDIR (u
 
 ---
 
-#### FINDING-144: Complete absence of documentation defining authentication defense controls
+#### FINDING-143: Complete absence of documentation defining authentication defense controls
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟡 Medium |
 | **ASVS Level(s)** | L1 |
 | **CWE** | - |
-| **ASVS Section(s)** | 6.1.1 |
-| **Affected Files** | v3/TODO.md, v3/docs/schema.md, v3/server/pages.py, v3/server/main.py:33, v3/server/main.py:39-43 |
+| **ASVS Sections** | 6.1.1 |
+| **Files** | `v3/TODO.md`, `v3/docs/schema.md`, `v3/server/pages.py`, `v3/server/main.py:33`, `v3/server/main.py:39-43` |
 | **Source Reports** | 6.1.1.md |
 | **Related Findings** | - |
 
@@ -3629,15 +3663,15 @@ Create an authentication security document (e.g., v3/docs/authentication-securit
 
 ---
 
-#### FINDING-145: No rate limiting or throttling on vote submission and state-changing endpoints
+#### FINDING-144: No rate limiting or throttling on vote submission and state-changing endpoints
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟡 Medium |
 | **ASVS Level(s)** | L1 |
 | **CWE** | - |
-| **ASVS Section(s)** | 6.1.1 |
-| **Affected Files** | v3/server/pages.py:367, v3/server/pages.py:408, v3/server/pages.py:429, v3/server/pages.py:448 |
+| **ASVS Sections** | 6.1.1 |
+| **Files** | `v3/server/pages.py:367`, `v3/server/pages.py:408`, `v3/server/pages.py:429`, `v3/server/pages.py:448` |
 | **Source Reports** | 6.1.1.md |
 | **Related Findings** | - |
 
@@ -3651,15 +3685,15 @@ The vote submission and election state-change endpoints have no rate limiting or
 
 ---
 
-#### FINDING-146: No Throttling on Vote Submission Endpoint
+#### FINDING-145: No Throttling on Vote Submission Endpoint
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟡 Medium |
 | **ASVS Level(s)** | L1 |
 | **CWE** | - |
-| **ASVS Section(s)** | 6.3.1 |
-| **Affected Files** | v3/server/pages.py:290-323, v3/steve/election.py:265 |
+| **ASVS Sections** | 6.3.1 |
+| **Files** | `v3/server/pages.py:290-323`, `v3/steve/election.py:265` |
 | **Source Reports** | 6.3.1.md |
 | **Related Findings** | - |
 
@@ -3673,15 +3707,15 @@ Add endpoint-specific rate limiting for the vote submission endpoint using @rate
 
 ---
 
-#### FINDING-147: No Rate Limiting on Resource Identifier Endpoints — Brute Force Enumeration Unprotected
+#### FINDING-146: No Rate Limiting on Resource Identifier Endpoints — Brute Force Enumeration Unprotected
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟡 Medium |
 | **ASVS Level(s)** | L2 |
 | **CWE** | - |
-| **ASVS Section(s)** | 6.6.3 |
-| **Affected Files** | v3/server/pages.py:161, v3/server/pages.py:180, v3/server/pages.py:217, v3/server/pages.py:306, v3/server/pages.py:362, v3/server/pages.py:418, v3/server/pages.py:436, v3/server/pages.py:536 |
+| **ASVS Sections** | 6.6.3 |
+| **Files** | `v3/server/pages.py:161`, `v3/server/pages.py:180`, `v3/server/pages.py:217`, `v3/server/pages.py:306`, `v3/server/pages.py:362`, `v3/server/pages.py:418`, `v3/server/pages.py:436`, `v3/server/pages.py:536` |
 | **Source Reports** | 6.6.3.md |
 | **Related Findings** | - |
 
@@ -3695,15 +3729,15 @@ Implement rate limiting on election/issue lookup endpoints to prevent brute forc
 
 ---
 
-#### FINDING-148: State-Changing Operations via GET Bypass Session CSRF Protections
+#### FINDING-147: State-Changing Operations via GET Bypass Session CSRF Protections
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟡 Medium |
 | **ASVS Level(s)** | L1, L2, L3 |
 | **CWE** | - |
-| **ASVS Section(s)** | 7.2.1, 7.5.3, 7.6.2 |
-| **Affected Files** | v3/server/pages.py:448, v3/server/pages.py:468, v3/server/pages.py:84, v3/server/pages.py:437-453, v3/server/pages.py:456-472 |
+| **ASVS Sections** | 7.2.1, 7.5.3, 7.6.2 |
+| **Files** | `v3/server/pages.py:448`, `v3/server/pages.py:468`, `v3/server/pages.py:84`, `v3/server/pages.py:437-453`, `v3/server/pages.py:456-472` |
 | **Source Reports** | 7.2.1.md, 7.5.3.md, 7.6.2.md |
 | **Related Findings** | - |
 
@@ -3717,15 +3751,15 @@ Change /do-open/&lt;eid&gt; and /do-close/&lt;eid&gt; to POST methods. Replace t
 
 ---
 
-#### FINDING-149: Absence of Session Management Risk Analysis and Policy Documentation
+#### FINDING-148: Absence of Session Management Risk Analysis and Policy Documentation
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟡 Medium |
 | **ASVS Level(s)** | L2 |
 | **CWE** | - |
-| **ASVS Section(s)** | 7.1.1 |
-| **Affected Files** | v3/docs/schema.md, v3/ARCHITECTURE.md |
+| **ASVS Sections** | 7.1.1 |
+| **Files** | `v3/docs/schema.md`, `v3/ARCHITECTURE.md` |
 | **Source Reports** | 7.1.1.md |
 | **Related Findings** | - |
 
@@ -3739,15 +3773,15 @@ Create a session-management.md document (or equivalent section in existing docs)
 
 ---
 
-#### FINDING-150: Complete Absence of Concurrent Session Limit Policy and Enforcement
+#### FINDING-149: Complete Absence of Concurrent Session Limit Policy and Enforcement
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟡 Medium |
 | **ASVS Level(s)** | L2 |
 | **CWE** | - |
-| **ASVS Section(s)** | 7.1.2 |
-| **Affected Files** | v3/server/pages.py:70-87, v3/server/pages.py:547-560, v3/server/main.py:39-41 |
+| **ASVS Sections** | 7.1.2 |
+| **Files** | `v3/server/pages.py:70-87`, `v3/server/pages.py:547-560`, `v3/server/main.py:39-41` |
 | **Source Reports** | 7.1.2.md |
 | **Related Findings** | - |
 
@@ -3761,15 +3795,15 @@ The application has no documented policy, configuration, or code to define or en
 
 ---
 
-#### FINDING-151: Session Creation Without User Consent or Explicit Action
+#### FINDING-150: Session Creation Without User Consent or Explicit Action
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟡 Medium |
 | **ASVS Level(s)** | L2 |
 | **CWE** | - |
-| **ASVS Section(s)** | 7.6.2 |
-| **Affected Files** | v3/server/main.py:37-40, v3/server/pages.py:136-165 |
+| **ASVS Sections** | 7.6.2 |
+| **Files** | `v3/server/main.py:37-40`, `v3/server/pages.py:136-165` |
 | **Source Reports** | 7.6.2.md |
 | **Related Findings** | - |
 
@@ -3781,19 +3815,17 @@ The application does not enforce explicit user consent or action before creating
 
 1. Add 'prompt=login' or 'prompt=consent' to the OAuth initiation URL in main.py to force explicit user interaction at the IdP. 2. Implement an interstitial login page with a 'Sign In' button instead of auto-redirecting to the IdP when @asfquart.auth.require detects no session. 3. Add 'max_age' parameter to limit how recently the user must have authenticated at the IdP (e.g., max_age=300 for 5 minutes). 4. Convert /do-open/&lt;eid&gt; and /do-close/&lt;eid&gt; from GET to POST to prevent link-triggered state changes.
 
----
-
-#### FINDING-152: No Formal Authorization Policy Document Defining Access Rules
+#### FINDING-151: No Formal Authorization Policy Document Defining Access Rules
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟡 Medium |
 | **ASVS Level(s)** | L1, L2, L3 |
 | **CWE** | CWE-1059 |
-| **ASVS Section(s)** | 8.1.1, 8.1.2, 8.1.3 |
-| **Affected Files** | v3/ARCHITECTURE.md, v3/docs/schema.md, v3/server/pages.py:101, v3/server/pages.py:167, v3/server/pages.py:194, v3/server/pages.py:290, v3/server/pages.py:335, v3/server/pages.py:349, v3/server/pages.py:363, v3/server/pages.py:378, v3/server/pages.py:394, v3/server/pages.py:413 |
+| **ASVS Sections** | 8.1.1, 8.1.2, 8.1.3 |
+| **Files** | `v3/ARCHITECTURE.md`, `v3/docs/schema.md`, `v3/server/pages.py:101`, `v3/server/pages.py:167`, `v3/server/pages.py:194`, `v3/server/pages.py:290`, `v3/server/pages.py:335`, `v3/server/pages.py:349`, `v3/server/pages.py:363`, `v3/server/pages.py:378`, `v3/server/pages.py:394`, `v3/server/pages.py:413` |
 | **Source Reports** | 8.1.1.md, 8.1.2.md, 8.1.3.md |
-| **Related Findings** | FINDING-066, FINDING-191 |
+| **Related** | FINDING-066, FINDING-190 |
 
 **Description:**
 
@@ -3803,17 +3835,19 @@ The application lacks a formal authorization policy document that defines functi
 
 Create a formal authorization policy document (e.g., AUTHORIZATION.md) that includes: (1) Role definitions with sources and descriptions (anonymous, authenticated, committer, pmc_member, election_owner, authz_group), (2) Function-level access rules mapping endpoints to required roles and resource checks, (3) Data-specific rules for election management, voting, and tallying, (4) Field-level access matrix showing which roles can read/write which fields based on election state, (5) Decision-making factors including user role, resource ownership, group membership, voter eligibility, election state, and tamper status, (6) Environmental and contextual attributes used (or explicitly NOT used) in authorization decisions, (7) State transition authorization rules. Include an authorization matrix mapping roles to permitted functions and document all consumer-resource permission relationships.
 
-#### FINDING-153: Authorization Tier Inconsistency: Lower Privilege Required for Management Than Creation
+---
+
+#### FINDING-152: Authorization Tier Inconsistency: Lower Privilege Required for Management Than Creation
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L1 |
-| CWE | CWE-269 |
-| ASVS Sections | 8.3.1 |
-| Files | v3/server/pages.py:423, v3/server/pages.py:445, v3/server/pages.py:465, v3/server/pages.py:483, v3/server/pages.py:507, v3/server/pages.py:530 |
-| Source Reports | 8.3.1.md |
-| Related | None |
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L1 |
+| **CWE** | CWE-269 |
+| **ASVS Sections** | 8.3.1 |
+| **Files** | `v3/server/pages.py:423`, `v3/server/pages.py:445`, `v3/server/pages.py:465`, `v3/server/pages.py:483`, `v3/server/pages.py:507`, `v3/server/pages.py:530` |
+| **Source Reports** | 8.3.1.md |
+| **Related** | |
 
 **Description:**
 
@@ -3825,17 +3859,17 @@ Align management endpoint authorization with creation by requiring R.pmc_member 
 
 ---
 
-#### FINDING-154: _set_election_date Modifies Election Properties Without Object-Level Authorization
+#### FINDING-153: _set_election_date Modifies Election Properties Without Object-Level Authorization
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L2 |
-| CWE | CWE-639 |
-| ASVS Sections | 8.2.3 |
-| Files | v3/server/pages.py:99-122, v3/steve/election.py:117, v3/steve/election.py:119 |
-| Source Reports | 8.2.3.md |
-| Related | FINDING-009, FINDING-051, FINDING-053 |
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L2 |
+| **CWE** | CWE-639 |
+| **ASVS Sections** | 8.2.3 |
+| **Files** | `v3/server/pages.py:99-122`, `v3/steve/election.py:117`, `v3/steve/election.py:119` |
+| **Source Reports** | 8.2.3.md |
+| **Related** | FINDING-010, FINDING-051, FINDING-053 |
 
 **Description:**
 
@@ -3847,17 +3881,17 @@ This is resolved by the same load_election decorator fix described in AUTHZ-001.
 
 ---
 
-#### FINDING-155: Election time-based validity constraints (open_at/close_at) are stored but never enforced during vote acceptance or state computation
+#### FINDING-154: Election time-based validity constraints (open_at/close_at) are stored but never enforced during vote acceptance or state computation
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L1 |
-| CWE | None |
-| ASVS Sections | 9.2.1 |
-| Files | v3/steve/election.py:306-318, v3/steve/election.py:211-222, v3/steve/election.py:367, v3/steve/election.py:371, v3/server/pages.py:590-600, v3/server/pages.py:402-412 |
-| Source Reports | 9.2.1.md |
-| Related | None |
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L1 |
+| **CWE** | |
+| **ASVS Sections** | 9.2.1 |
+| **Files** | `v3/steve/election.py:306-318`, `v3/steve/election.py:211-222`, `v3/steve/election.py:367`, `v3/steve/election.py:371`, `v3/server/pages.py:590-600`, `v3/server/pages.py:402-412` |
+| **Source Reports** | 9.2.1.md |
+| **Related** | |
 
 **Description:**
 
@@ -3869,17 +3903,17 @@ Option 1: Enforce time constraints in _compute_state() by adding time-based chec
 
 ---
 
-#### FINDING-156: Missing OIDC Audience Restriction Control
+#### FINDING-155: Missing OIDC Audience Restriction Control
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L2 |
-| CWE | CWE-346 |
-| ASVS Sections | 10.1.1, 10.3.1 |
-| Files | v3/server/main.py:36-43 |
-| Source Reports | 10.1.1.md, 10.3.1.md |
-| Related | None |
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L2 |
+| **CWE** | CWE-346 |
+| **ASVS Sections** | 10.1.1, 10.3.1 |
+| **Files** | `v3/server/main.py:36-43` |
+| **Source Reports** | 10.1.1.md, 10.3.1.md |
+| **Related** | |
 
 **Description:**
 
@@ -3902,17 +3936,17 @@ def create_app():
 
 ---
 
-#### FINDING-157: Unverified Session Transport May Expose Tokens to Browser
+#### FINDING-156: Unverified Session Transport May Expose Tokens to Browser
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L2 |
-| CWE | CWE-522 |
-| ASVS Sections | 10.1.1 |
-| Files | v3/server/pages.py:65-95 |
-| Source Reports | 10.1.1.md |
-| Related | None |
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L2 |
+| **CWE** | CWE-522 |
+| **ASVS Sections** | 10.1.1 |
+| **Files** | `v3/server/pages.py:65-95` |
+| **Source Reports** | 10.1.1.md |
+| **Related** | |
 
 **Description:**
 
@@ -3945,17 +3979,17 @@ Additionally, audit the asfquart framework to confirm tokens are stored server-s
 
 ---
 
-#### FINDING-158: OAuth Authorization Flow Lacks PKCE (Proof Key for Code Exchange)
+#### FINDING-157: OAuth Authorization Flow Lacks PKCE (Proof Key for Code Exchange)
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L2, L3 |
-| CWE | None |
-| ASVS Sections | 10.1.2, 10.2.1, 10.4.6 |
-| Files | v3/server/main.py:35-38, v3/server/main.py:38-42 |
-| Source Reports | 10.1.2.md, 10.2.1.md, 10.4.6.md |
-| Related | None |
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L2, L3 |
+| **CWE** | |
+| **ASVS Sections** | 10.1.2, 10.2.1, 10.4.6 |
+| **Files** | `v3/server/main.py:35-38`, `v3/server/main.py:38-42` |
+| **Source Reports** | 10.1.2.md, 10.2.1.md, 10.4.6.md |
+| **Related** | |
 
 **Description:**
 
@@ -3967,17 +4001,17 @@ The application explicitly overrides the framework's OAuth URL templates. The au
 
 ---
 
-#### FINDING-159: OAuth State Parameter Security Properties Unverifiable — Framework Delegation Without Audit Visibility
+#### FINDING-158: OAuth State Parameter Security Properties Unverifiable — Framework Delegation Without Audit Visibility
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L2 |
-| CWE | None |
-| ASVS Sections | 10.1.2 |
-| Files | v3/server/main.py:35-38, v3/server/pages.py:89 |
-| Source Reports | 10.1.2.md |
-| Related | None |
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L2, L3 |
+| **CWE** | |
+| **ASVS Sections** | 10.1.2, 10.5.1 |
+| **Files** | `v3/server/main.py:35-38`, `v3/server/pages.py:89` |
+| **Source Reports** | 10.1.2.md, 10.5.1.md |
+| **Related** | |
 
 **Description:**
 
@@ -3999,21 +4033,21 @@ ASVS 10.1.2 requires that the 'state' parameter is: (1) Not guessable — genera
 
 ---
 
-#### FINDING-160: OAuth authorization request does not specify required scopes, relying on server defaults
+#### FINDING-159: OAuth authorization request does not specify required scopes, relying on server defaults
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L3, L2 |
-| CWE | None |
-| ASVS Sections | 10.2.3, 10.3.2, 10.4.11 |
-| Files | v3/server/main.py:38-41, v3/server/pages.py:85-91, v3/server/main.py:37-41 |
-| Source Reports | 10.2.3.md, 10.3.2.md, 10.4.11.md |
-| Related | None |
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L3, L2 |
+| **CWE** | |
+| **ASVS Sections** | 10.2.3, 10.3.2, 10.4.11, 10.7.2 |
+| **Files** | `v3/server/main.py:38-41`, `v3/server/pages.py:85-91`, `v3/server/main.py:37-41` |
+| **Source Reports** | 10.2.3.md, 10.3.2.md, 10.4.11.md, 10.7.2.md |
+| **Related** | |
 
 **Description:**
 
-The OAuth authorization URL template does not include a `scope` parameter, violating the principle of least privilege for OAuth scope requests. The application relies entirely on the authorization server's default scope configuration rather than explicitly requesting only the minimal scopes it requires. The application consumes only three fields from the OAuth session: `uid`, `fullname`, and `email`, but the authorization URL contains only `state` and `redirect_uri` parameters — no `scope` parameter restricts what the authorization server grants. Without an explicit scope, the AS may grant broader access (e.g., group memberships, commit access details, or other ASF-specific attributes) than the three fields actually consumed by the application.
+The OAuth authorization request URL template includes only `state` and `redirect_uri` parameters. It does not include a `scope` parameter (e.g., `openid`, `profile`, `email`), nor a `client_id` parameter in the visible URL template. Without scopes, the authorization server at `oauth.apache.org` cannot present the user with information about what data or permissions the STeVe application is requesting. ASVS 10.7.2 requires that the consent prompt presents 'the nature of the requested authorizations (typically based on scope).' By omitting scopes entirely, the authorization server cannot fulfill this requirement regardless of its own implementation quality. Users cannot make informed consent decisions about personal data sharing (uid, name, email). The authorization server's consent screen cannot distinguish between minimal authentication and the full profile data the application actually consumes.
 
 **Remediation:**
 
@@ -4045,17 +4079,17 @@ app.config['OAUTH_SCOPES'] = 'openid uid email'  # Framework-specific configurat
 
 ---
 
-#### FINDING-161: User Identity Derived from Opaque `uid` Session Field Without Verifiable `iss`+`sub` Claim Origin
+#### FINDING-160: User Identity Derived from Opaque `uid` Session Field Without Verifiable `iss`+`sub` Claim Origin
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L2 |
-| CWE | None |
-| ASVS Sections | 10.3.3 |
-| Files | v3/server/pages.py:89-98, v3/server/pages.py:157, v3/server/pages.py:274, v3/server/pages.py:329, v3/server/pages.py:438, v3/server/pages.py:475, v3/server/pages.py:496, v3/server/pages.py:514, v3/server/pages.py:626, v3/server/main.py:38-42 |
-| Source Reports | 10.3.3.md |
-| Related | None |
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L2 |
+| **CWE** | |
+| **ASVS Sections** | 10.3.3 |
+| **Files** | `v3/server/pages.py:89-98`, `v3/server/pages.py:157`, `v3/server/pages.py:274`, `v3/server/pages.py:329`, `v3/server/pages.py:438`, `v3/server/pages.py:475`, `v3/server/pages.py:496`, `v3/server/pages.py:514`, `v3/server/pages.py:626`, `v3/server/main.py:38-42` |
+| **Source Reports** | 10.3.3.md |
+| **Related** | |
 
 **Description:**
 
@@ -4067,17 +4101,17 @@ The application should explicitly verify that user identity is derived from `iss
 
 ---
 
-#### FINDING-162: Missing Authentication Recentness Verification
+#### FINDING-161: Missing Authentication Recentness Verification
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L2 |
-| CWE | None |
-| ASVS Sections | 10.3.4 |
-| Files | v3/server/main.py:37-43, v3/server/pages.py:85-95, v3/server/pages.py:443-482, v3/server/pages.py:507-525, v3/server/pages.py:528-544, v3/server/pages.py:485-504 |
-| Source Reports | 10.3.4.md |
-| Related | None |
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L2 |
+| **CWE** | |
+| **ASVS Sections** | 10.3.4 |
+| **Files** | `v3/server/main.py:37-43`, `v3/server/pages.py:85-95`, `v3/server/pages.py:443-482`, `v3/server/pages.py:507-525`, `v3/server/pages.py:528-544`, `v3/server/pages.py:485-504` |
+| **Source Reports** | 10.3.4.md |
+| **Related** | |
 
 **Description:**
 
@@ -4089,17 +4123,17 @@ The application explicitly disables OIDC and uses plain OAuth, thereby removing 
 
 ---
 
-#### FINDING-163: Missing Authentication Method and Strength Verification
+#### FINDING-162: Missing Authentication Method and Strength Verification
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L2 |
-| CWE | None |
-| ASVS Sections | 10.3.4 |
-| Files | v3/server/pages.py:443-482, v3/server/pages.py:507-525, v3/server/pages.py:528-544, v3/server/pages.py:485-504 |
-| Source Reports | 10.3.4.md |
-| Related | None |
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L2 |
+| **CWE** | |
+| **ASVS Sections** | 10.3.4 |
+| **Files** | `v3/server/pages.py:443-482`, `v3/server/pages.py:507-525`, `v3/server/pages.py:528-544`, `v3/server/pages.py:485-504` |
+| **Source Reports** | 10.3.4.md |
+| **Related** | |
 
 **Description:**
 
@@ -4111,17 +4145,17 @@ The application has operations of varying sensitivity (viewing elections, voting
 
 ---
 
-#### FINDING-164: No Visible Client Authentication for OAuth Token Exchange
+#### FINDING-163: No Visible Client Authentication for OAuth Token Exchange
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L2 |
-| CWE | CWE-306 |
-| ASVS Sections | 10.4.10, 13.2.1 |
-| Files | v3/server/main.py:38-41 |
-| Source Reports | 10.4.10.md, 13.2.1.md |
-| Related | FINDING-044 |
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L2 |
+| **CWE** | CWE-306 |
+| **ASVS Sections** | 10.4.10 |
+| **Files** | `v3/server/main.py:38-41` |
+| **Source Reports** | 10.4.10.md |
+| **Related** | FINDING-044 |
 
 **Description:**
 
@@ -4133,17 +4167,17 @@ This server-side web application (Quart/Python) is inherently capable of maintai
 
 ---
 
-#### FINDING-165: OAuth Client Authorization Request Does Not Explicitly Specify response_mode, Relying Entirely on External AS Enforcement
+#### FINDING-164: OAuth Client Authorization Request Does Not Explicitly Specify response_mode, Relying Entirely on External AS Enforcement
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L3 |
-| CWE | None |
-| ASVS Sections | 10.4.12 |
-| Files | v3/server/main.py:39-43 |
-| Source Reports | 10.4.12.md |
-| Related | None |
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L3 |
+| **CWE** | |
+| **ASVS Sections** | 10.4.12 |
+| **Files** | `v3/server/main.py:39-43` |
+| **Source Reports** | 10.4.12.md |
+| **Related** | |
 
 **Description:**
 
@@ -4155,17 +4189,17 @@ Option 1 — Explicitly specify `response_mode` and `response_type` in the autho
 
 ---
 
-#### FINDING-166: OAuth Client Confidentiality Classification Cannot Be Verified — No Client Type Enforcement
+#### FINDING-165: OAuth Client Confidentiality Classification Cannot Be Verified — No Client Type Enforcement
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L3 |
-| CWE | None |
-| ASVS Sections | 10.4.16 |
-| Files | v3/server/main.py:35-51 |
-| Source Reports | 10.4.16.md |
-| Related | None |
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L3 |
+| **CWE** | |
+| **ASVS Sections** | 10.4.16 |
+| **Files** | `v3/server/main.py:35-51` |
+| **Source Reports** | 10.4.16.md |
+| **Related** | |
 
 **Description:**
 
@@ -4180,17 +4214,17 @@ ASVS 10.4.16 first requires verification that the client is confidential. A conf
 
 ---
 
-#### FINDING-167: No Visible Session/Token Absolute Expiration Enforcement in OAuth Client
+#### FINDING-166: No Visible Session/Token Absolute Expiration Enforcement in OAuth Client
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L2, L3 |
-| CWE | None |
-| ASVS Sections | 10.4.8 |
-| Files | v3/server/main.py:36-48, v3/server/pages.py:60-90 |
-| Source Reports | 10.4.8.md |
-| Related | None |
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L2, L3 |
+| **CWE** | |
+| **ASVS Sections** | 10.4.8 |
+| **Files** | `v3/server/main.py:36-48`, `v3/server/pages.py:60-90` |
+| **Source Reports** | 10.4.8.md |
+| **Related** | |
 
 **Description:**
 
@@ -4202,39 +4236,39 @@ Step 1: Configure explicit session absolute expiration in the application by set
 
 ---
 
-#### FINDING-168: Missing Nonce Parameter in OAuth Authentication Flow
+#### FINDING-167: No User-Facing Session or Token Revocation Mechanism
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L2, L3 |
-| CWE | None |
-| ASVS Sections | 10.5.1 |
-| Files | v3/server/main.py:36-43 |
-| Source Reports | 10.5.1.md |
-| Related | None |
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L2, L3 |
+| **CWE** | |
+| **ASVS Sections** | 10.4.9 |
+| **Files** | `v3/server/pages.py:582-597`, `v3/server/pages.py:entire application scope`, `v3/server/main.py:39-42` |
+| **Source Reports** | 10.4.9.md |
+| **Related** | |
 
 **Description:**
 
-The application overrides the OAuth authentication URL template to exclude OIDC-specific parameters, including the `nonce` parameter required for ID Token replay attack mitigation. No nonce generation, storage, or validation logic exists anywhere in the codebase. The comment 'Avoid OIDC' suggests this override replaces framework OIDC defaults, effectively bypassing any nonce handling the `asfquart` framework might provide. Without nonce validation, an attacker who captures an ID token or identity assertion could replay it to authenticate as the victim user.
+A comprehensive review of all 21 routes defined in pages.py reveals no logout endpoint, no session revocation mechanism, and no integration with the Authorization Server's token revocation endpoint (RFC 7009). Users who authenticate via OAuth have no way to invalidate their session or trigger revocation of any tokens held by the application. The /profile and /settings pages exist but contain no session management functionality. An attacker who obtains a valid session cookie (e.g., via XSS, network interception, or physical access) can use it indefinitely. The legitimate user visiting /profile or /settings will find no 'Log out' or 'Revoke sessions' option.
 
 **Remediation:**
 
-Step 1: Update OAuth URL to include nonce parameter in OAUTH_URL_INIT template: 'https://oauth.apache.org/auth?state=%s&redirect_uri=%s&nonce=%s'. Step 2: Implement nonce generation using cryptographic randomness (e.g., secrets module) before redirecting to authorization server. Step 3: Store the generated nonce in the user's session. Step 4: In the OAuth callback handler, retrieve the stored nonce from session and validate it matches the 'nonce' claim in the returned ID Token. Step 5: Reject authentication if nonce is missing or mismatched. Step 6: Clear the nonce after successful validation to ensure one-time use. Alternatively, re-evaluate the 'Avoid OIDC' decision and use the asfquart framework's OIDC defaults if they provide nonce validation.
+1. Add Logout Endpoint: Create a /logout route that clears local session and revokes tokens at the Authorization Server using RFC 7009 Token Revocation endpoint (https://oauth.apache.org/revoke). 2. Add Session Management UI: Enhance the /settings page to display active sessions with revocation capability per session. 3. Update Configuration: Add OAUTH_URL_REVOKE configuration in main.py pointing to the AS revocation endpoint. 4. Add Logout Links: Include logout links in navigation on all authenticated pages. 5. Implement session listing with 'last accessed' timestamps to help users identify suspicious sessions.
 
 ---
 
-#### FINDING-169: No Technical Enforcement of Identifier Immutability
+#### FINDING-168: No Technical Enforcement of Identifier Immutability
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L2, L3 |
-| CWE | None |
-| ASVS Sections | 10.5.2 |
-| Files | v3/server/pages.py:77-88, v3/server/bin/asf-load-ldap.py:55-59 |
-| Source Reports | 10.5.2.md |
-| Related | None |
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L2, L3 |
+| **CWE** | |
+| **ASVS Sections** | 10.5.2 |
+| **Files** | `v3/server/pages.py:77-88`, `v3/server/bin/asf-load-ldap.py:55-59` |
+| **Source Reports** | 10.5.2.md |
+| **Related** | |
 
 **Description:**
 
@@ -4246,17 +4280,17 @@ Use a compound identifier ('iss' + 'sub') or validate that the identifier source
 
 ---
 
-#### FINDING-170: No Authorization Server Issuer Validation Mechanism Configured
+#### FINDING-169: No Authorization Server Issuer Validation Mechanism Configured
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L2, L3 |
-| CWE | None |
-| ASVS Sections | 10.5.3 |
-| Files | main.py:37-42, pages.py:83-89 |
-| Source Reports | 10.5.3.md |
-| Related | None |
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L2, L3 |
+| **CWE** | |
+| **ASVS Sections** | 10.5.3 |
+| **Files** | `main.py:37-42`, `pages.py:83-89` |
+| **Source Reports** | 10.5.3.md |
+| **Related** | |
 
 **Description:**
 
@@ -4268,17 +4302,17 @@ Configure an expected issuer URL and validate it against authorization server me
 
 ---
 
-#### FINDING-171: Missing Explicit `response_type=code` Parameter in OAuth Authorization URL
+#### FINDING-170: Missing Explicit `response_type=code` Parameter in OAuth Authorization URL
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L2, L3 |
-| CWE | None |
-| ASVS Sections | 10.6.1 |
-| Files | v3/server/main.py:36-41 |
-| Source Reports | 10.6.1.md |
-| Related | None |
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L2, L3 |
+| **CWE** | |
+| **ASVS Sections** | 10.6.1 |
+| **Files** | `v3/server/main.py:36-41` |
+| **Source Reports** | 10.6.1.md |
+| **Related** | |
 
 **Description:**
 
@@ -4302,17 +4336,17 @@ Additional recommendations:
 
 ---
 
-#### FINDING-172: Missing Consent Enforcement Parameters in OAuth Authorization Flow
+#### FINDING-171: Missing Consent Enforcement Parameters in OAuth Authorization Flow
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L2, L3 |
-| CWE | None |
-| ASVS Sections | 10.7.1 |
-| Files | v3/server/main.py:36-42 |
-| Source Reports | 10.7.1.md |
-| Related | None |
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L2, L3 |
+| **CWE** | |
+| **ASVS Sections** | 10.7.1 |
+| **Files** | `v3/server/main.py:36-42` |
+| **Source Reports** | 10.7.1.md |
+| **Related** | |
 
 **Description:**
 
@@ -4324,53 +4358,17 @@ Switch to OIDC or add consent parameters if the AS supports them in plain OAuth.
 
 ---
 
-#### FINDING-173: OAuth Authorization Request Missing Scope Parameter Prevents Meaningful User Consent
+#### FINDING-172: Deliberate OIDC Avoidance Eliminates Standardized Consent and Identity Claims
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L2, L3 |
-| CWE | None |
-| ASVS Sections | 10.7.2 |
-| Files | v3/server/main.py:37-41, v3/server/pages.py:79-93, v3/server/pages.py:84-87 |
-| Source Reports | 10.7.2.md |
-| Related | None |
-
-**Description:**
-
-The OAuth authorization request URL template includes only `state` and `redirect_uri` parameters. It does not include a `scope` parameter (e.g., `openid`, `profile`, `email`), nor a `client_id` parameter in the visible URL template. Without scopes, the authorization server at `oauth.apache.org` cannot present the user with information about what data or permissions the STeVe application is requesting. ASVS 10.7.2 requires that the consent prompt presents 'the nature of the requested authorizations (typically based on scope).' By omitting scopes entirely, the authorization server cannot fulfill this requirement regardless of its own implementation quality. Users cannot make informed consent decisions about personal data sharing (uid, name, email). The authorization server's consent screen cannot distinguish between minimal authentication and the full profile data the application actually consumes.
-
-**Remediation:**
-
-Specify explicit OAuth scopes in the authorization URL to communicate the client's data requirements to the authorization server:
-
-```python
-# main.py - create_app()
-asfquart.generics.OAUTH_URL_INIT = (
-    'https://oauth.apache.org/auth?'
-    'response_type=code&'
-    'client_id=steve-voting&'
-    'scope=openid+profile+email&'
-    'state=%s&'
-    'redirect_uri=%s'
-)
-```
-
-If the ASF OAuth server does not support standard scopes, coordinate with the OAuth server administrators to implement scope-based consent presentation per RFC 6749 §3.3.
-
----
-
-#### FINDING-174: Deliberate OIDC Avoidance Eliminates Standardized Consent and Identity Claims
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L2, L3 |
-| CWE | None |
-| ASVS Sections | 10.7.2 |
-| Files | v3/server/main.py:35-36, v3/server/main.py:37-41 |
-| Source Reports | 10.7.2.md |
-| Related | None |
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L2, L3 |
+| **CWE** | |
+| **ASVS Sections** | 10.7.2 |
+| **Files** | `v3/server/main.py:35-36`, `v3/server/main.py:37-41` |
+| **Source Reports** | 10.7.2.md |
+| **Related** | |
 
 **Description:**
 
@@ -4405,17 +4403,17 @@ def create_app():
 
 ---
 
-#### FINDING-175: Authorization Tiers Not Reflected in OAuth Consent — Election Management Privileges Granted Without Specific Consent
+#### FINDING-173: Authorization Tiers Not Reflected in OAuth Consent — Election Management Privileges Granted Without Specific Consent
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L2, L3 |
-| CWE | None |
-| ASVS Sections | 10.7.2 |
-| Files | v3/server/pages.py:518, v3/server/pages.py:540, v3/server/pages.py:561, v3/server/pages.py:580, v3/server/pages.py:632, v3/server/pages.py:476, v3/server/main.py:37-39 |
-| Source Reports | 10.7.2.md |
-| Related | None |
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L2, L3 |
+| **CWE** | |
+| **ASVS Sections** | 10.7.2 |
+| **Files** | `v3/server/pages.py:518`, `v3/server/pages.py:540`, `v3/server/pages.py:561`, `v3/server/pages.py:580`, `v3/server/pages.py:632`, `v3/server/pages.py:476`, `v3/server/main.py:37-39` |
+| **Source Reports** | 10.7.2.md |
+| **Related** | |
 
 **Description:**
 
@@ -4452,17 +4450,17 @@ Alternatively, implement explicit authorization lifetime disclosure showing spec
 
 ---
 
-#### FINDING-176: Complete Absence of Consent Management Functionality
+#### FINDING-174: Complete Absence of Consent Management Functionality
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L2, L3 |
-| CWE | None |
-| ASVS Sections | 10.7.3 |
-| Files | v3/server/pages.py:554-560, v3/server/pages.py:563-569 |
-| Source Reports | 10.7.3.md |
-| Related | None |
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L2, L3 |
+| **CWE** | |
+| **ASVS Sections** | 10.7.3 |
+| **Files** | `v3/server/pages.py:554-560`, `v3/server/pages.py:563-569` |
+| **Source Reports** | 10.7.3.md |
+| **Related** | |
 
 **Description:**
 
@@ -4493,17 +4491,17 @@ Implement comprehensive consent management functionality:
 
 ---
 
-#### FINDING-177: No TLS/Cipher Configuration for ASGI Deployment Mode
+#### FINDING-175: No TLS/Cipher Configuration for ASGI Deployment Mode
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L2 |
-| CWE | None |
-| ASVS Sections | 12.1.2, 12.1.3, 12.3.1, 12.3.3 |
-| Files | v3/server/main.py:94-115, v3/server/main.py:99-118, v3/server/main.py:91-109, v3/server/main.py:115-126, v3/server/main.py:95-115 |
-| Source Reports | 12.1.2.md, 12.1.3.md, 12.3.1.md, 12.3.3.md, 12.1.5.md |
-| Related | None |
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L2 |
+| **CWE** | |
+| **ASVS Sections** | 12.1.2, 12.1.3, 12.3.1, 12.3.3 |
+| **Files** | `v3/server/main.py:94-115`, `v3/server/main.py:99-118`, `v3/server/main.py:91-109`, `v3/server/main.py:115-126`, `v3/server/main.py:95-115` |
+| **Source Reports** | 12.1.2.md, 12.1.3.md, 12.3.1.md, 12.3.3.md, 12.1.5.md |
+| **Related** | |
 
 **Description:**
 
@@ -4515,17 +4513,17 @@ Provide a Hypercorn configuration file (hypercorn.toml) with hardened TLS settin
 
 ---
 
-#### FINDING-178: Example Configuration Lacks Cipher Suite and TLS Version Settings
+#### FINDING-176: Example Configuration Lacks Cipher Suite and TLS Version Settings
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L2, L3 |
-| CWE | None |
-| ASVS Sections | 12.1.2, 12.1.4 |
-| Files | v3/server/config.yaml.example:23-31, v3/server/config.yaml.example:28-30, v3/server/main.py:103-120 |
-| Source Reports | 12.1.2.md, 12.1.4.md |
-| Related | None |
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L2, L3 |
+| **CWE** | |
+| **ASVS Sections** | 12.1.2, 12.1.4 |
+| **Files** | `v3/server/config.yaml.example:23-31`, `v3/server/config.yaml.example:28-30`, `v3/server/main.py:103-120` |
+| **Source Reports** | 12.1.2.md, 12.1.4.md |
+| **Related** | |
 
 **Description:**
 
@@ -4537,17 +4535,17 @@ Extend the configuration schema and example to include TLS hardening options: tl
 
 ---
 
-#### FINDING-179: No Certificate Revocation Checking for Outbound OAuth Connections
+#### FINDING-177: No Certificate Revocation Checking for Outbound OAuth Connections
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L2, L3 |
-| CWE | CWE-295 |
-| ASVS Sections | 12.1.4, 12.3.2, 12.3.4 |
-| Files | v3/server/main.py:44-48, v3/server/main.py:38-41, v3/server/main.py:42-45 |
-| Source Reports | 12.1.4.md, 12.3.2.md, 12.3.4.md |
-| Related | None |
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L2, L3 |
+| **CWE** | CWE-295 |
+| **ASVS Sections** | 12.1.4, 12.3.2, 12.3.4 |
+| **Files** | `v3/server/main.py:44-48`, `v3/server/main.py:38-41`, `v3/server/main.py:42-45` |
+| **Source Reports** | 12.1.4.md, 12.3.2.md, 12.3.4.md |
+| **Related** | |
 
 **Description:**
 
@@ -4559,17 +4557,17 @@ Configure outbound HTTPS connections with certificate revocation verification. C
 
 ---
 
-#### FINDING-180: TLS Configuration Allows Plain HTTP as Valid Deployment Mode Without Warnings
+#### FINDING-178: TLS Configuration Allows Plain HTTP as Valid Deployment Mode Without Warnings
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L2, L3 |
-| CWE | CWE-319 |
-| ASVS Sections | 12.3.4, 12.3.5, 13.3.4 |
-| Files | v3/server/config.yaml.example:30-32, v3/server/main.py:83-86, v3/server/config.yaml.example:28-31, v3/server/main.py:79-87 |
-| Source Reports | 12.3.4.md, 12.3.5.md, 13.3.4.md |
-| Related | FINDING-011 |
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L2, L3 |
+| **CWE** | CWE-319 |
+| **ASVS Sections** | 12.3.4, 12.3.5, 13.3.4 |
+| **Files** | `v3/server/config.yaml.example:30-32`, `v3/server/main.py:83-86`, `v3/server/config.yaml.example:28-31`, `v3/server/main.py:79-87` |
+| **Source Reports** | 12.3.4.md, 12.3.5.md, 13.3.4.md |
+| **Related** | FINDING-014 |
 
 **Description:**
 
@@ -4581,17 +4579,17 @@ Make TLS mandatory by failing startup if certificates are not configured. Add va
 
 ---
 
-#### FINDING-181: Non-Constant-Time Comparison of Cryptographic Key Material in Tamper Detection
+#### FINDING-179: Non-Constant-Time Comparison of Cryptographic Key Material in Tamper Detection
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L2, L3 |
-| CWE | CWE-208 |
-| ASVS Sections | 11.1.1, 11.1.2, 11.1.3, 11.2.1, 11.2.3, 11.2.4, 11.2.5, 11.3.3, 11.4.2, 11.6.1, 11.6.2, 11.7.1 |
-| Files | v3/steve/election.py:335-349, v3/steve/election.py:375, v3/steve/election.py:362-375, v3/steve/election.py:264, v3/steve/election.py:381, v3/server/bin/tally.py:155 |
-| Source Reports | 11.1.1.md, 11.1.2.md, 11.1.3.md, 11.2.1.md, 11.2.3.md, 11.2.4.md, 11.2.5.md, 11.3.3.md, 11.4.2.md, 11.6.1.md, 11.6.2.md, 11.7.1.md |
-| Related | FINDING-182 |
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L2, L3 |
+| **CWE** | CWE-208 |
+| **ASVS Sections** | 11.1.1, 11.1.2, 11.1.3, 11.2.1, 11.2.3, 11.2.4, 11.2.5, 11.3.3, 11.4.2, 11.6.1, 11.6.2, 11.7.1 |
+| **Files** | `v3/steve/election.py:335-349`, `v3/steve/election.py:375`, `v3/steve/election.py:362-375`, `v3/steve/election.py:264`, `v3/steve/election.py:381`, `v3/server/bin/tally.py:155` |
+| **Source Reports** | 11.1.1.md, 11.1.2.md, 11.1.3.md, 11.2.1.md, 11.2.3.md, 11.2.4.md, 11.2.5.md, 11.3.3.md, 11.4.2.md, 11.6.1.md, 11.6.2.md, 11.7.1.md |
+| **Related** | FINDING-180 |
 
 **Description:**
 
@@ -4603,17 +4601,17 @@ Replace the non-constant-time comparison (opened_key != md.opened_key) with hmac
 
 ---
 
-#### FINDING-182: Argon2d Variant Used Instead of NIST/OWASP-Recommended Argon2id
+#### FINDING-180: Argon2d Variant Used Instead of NIST/OWASP-Recommended Argon2id
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L2, L3 |
-| CWE | CWE-208 |
-| ASVS Sections | 11.2.3, 11.2.4, 11.3.3, 11.4.2, 11.4.3, 11.4.4, 11.6.1, 11.6.2, 11.1.1, 11.1.2, 11.1.3, 11.2.1, 15.1.4, 15.1.5, 11.7.1, 11.7.2 |
-| Files | v3/steve/crypto.py:88, v3/steve/crypto.py:31-38, v3/steve/crypto.py:43-46, v3/steve/crypto.py:130, v3/steve/crypto.py:97, v3/steve/crypto.py:48, v3/steve/crypto.py:55, v3/steve/crypto.py:82-92, v3/steve/crypto.py:83, v3/steve/crypto.py:76-84, v3/steve/crypto.py:40-47, v3/steve/crypto.py:50-54, v3/steve/crypto.py:88-98, v3/steve/crypto.py:79-89, v3/steve/crypto.py:80 |
-| Source Reports | 11.2.3.md, 11.2.4.md, 11.3.3.md, 11.4.2.md, 11.4.3.md, 11.4.4.md, 11.6.1.md, 11.6.2.md, 11.1.1.md, 11.1.2.md, 11.1.3.md, 11.2.1.md, 15.1.4.md, 15.1.5.md, 15.2.5.md, 11.7.1.md, 11.7.2.md |
-| Related | FINDING-181 |
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L2, L3 |
+| **CWE** | CWE-208 |
+| **ASVS Sections** | 11.2.3, 11.2.4, 11.3.3, 11.4.2, 11.4.3, 11.4.4, 11.6.1, 11.6.2, 11.1.1, 11.1.2, 11.1.3, 11.2.1, 15.1.4, 15.1.5, 11.7.1, 11.7.2 |
+| **Files** | `v3/steve/crypto.py:88`, `v3/steve/crypto.py:31-38`, `v3/steve/crypto.py:43-46`, `v3/steve/crypto.py:130`, `v3/steve/crypto.py:97`, `v3/steve/crypto.py:48`, `v3/steve/crypto.py:55`, `v3/steve/crypto.py:82-92`, `v3/steve/crypto.py:83`, `v3/steve/crypto.py:76-84`, `v3/steve/crypto.py:40-47`, `v3/steve/crypto.py:50-54`, `v3/steve/crypto.py:88-98`, `v3/steve/crypto.py:79-89`, `v3/steve/crypto.py:80` |
+| **Source Reports** | 11.2.3.md, 11.2.4.md, 11.3.3.md, 11.4.2.md, 11.4.3.md, 11.4.4.md, 11.6.1.md, 11.6.2.md, 11.1.1.md, 11.1.2.md, 11.1.3.md, 11.2.1.md, 15.1.4.md, 15.1.5.md, 15.2.5.md, 11.7.1.md, 11.7.2.md |
+| **Related** | FINDING-179 |
 
 **Description:**
 
@@ -4623,39 +4621,61 @@ The production `_hash()` function uses `argon2.low_level.Type.D` (Argon2d), whil
 
 1. Document the cryptographic migration plan including timeline and risk assessment in SECURITY.md or architecture documentation. 2. Fix the HKDF info parameter to match current usage: use b'fernet_vote_key_v1' instead of b'xchacha20_key' until migration is complete. 3. Change _hash() function to use type=argon2.low_level.Type.ID (Argon2id) instead of Type.D: `type=argon2.low_level.Type.ID`. Better yet, use the high-level API: `from argon2 import PasswordHasher` with `ph = PasswordHasher(time_cost=2, memory_cost=65536, parallelism=4)`. 4. Document the future XChaCha20-Poly1305 library dependency in the component risk assessment before adoption. 5. When migrating, update the info parameter to b'xchacha20_key_v1' at the same time as switching encryption algorithms to maintain cryptographic binding. 6. If Argon2d is intentional, document extensively: 'Argon2d is used intentionally because [justification]. This requires deployment in environments without shared memory/cache.' NOTE: Changing the Argon2 type will alter derived keys, making existing encrypted votes unrecoverable. This change must be coordinated with a migration plan for any elections with existing votes.
 
-#### FINDING-183: Cryptographic Decryption Errors Propagate Without Secure Handling
+#### FINDING-181: HKDF Domain Separation Label Mismatches Actual Encryption Algorithm
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L3 |
-| CWE | - |
-| ASVS Sections | 11.2.5, 13.3.3 |
-| Files | `v3/steve/crypto.py:75`, `v3/steve/election.py:290`, `v3/steve/election.py:250` |
-| Source Reports | 11.2.5.md, 13.3.3.md |
-| Related | - |
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L2, L3 |
+| **CWE** | CWE-327 |
+| **ASVS Sections** | 11.3.3, 11.3.4, 11.3.5, 11.6.1, 11.6.2, 11.1.1, 11.1.2, 11.1.3, 11.2.1 |
+| **Files** | `v3/steve/crypto.py:59-70`, `v3/steve/crypto.py:73-78`, `v3/steve/crypto.py:59-69`, `v3/steve/crypto.py:73-76`, `v3/steve/crypto.py:60-71`, `v3/steve/crypto.py:74-79`, `v3/steve/crypto.py:82-87`, `v3/steve/crypto.py:52-57`, `v3/steve/crypto.py:53`, `v3/steve/crypto.py:53-62` |
+| **Source Reports** | 11.3.3.md, 11.3.4.md, 11.3.5.md, 11.6.1.md, 11.6.2.md, 11.1.1.md, 11.1.2.md, 11.1.3.md, 11.2.1.md |
+| **Related** | - |
 
 **Description:**
 
-Key material (opened_key, vote_token, b64key, plaintext votestring) is passed as plain function parameters and stored in local variables without exception wrapping. If any exception occurs during cryptographic operations, Python's default exception handling will include all function arguments and local variables in the traceback. Both server entry points (run_standalone, run_asgi) default to DEBUG logging level, which would write these tracebacks to logs. The crypto.py module has no exception wrapping around cryptographic operations. Commented-out print statements for SALT and KEY in election.py (lines 80-81) demonstrate historical key material logging during development, creating risk of re-enabling during debugging. Log aggregation systems, monitoring tools, or log file access could expose this material.
+The HKDF info parameter, which provides cryptographic domain separation per NIST SP 800-56C / RFC 5869, identifies the derived key as 'xchacha20_key' while the actual encryption uses Fernet (AES-128-CBC + HMAC-SHA256). This violates the principle of accurate domain separation in key derivation and creates a latent key reuse vulnerability. If XChaCha20-Poly1305 is later added alongside Fernet (as the comment suggests), both would derive keys with info=b'xchacha20_key', meaning the same key material feeds two different algorithms — a key reuse violation per NIST SP 800-57 §5.2. The mismatch between code labels and actual behavior makes cryptographic inventory inaccurate, directly contradicting ASVS 11.1.1's requirement for accurate key documentation. This creates two problems: (1) Inventory Falsification: Any automated or manual inventory reading the info field would incorrectly record XChaCha20-Poly1305 as the encryption algorithm; (2) Unsafe Algorithm Migration: When the planned migration to XChaCha20-Poly1305 occurs, if the same info value is retained, the derived keys will be identical to the current Fernet keys, eliminating cryptographic domain separation between old and new algorithms. The HKDF `info` parameter provides cryptographic domain separation to ensure keys derived for different purposes are cryptographically independent. Using b'xchacha20_key' when the actual cipher is Fernet creates future collision risk if XChaCha20-Poly1305 is later added (as comments suggest) with the same info label, and causes audit confusion by self-documenting an algorithm that is not in use.
 
 **Remediation:**
 
-1. Wrap cryptographic operations in exception handlers that sanitize key material. Use 'raise ... from None' to suppress original tracebacks that contain key material. Log only exception type and issue ID, not full tracebacks. Add finally blocks to clear local key references (set to None). 2. Set production logging to INFO or WARNING level. Make DEBUG logging opt-in via environment variable (STEVE_LOG_LEVEL) rather than the default. 3. Remove all commented-out key printing statements (lines 80-81 in election.py) entirely from the codebase to prevent accidental re-enabling.
+Change the HKDF info parameter from b'xchacha20_key' to b'fernet_vote_key_v1' (or b'steve_fernet_vote_key_v1') to accurately reflect the actual encryption algorithm in use. Add version suffix to support future algorithm migrations. Update comment from '32-byte key for XChaCha20-Poly1305' to '32 bytes: 16-byte signing key + 16-byte AES-128 key (Fernet spec)'. Document algorithm migration strategy before switching from Fernet to XChaCha20-Poly1305. When migrating to XChaCha20-Poly1305, use a distinct info value like b'xchacha20_vote_key_v2' to maintain proper domain separation. CRITICAL NOTE: Changing the info parameter changes all derived keys and requires coordinated migration similar to the Argon2 type change. Existing encrypted votes will become undecryptable. This change requires a coordinated migration: (1) For new elections: will automatically use corrected HKDF after deployment; (2) For open elections: existing votes cannot be decrypted; must implement dual-algorithm support or complete tallying before upgrade; (3) For closed elections: historical data remains valid. Document this in the cryptographic inventory with version tracking and algorithm migration history.
 
 ---
 
-#### FINDING-184: Election and Issue IDs Generated with Insufficient Entropy (40 bits vs. 128-bit minimum)
+#### FINDING-182: Cryptographic Decryption Errors Propagate Without Secure Handling
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L1, L2 |
-| CWE | - |
-| ASVS Sections | 11.5.1, 7.2.3 |
-| Files | `v3/steve/crypto.py:118`, `v3/schema.sql:61`, `v3/schema.sql:104`, `v3/steve/election.py:370`, `v3/steve/election.py:195` |
-| Source Reports | 11.5.1.md, 7.2.3.md |
-| Related | - |
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L3 |
+| **CWE** | - |
+| **ASVS Sections** | 11.2.5 |
+| **Files** | `v3/steve/crypto.py:75`, `v3/steve/election.py:290`, `v3/steve/election.py:250` |
+| **Source Reports** | 11.2.5.md |
+| **Related** | - |
+
+**Description:**
+
+Cryptographic operations in crypto.py (encryption, decryption, key derivation) do not have exception handling and allow raw exceptions (cryptography.fernet.InvalidToken, argon2.exceptions.*, ValueError) to propagate through election.py to the transport layer. This can lead to: (1) Information disclosure via stack traces revealing encryption library, algorithm choices (Fernet), and internal architecture to attackers; (2) Availability issues where a single corrupted ciphertext prevents tallying of an entire election with no graceful degradation. While Fernet's encrypt-then-MAC design prevents padding oracle attacks specifically, the broader fail-secure principle is violated.
+
+**Remediation:**
+
+Add a dedicated crypto error class in crypto.py (CryptoError) that wraps all internal crypto exceptions to prevent leaking implementation details to callers. Wrap decrypt_votestring() and create_vote() in try-except blocks that catch cryptography.fernet.InvalidToken and other exceptions, log internally at DEBUG level, and raise sanitized CryptoError. Handle decryption failures gracefully in tally_issue by catching CryptoError, logging the error with a hash of the vote_token for audit purposes, and continuing to tally other votes rather than failing the entire election.
+
+---
+
+#### FINDING-183: Election and Issue IDs Generated with Insufficient Entropy (40 bits vs. 128-bit minimum)
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L2, L1 |
+| **CWE** | - |
+| **ASVS Sections** | 11.5.1, 7.2.3 |
+| **Files** | `v3/steve/crypto.py:118`, `v3/schema.sql:61`, `v3/schema.sql:104`, `v3/steve/election.py:370`, `v3/steve/election.py:195` |
+| **Source Reports** | 11.5.1.md, 7.2.3.md |
+| **Related** | - |
 
 **Description:**
 
@@ -4667,17 +4687,17 @@ Increase ID entropy to at least 128 bits (16 bytes → 32 hex characters). Updat
 
 ---
 
-#### FINDING-185: Argon2 Parameters Adopted from Passlib Defaults Without Application-Specific Tuning
+#### FINDING-184: Argon2 Parameters Adopted from Passlib Defaults Without Application-Specific Tuning
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L2 |
-| CWE | - |
-| ASVS Sections | 11.4.4 |
-| Files | `v3/steve/crypto.py:78` |
-| Source Reports | 11.4.4.md |
-| Related | - |
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L2 |
+| **CWE** | - |
+| **ASVS Sections** | 11.4.4 |
+| **Files** | `v3/steve/crypto.py:78` |
+| **Source Reports** | 11.4.4.md |
+| **Related** | - |
 
 **Description:**
 
@@ -4689,17 +4709,17 @@ The Argon2 parameters are explicitly annotated as 'Passlib default' with no evid
 
 ---
 
-#### FINDING-186: External OAuth Service Dependency Hardcoded and Undocumented in Configuration
+#### FINDING-185: External OAuth Service Dependency Hardcoded and Undocumented in Configuration
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L2 |
-| CWE | - |
-| ASVS Sections | 13.1.1 |
-| Files | `v3/server/main.py:37-40`, `v3/server/config.yaml.example:entire file` |
-| Source Reports | 13.1.1.md |
-| Related | - |
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L2 |
+| **CWE** | - |
+| **ASVS Sections** | 13.1.1 |
+| **Files** | `v3/server/main.py:37-40`, `v3/server/config.yaml.example:entire file` |
+| **Source Reports** | 13.1.1.md |
+| **Related** | - |
 
 **Description:**
 
@@ -4723,17 +4743,17 @@ asfquart.generics.OAUTH_URL_CALLBACK = f'{app.cfg.oauth.token_url}?code=%s'
 
 ---
 
-#### FINDING-187: Absence of Comprehensive Communication Architecture Documentation
+#### FINDING-186: Absence of Comprehensive Communication Architecture Documentation
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L2 |
-| CWE | - |
-| ASVS Sections | 13.1.1 |
-| Files | `v3/server/config.yaml.example:entire file`, `v3/server/main.py:38`, `v3/server/main.py:40` |
-| Source Reports | 13.1.1.md |
-| Related | - |
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L2 |
+| **CWE** | - |
+| **ASVS Sections** | 13.1.1 |
+| **Files** | `v3/server/config.yaml.example:entire file`, `v3/server/main.py:38`, `v3/server/main.py:40` |
+| **Source Reports** | 13.1.1.md |
+| **Related** | - |
 
 **Description:**
 
@@ -4751,17 +4771,17 @@ Include complete configuration sections for oauth, ldap, and server.base_url set
 
 ---
 
-#### FINDING-188: Debug Logging Level Enabled by Default in Both Run Modes
+#### FINDING-187: Debug Logging Level Enabled by Default in Both Run Modes
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L2, L3 |
-| CWE | - |
-| ASVS Sections | 13.1.1, 13.4.2, 13.4.6, 15.2.3 |
-| Files | `v3/server/main.py:50`, `v3/server/main.py:91`, `v3/server/config.yaml.example:entire file` |
-| Source Reports | 13.1.1.md, 13.4.2.md, 13.4.6.md, 15.2.3.md |
-| Related | - |
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L2, L3 |
+| **CWE** | - |
+| **ASVS Sections** | 13.1.1, 13.4.2, 15.2.3, 13.4.6 |
+| **Files** | `v3/server/main.py:50`, `v3/server/main.py:91`, `v3/server/config.yaml.example:entire file` |
+| **Source Reports** | 13.1.1.md, 13.4.2.md, 15.2.3.md, 13.4.6.md |
+| **Related** | - |
 
 **Description:**
 
@@ -4773,17 +4793,17 @@ Set production logging to INFO level in run_asgi(): 1. Change logging.basicConfi
 
 ---
 
-#### FINDING-189: No Web Server Concurrency Limits Configured or Documented
+#### FINDING-188: No Web Server Concurrency Limits Configured or Documented
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L3 |
-| CWE | - |
-| ASVS Sections | 13.1.2 |
-| Files | `v3/server/config.yaml.example`, `v3/server/main.py:50-88`, `v3/server/main.py:91-108` |
-| Source Reports | 13.1.2.md |
-| Related | - |
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L3 |
+| **CWE** | - |
+| **ASVS Sections** | 13.1.2 |
+| **Files** | `v3/server/config.yaml.example`, `v3/server/main.py:50-88`, `v3/server/main.py:91-108` |
+| **Source Reports** | 13.1.2.md |
+| **Related** | - |
 
 **Description:**
 
@@ -4795,17 +4815,17 @@ The server configuration and startup code define no maximum concurrent connectio
 
 ---
 
-#### FINDING-190: No OAuth Service Connection Limits or Failure Handling Documented
+#### FINDING-189: No OAuth Service Connection Limits or Failure Handling Documented
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L3 |
-| CWE | - |
-| ASVS Sections | 13.1.2, 13.1.3, 13.2.6 |
-| Files | `v3/server/main.py:35-38`, `v3/server/main.py:32-37`, `v3/server/config.yaml.example` |
-| Source Reports | 13.1.2.md, 13.1.3.md, 13.2.6.md |
-| Related | - |
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L3 |
+| **CWE** | - |
+| **ASVS Sections** | 13.1.2, 13.1.3, 13.2.6 |
+| **Files** | `v3/server/main.py:35-38`, `v3/server/main.py:32-37`, `v3/server/config.yaml.example` |
+| **Source Reports** | 13.1.2.md, 13.1.3.md, 13.2.6.md |
+| **Related** | - |
 
 **Description:**
 
@@ -4817,17 +4837,17 @@ Document OAuth service dependencies and limits in configuration: base_url (https
 
 ---
 
-#### FINDING-191: Configuration Template Lacks Secret Management Guidance
+#### FINDING-190: Configuration Template Lacks Secret Management Guidance
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L3 |
-| CWE | CWE-1059 |
-| ASVS Sections | 13.1.4 |
-| Files | `v3/server/config.yaml.example:1-22` |
-| Source Reports | 13.1.4.md |
-| Related | FINDING-066, FINDING-152 |
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L3 |
+| **CWE** | CWE-1059 |
+| **ASVS Sections** | 13.1.4 |
+| **Files** | `v3/server/config.yaml.example:1-22` |
+| **Source Reports** | 13.1.4.md |
+| **Related** | FINDING-066, FINDING-151 |
 
 **Description:**
 
@@ -4839,17 +4859,17 @@ Replace config.yaml.example with comprehensive security guidance including: secu
 
 ---
 
-#### FINDING-192: Database Access Lacks Authentication and Permission Controls
+#### FINDING-191: Database Access Lacks Authentication and Permission Controls
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L2 |
-| CWE | - |
-| ASVS Sections | 13.2.1 |
-| Files | `v3/steve/election.py:40`, `v3/steve/election.py:46`, `v3/steve/election.py:365`, `v3/steve/election.py:381`, `v3/steve/election.py:390`, `v3/steve/election.py:402`, `v3/steve/election.py:412` |
-| Source Reports | 13.2.1.md |
-| Related | - |
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L2 |
+| **CWE** | - |
+| **ASVS Sections** | 13.2.1 |
+| **Files** | `v3/steve/election.py:40`, `v3/steve/election.py:46`, `v3/steve/election.py:365`, `v3/steve/election.py:381`, `v3/steve/election.py:390`, `v3/steve/election.py:402`, `v3/steve/election.py:412` |
+| **Source Reports** | 13.2.1.md |
+| **Related** | - |
 
 **Description:**
 
@@ -4861,17 +4881,39 @@ Add file permission verification in `open_database()` to ensure the database fil
 
 ---
 
+#### FINDING-192: OAuth Backend Communication Lacks Visible Authentication Configuration
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L2 |
+| **CWE** | - |
+| **ASVS Sections** | 13.2.1 |
+| **Files** | `v3/server/main.py:39-43`, `v3/server/config.yaml.example` |
+| **Source Reports** | 13.2.1.md |
+| **Related** | - |
+
+**Description:**
+
+The application performs a backend-to-backend HTTP call to `oauth.apache.org/token` during the OAuth token exchange, which requires OAuth client credentials (`client_id` and `client_secret`). However, `config.yaml.example` contains zero credential-related configuration — no OAuth settings, no environment variable references, no vault integration examples. The `asfquart` framework presumably manages OAuth client secrets, but this is opaque from the application's perspective. Without visible credential management configuration, it is impossible to verify that OAuth client secrets are not hardcoded, can be rotated without code changes, use distinct credentials per environment, or follow ASVS 13.2.1 requirements (not unchanging shared passwords).
+
+**Remediation:**
+
+Update `config.yaml.example` to document the expected secret management pattern with environment variable references (e.g., `${STEVE_OAUTH_CLIENT_ID}`, `${STEVE_OAUTH_CLIENT_SECRET}`). Add documentation indicating credentials MUST be provided via environment variables or secrets vault and should not be placed directly in configuration files. In application code, verify credential source at startup and warn if secrets appear to be literal values rather than environment variable references.
+
+---
+
 #### FINDING-193: All Database Connections Use Uniform Read-Write Privileges Without Least-Privilege Separation
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L2 |
-| CWE | - |
-| ASVS Sections | 13.2.2 |
-| Files | `v3/steve/election.py:45` |
-| Source Reports | 13.2.2.md |
-| Related | - |
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L2 |
+| **CWE** | - |
+| **ASVS Sections** | 13.2.2 |
+| **Files** | `v3/steve/election.py:45` |
+| **Source Reports** | 13.2.2.md |
+| **Related** | - |
 
 **Description:**
 
@@ -4887,13 +4929,13 @@ Implement separate read-only and read-write database connection methods. Modify 
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L2 |
-| CWE | - |
-| ASVS Sections | 13.2.4, 13.2.5 |
-| Files | `v3/server/config.yaml.example:entire file`, `v3/server/main.py:43-46` |
-| Source Reports | 13.2.4.md, 13.2.5.md |
-| Related | - |
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L2 |
+| **CWE** | - |
+| **ASVS Sections** | 13.2.4, 13.2.5 |
+| **Files** | `v3/server/config.yaml.example:entire file`, `v3/server/main.py:43-46` |
+| **Source Reports** | 13.2.4.md, 13.2.5.md |
+| **Related** | - |
 
 **Description:**
 
@@ -4909,13 +4951,13 @@ Add an external communications allowlist to the application configuration with s
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L2 |
-| CWE | - |
-| ASVS Sections | 13.2.4 |
-| Files | `v3/server/main.py:43-46` |
-| Source Reports | 13.2.4.md |
-| Related | - |
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L2 |
+| **CWE** | - |
+| **ASVS Sections** | 13.2.4 |
+| **Files** | `v3/server/main.py:43-46` |
+| **Source Reports** | 13.2.4.md |
+| **Related** | - |
 
 **Description:**
 
@@ -4931,13 +4973,13 @@ Define an explicit allowlist for permitted OAuth redirect URIs in the configurat
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L3 |
-| CWE | CWE-1188 |
-| ASVS Sections | 13.2.6 |
-| Files | `v3/server/config.yaml.example:1-5`, `v3/steve/election.py:39`, `v3/steve/election.py:458`, `v3/steve/election.py:470`, `v3/steve/election.py:484`, `v3/steve/election.py:496`, `v3/steve/election.py:436` |
-| Source Reports | 13.2.6.md |
-| Related | - |
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L3 |
+| **CWE** | CWE-1188 |
+| **ASVS Sections** | 13.2.6 |
+| **Files** | `v3/server/config.yaml.example:1-5`, `v3/steve/election.py:39`, `v3/steve/election.py:458`, `v3/steve/election.py:470`, `v3/steve/election.py:484`, `v3/steve/election.py:496`, `v3/steve/election.py:436` |
+| **Source Reports** | 13.2.6.md |
+| **Related** | - |
 
 **Description:**
 
@@ -4953,13 +4995,13 @@ Add a backend connection configuration section to config.yaml.example with datab
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L2 |
-| CWE | - |
-| ASVS Sections | 13.3.2 |
-| Files | `v3/steve/election.py:125`, `v3/steve/election.py:329`, `v3/steve/election.py:318`, `v3/steve/election.py:322`, `v3/steve/election.py:326`, `v3/steve/election.py:135`, `v3/steve/election.py:78` |
-| Source Reports | 13.3.2.md |
-| Related | - |
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L2 |
+| **CWE** | - |
+| **ASVS Sections** | 13.3.2 |
+| **Files** | `v3/steve/election.py:125`, `v3/steve/election.py:329`, `v3/steve/election.py:318`, `v3/steve/election.py:322`, `v3/steve/election.py:326`, `v3/steve/election.py:135`, `v3/steve/election.py:78` |
+| **Source Reports** | 13.3.2.md |
+| **Related** | - |
 
 **Description:**
 
@@ -4971,17 +5013,39 @@ Create a separate state-only query and method that returns only the information 
 
 ---
 
-#### FINDING-198: No Secret Management System Integration for Application Configuration
+#### FINDING-198: Unrestricted Database Cursor Proxy Bypasses Secret-Filtering Controls
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L3 |
-| CWE | CWE-256 |
-| ASVS Sections | 13.3.3 |
-| Files | `v3/server/config.yaml.example:entire file`, `v3/server/main.py:41` |
-| Source Reports | 13.3.3.md |
-| Related | - |
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L2 |
+| **CWE** | - |
+| **ASVS Sections** | 13.3.2 |
+| **Files** | `v3/steve/election.py:44` |
+| **Source Reports** | 13.3.2.md |
+| **Related** | - |
+
+**Description:**
+
+The `Election` class implements `__getattr__()` to proxy database cursor access, which allows any code with an `Election` instance to bypass the intentional secret-filtering in `get_metadata()` by directly accessing `q_metadata` cursor. The developer intentionally created `get_metadata()` to filter `salt` and `opened_key` from public access, but the `__getattr__` proxy makes the underlying secret-returning cursor equally accessible. Any module that imports and uses the `Election` class (API handlers, page handlers, CLI tools) can directly access `q_metadata` and retrieve full secrets without going through the filtering method. This creates false confidence that secrets are protected by the `get_metadata()` abstraction.
+
+**Remediation:**
+
+Restrict the `__getattr__` proxy to only expose safe cursors using an allowlist approach. Create a `_SAFE_PROXIED_ATTRS` frozenset containing only non-secret-accessing cursor names and raise `AttributeError` for any other attribute access. Alternatively, create private methods like `_get_opened_key()` that explicitly retrieve secret material and require conscious method calls rather than allowing direct cursor access.
+
+---
+
+#### FINDING-199: No Secret Management System Integration for Application Configuration
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L3 |
+| **CWE** | CWE-256 |
+| **ASVS Sections** | 13.3.3 |
+| **Files** | `v3/server/config.yaml.example:entire file`, `v3/server/main.py:41` |
+| **Source Reports** | 13.3.3.md |
+| **Related** | - |
 
 **Description:**
 
@@ -4993,17 +5057,39 @@ Integrate a secret management system and document the pattern. Update config.yam
 
 ---
 
-#### FINDING-199: Per-Voter Cryptographic Salts Never Expire or Rotate
+#### FINDING-200: Key Material Exposed in Python Exception Tracebacks and Debug Logging
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L3 |
-| CWE | - |
-| ASVS Sections | 13.3.4 |
-| Files | `v3/steve/election.py:134-154`, `v3/steve/crypto.py:35-37` |
-| Source Reports | 13.3.4.md |
-| Related | - |
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L3 |
+| **CWE** | CWE-532 |
+| **ASVS Sections** | 13.3.3 |
+| **Files** | `v3/steve/crypto.py:38-80`, `v3/steve/election.py:222-236`, `v3/steve/election.py:257-299`, `v3/steve/election.py:238-256`, `v3/server/main.py:57`, `v3/server/main.py:97`, `v3/steve/election.py:80-81` |
+| **Source Reports** | 13.3.3.md |
+| **Related** | FINDING-071 |
+
+**Description:**
+
+Key material (opened_key, vote_token, b64key, plaintext votestring) is passed as plain function parameters and stored in local variables without exception wrapping. If any exception occurs during cryptographic operations, Python's default exception handling will include all function arguments and local variables in the traceback. Both server entry points (run_standalone, run_asgi) default to DEBUG logging level, which would write these tracebacks to logs. The crypto.py module has no exception wrapping around cryptographic operations. Commented-out print statements for SALT and KEY in election.py (lines 80-81) demonstrate historical key material logging during development, creating risk of re-enabling during debugging. Log aggregation systems, monitoring tools, or log file access could expose this material.
+
+**Remediation:**
+
+1. Wrap cryptographic operations in exception handlers that sanitize key material. Use 'raise ... from None' to suppress original tracebacks that contain key material. Log only exception type and issue ID, not full tracebacks. Add finally blocks to clear local key references (set to None). 2. Set production logging to INFO or WARNING level. Make DEBUG logging opt-in via environment variable (STEVE_LOG_LEVEL) rather than the default. 3. Remove all commented-out key printing statements (lines 80-81 in election.py) entirely from the codebase to prevent accidental re-enabling.
+
+---
+
+#### FINDING-201: Per-Voter Cryptographic Salts Never Expire or Rotate
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L3 |
+| **CWE** | - |
+| **ASVS Sections** | 13.3.4 |
+| **Files** | `v3/steve/election.py:134-154`, `v3/steve/crypto.py:35-37` |
+| **Source Reports** | 13.3.4.md |
+| **Related** | - |
 
 **Description:**
 
@@ -5015,39 +5101,17 @@ Integrate salt destruction into the purge_crypto() method from the secret destru
 
 ---
 
-#### FINDING-200: No Configuration Mechanism to Disable Debug Mode — Both Execution Paths Default to DEBUG
+#### FINDING-202: No Explicit HTTP TRACE Method Blocking at Application or Server Level
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L2 |
-| CWE | - |
-| ASVS Sections | 13.4.2 |
-| Files | `v3/server/main.py:51-87`, `v3/server/main.py:90-107`, `v3/server/config.yaml.example` |
-| Source Reports | 13.4.2.md |
-| Related | - |
-
-**Description:**
-
-The configuration schema has no mechanism to control debug behavior. Both execution paths (standalone and ASGI) hardcode DEBUG logging with no conditional logic to check environment or configuration settings. The config.yaml.example template contains no debug, log_level, or environment settings. Every deployment — whether standalone or ASGI — runs with DEBUG logging by default with no documented or implemented way to change this via configuration. Operators deploying the application have no way to harden logging without modifying source code, violating the principle that production configurations should be hardened by default. The standalone mode also uses app.runx() with extra_files for hot-reloading, which is a development feature. If run_standalone() is used in production, file-watching and reloading capabilities are active.
-
-**Remediation:**
-
-Extend configuration schema and implement environment-aware defaults with debug and log_level settings in config.yaml.example. Implement _configure_logging(cfg) function to read configuration and set appropriate log levels. In run_standalone(), only enable extra_files watching when debug mode is explicitly enabled. Default to INFO level for production safety.
-
----
-
-#### FINDING-201: No Explicit HTTP TRACE Method Blocking at Application or Server Level
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L2 |
-| CWE | - |
-| ASVS Sections | 13.4.4 |
-| Files | `v3/server/main.py:33-45`, `v3/server/config.yaml.example` |
-| Source Reports | 13.4.4.md |
-| Related | - |
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L2 |
+| **CWE** | - |
+| **ASVS Sections** | 13.4.4 |
+| **Files** | `v3/server/main.py:33-45`, `v3/server/config.yaml.example` |
+| **Source Reports** | 13.4.4.md |
+| **Related** | - |
 
 **Description:**
 
@@ -5059,17 +5123,17 @@ Add explicit TRACE blocking middleware to the application and provide production
 
 ---
 
-#### FINDING-202: Production ASGI Deployment Path Enables DEBUG-Level Logging
+#### FINDING-203: Production ASGI Deployment Path Enables DEBUG-Level Logging
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L2 |
-| CWE | - |
-| ASVS Sections | 13.4.5 |
-| Files | `v3/server/main.py:95-99`, `v3/server/main.py:104`, `v3/steve/election.py:46`, `v3/steve/election.py:189`, `v3/steve/election.py:403` |
-| Source Reports | 13.4.5.md |
-| Related | - |
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L2 |
+| **CWE** | - |
+| **ASVS Sections** | 13.4.5 |
+| **Files** | `v3/server/main.py:95-99`, `v3/server/main.py:104`, `v3/steve/election.py:46`, `v3/steve/election.py:189`, `v3/steve/election.py:403` |
+| **Source Reports** | 13.4.5.md |
+| **Related** | - |
 
 **Description:**
 
@@ -5081,17 +5145,17 @@ Change production log level to WARNING in `run_asgi()` and set application logge
 
 ---
 
-#### FINDING-203: No Production Configuration Controls for Endpoint Exposure and Debug Mode
+#### FINDING-204: No Production Configuration Controls for Endpoint Exposure and Debug Mode
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L2 |
-| CWE | - |
-| ASVS Sections | 13.4.5 |
-| Files | `v3/server/config.yaml.example:1-12`, `v3/server/main.py:33-43`, `v3/server/main.py:88-107` |
-| Source Reports | 13.4.5.md |
-| Related | - |
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L2 |
+| **CWE** | - |
+| **ASVS Sections** | 13.4.5 |
+| **Files** | `v3/server/config.yaml.example:1-12`, `v3/server/main.py:33-43`, `v3/server/main.py:88-107` |
+| **Source Reports** | 13.4.5.md |
+| **Related** | - |
 
 **Description:**
 
@@ -5103,17 +5167,17 @@ Add production hardening settings to `config.yaml.example`: `debug: false`, `log
 
 ---
 
-#### FINDING-204: Hypercorn Server Header Exposes Backend Component Identity and Version
+#### FINDING-205: Hypercorn Server Header Exposes Backend Component Identity and Version
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L3 |
-| CWE | - |
-| ASVS Sections | 13.4.6 |
-| Files | `v3/server/main.py:32-42`, `v3/server/main.py:82-103`, `v3/server/config.yaml.example:entire file` |
-| Source Reports | 13.4.6.md |
-| Related | - |
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L3 |
+| **CWE** | - |
+| **ASVS Sections** | 13.4.6 |
+| **Files** | `v3/server/main.py:32-42`, `v3/server/main.py:82-103`, `v3/server/config.yaml.example:entire file` |
+| **Source Reports** | 13.4.6.md |
+| **Related** | - |
 
 **Description:**
 
@@ -5125,17 +5189,17 @@ Option A (recommended): Create a `hypercorn.toml` configuration with `include_se
 
 ---
 
-#### FINDING-205: Sensitive Data Files Co-Located in Application Directory Without File-Extension Serving Restrictions
+#### FINDING-206: Sensitive Data Files Co-Located in Application Directory Without File-Extension Serving Restrictions
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L3 |
-| CWE | - |
-| ASVS Sections | 13.4.7 |
-| Files | `v3/server/config.yaml.example:34`, `v3/server/main.py:28` |
-| Source Reports | 13.4.7.md |
-| Related | - |
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L3 |
+| **CWE** | - |
+| **ASVS Sections** | 13.4.7 |
+| **Files** | `v3/server/config.yaml.example:34`, `v3/server/main.py:28` |
+| **Source Reports** | 13.4.7.md |
+| **Related** | - |
 
 **Description:**
 
@@ -5147,17 +5211,17 @@ The SQLite database (steve.db), configuration file (config.yaml), query definiti
 
 ---
 
-#### FINDING-206: No Documented or Enforced Production Web Tier Hardening for File-Type Restrictions
+#### FINDING-207: No Documented or Enforced Production Web Tier Hardening for File-Type Restrictions
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L3 |
-| CWE | - |
-| ASVS Sections | 13.4.7 |
-| Files | `v3/server/main.py`, `v3/server/config.yaml.example` |
-| Source Reports | 13.4.7.md |
-| Related | - |
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L3 |
+| **CWE** | - |
+| **ASVS Sections** | 13.4.7 |
+| **Files** | `v3/server/main.py`, `v3/server/config.yaml.example` |
+| **Source Reports** | 13.4.7.md |
+| **Related** | - |
 
 **Description:**
 
@@ -5169,17 +5233,39 @@ The config.yaml.example references a reverse proxy deployment model ('a proxy si
 
 ---
 
-#### FINDING-207: Voter-Issue Timing Correlation Recorded in Application Logs
+#### FINDING-208: Debug Logging of Unclassified Form Data to Standard Output
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L2 |
-| CWE | CWE-203 |
-| ASVS Sections | 14.1.2, 14.2.4 |
-| Files | `v3/server/pages.py:~427-429`, `v3/server/pages.py:425`, `v3/server/pages.py:426`, `v3/server/pages.py:427`, `v3/steve/election.py:~207`, `v3/schema.sql:N/A` |
-| Source Reports | 14.1.2.md, 14.2.4.md |
-| Related | - |
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L2 |
+| **CWE** | - |
+| **ASVS Sections** | 14.1.1, 14.1.2, 14.2.4 |
+| **Files** | `v3/server/pages.py:487`, `v3/server/pages.py:507`, `v3/server/pages.py:509`, `v3/server/pages.py:533` |
+| **Source Reports** | 14.1.1.md, 14.1.2.md, 14.2.4.md |
+| **Related** | - |
+
+**Description:**
+
+Debug print() statements in do_add_issue_endpoint() and do_edit_issue_endpoint() dump all form fields (including issue titles, descriptions containing confidential candidate information, and any future form fields) to stdout with uncontrolled retention. This data flows to container logs, log aggregation systems (ELK, Splunk, CloudWatch) with extended retention, and is accessible to operations teams who should not see election content. The presence of print() statements demonstrates that form data has not been assigned a protection level with handling rules.
+
+**Remediation:**
+
+1. Immediate: Remove all debug print() statements from do_add_issue_endpoint() and do_edit_issue_endpoint(). 2. Short-term: Implement structured logging with SensitiveFieldFilter that removes sensitive fields from log records. 3. Long-term: Add data classification to logging policy with is_loggable() method that determines if a field can be logged based on its classification (CRITICAL/SENSITIVE: never log, INTERNAL: log field name only, PUBLIC: log freely).
+
+---
+
+#### FINDING-209: Voter-Issue Timing Correlation Recorded in Application Logs
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L2 |
+| **CWE** | CWE-203 |
+| **ASVS Sections** | 14.1.2, 14.2.4 |
+| **Files** | `v3/server/pages.py:~427-429`, `v3/server/pages.py:425`, `v3/server/pages.py:426`, `v3/server/pages.py:427`, `v3/steve/election.py:~207`, `v3/schema.sql:N/A` |
+| **Source Reports** | 14.1.2.md, 14.2.4.md |
+| **Related** | - |
 
 **Description:**
 
@@ -5191,17 +5277,17 @@ Replace per-issue vote logging with aggregated ballot submission logging. Before
 
 ---
 
-#### FINDING-208: Authorization-Protected Documents Served via send_from_directory Without Cache Prevention
+#### FINDING-210: Authorization-Protected Documents Served via send_from_directory Without Cache Prevention
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L2, L3 |
-| CWE | - |
-| ASVS Sections | 14.2.2, 14.2.5 |
-| Files | `v3/server/pages.py:555-565`, `v3/server/pages.py:557` |
-| Source Reports | 14.2.2.md, 14.2.5.md |
-| Related | - |
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L2, L3 |
+| **CWE** | - |
+| **ASVS Sections** | 14.2.2, 14.2.5 |
+| **Files** | `v3/server/pages.py:555-565`, `v3/server/pages.py:557` |
+| **Source Reports** | 14.2.2.md, 14.2.5.md |
+| **Related** | - |
 
 **Description:**
 
@@ -5211,19 +5297,17 @@ The /docs/&lt;iid&gt;/&lt;docname&gt; endpoint serves election documents after v
 
 Override cache headers on the response from send_from_directory() before returning. After calling send_from_directory, set response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, private', response.headers['Pragma'] = 'no-cache', and response.headers['Expires'] = '0' before returning the response object. Additionally, validate the docname parameter to prevent path traversal and enforce allowed content types.
 
----
-
-#### FINDING-209: External Image Loaded on All Pages Leaks Voter Activity Metadata to Third-Party Server
+#### FINDING-211: External Image Loaded on All Pages Leaks Voter Activity Metadata to Third-Party Server
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L2, L3 |
-| CWE | - |
-| ASVS Sections | 14.2.3, 3.6.1 |
-| Files | `v3/server/templates/header.ezt:22` |
-| Source Reports | 14.2.3.md, 3.6.1.md |
-| Related | - |
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L2 |
+| **CWE** | - |
+| **ASVS Section(s)** | 14.2.3 |
+| **Files** | `v3/server/templates/header.ezt:22` |
+| **Source Reports** | 14.2.3.md |
+| **Related Findings** | - |
 
 **Description:**
 
@@ -5235,17 +5319,39 @@ The application's navigation header includes an external image resource loaded f
 
 ---
 
-#### FINDING-210: Voting Page Returns All Issues Instead of Per-Issue Authorization
+#### FINDING-212: Missing Vote Content Validation Before Encryption
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L3 |
-| CWE | - |
-| ASVS Sections | 14.2.6 |
-| Files | `v3/server/pages.py:244-270` |
-| Source Reports | 14.2.6.md |
-| Related | - |
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L2 |
+| **CWE** | - |
+| **ASVS Section(s)** | 14.2.4 |
+| **Files** | `v3/steve/election.py:221` |
+| **Source Reports** | 14.2.4.md |
+| **Related Findings** | - |
+
+**Description:**
+
+Arbitrary strings are accepted as vote content and encrypted without validation against the issue's vote type. Invalid votes cannot be detected until decryption during tallying, when correction is impossible. The add_vote() function contains a comment '### validate VOTESTRING for ISSUE.TYPE voting' but no actual implementation. Invalid vote content (e.g., 'xyz' for a YNA vote, or 'a,a,a,b' with duplicates for STV) would either produce incorrect tallies or cause tally-time errors. Since votes are encrypted, invalid content cannot be detected until the offline tallying process when the election is closed.
+
+**Remediation:**
+
+Implement vote validation in add_vote() before encryption: issue = self.q_get_issue.first_row(iid); m = vtypes.vtype_module(issue.type); if not m.validate(votestring, self.json2kv(issue.kv)): raise ValueError(f'Invalid vote format for {issue.type} issue'). This ensures data integrity verification at the point of collection.
+
+---
+
+#### FINDING-213: Voting Page Returns All Issues Instead of Per-Issue Authorization
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L3 |
+| **CWE** | - |
+| **ASVS Section(s)** | 14.2.6 |
+| **Files** | `v3/server/pages.py:244-270` |
+| **Source Reports** | 14.2.6.md |
+| **Related Findings** | - |
 
 **Description:**
 
@@ -5257,17 +5363,17 @@ Filter list_issues() results in vote_on_page() to return only issues the voter i
 
 ---
 
-#### FINDING-211: List Query Methods Return Raw Database Rows Without Field Filtering
+#### FINDING-214: List Query Methods Return Raw Database Rows Without Field Filtering
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L3 |
-| CWE | - |
-| ASVS Sections | 14.2.6 |
-| Files | `v3/steve/election.py:410`, `v3/steve/election.py:432`, `v3/server/pages.py:137`, `v3/server/pages.py:275` |
-| Source Reports | 14.2.6.md |
-| Related | - |
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L3 |
+| **CWE** | - |
+| **ASVS Section(s)** | 14.2.6 |
+| **Files** | `v3/steve/election.py:410`, `v3/steve/election.py:432`, `v3/server/pages.py:137`, `v3/server/pages.py:275` |
+| **Source Reports** | 14.2.6.md |
+| **Related Findings** | - |
 
 **Description:**
 
@@ -5279,17 +5385,17 @@ Add consistent field filtering to list query methods. Implement a _safe_election
 
 ---
 
-#### FINDING-212: Superseded Votes Retained Indefinitely as Unnecessary Data
+#### FINDING-215: Superseded Votes Retained Indefinitely as Unnecessary Data
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L3 |
-| CWE | - |
-| ASVS Sections | 14.2.7 |
-| Files | `v3/schema.sql:vote table definition`, `v3/steve/election.py:204-215`, `v3/steve/election.py:217-255` |
-| Source Reports | 14.2.7.md |
-| Related | - |
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L3 |
+| **CWE** | - |
+| **ASVS Section(s)** | 14.2.7 |
+| **Files** | `v3/schema.sql:vote table definition`, `v3/steve/election.py:204-215`, `v3/steve/election.py:217-255` |
+| **Source Reports** | 14.2.7.md |
+| **Related Findings** | - |
 
 **Description:**
 
@@ -5299,17 +5405,19 @@ When a voter re-votes on an issue, the system creates a new vote row with the sa
 
 Modify add_vote() to delete previous votes before inserting new one. Add query to queries.yaml: c_delete_prior_votes: DELETE FROM vote WHERE vote_token = ?. Execute within transaction: self.c_delete_prior_votes.perform(vote_token) before self.c_add_vote.perform(vote_token, ciphertext).
 
-#### FINDING-213: Person PII (Name, Email) Has No Practical Deletion Path
+---
+
+#### FINDING-216: Person PII (Name, Email) Has No Practical Deletion Path
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟡 Medium |
 | **ASVS Level(s)** | L3 |
-| **CWE** | N/A |
+| **CWE** | - |
 | **ASVS Section(s)** | 14.2.7 |
 | **Files** | `v3/steve/persondb.py:51-64`, `v3/schema.sql:mayvote foreign key constraints`, `v3/steve/persondb.py:30-40` |
 | **Source Reports** | 14.2.7.md |
-| **Related Findings** | None |
+| **Related Findings** | - |
 
 **Description:**
 
@@ -5321,17 +5429,17 @@ Implement anonymization as an alternative to blocked deletion. Add anonymize_per
 
 ---
 
-#### FINDING-214: Documents Served Without Metadata Stripping or User Consent
+#### FINDING-217: Documents Served Without Metadata Stripping or User Consent
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟡 Medium |
 | **ASVS Level(s)** | L3 |
-| **CWE** | N/A |
+| **CWE** | - |
 | **ASVS Section(s)** | 14.2.8 |
 | **Files** | `v3/server/pages.py:582-597`, `v3/server/pages.py:60-68` |
 | **Source Reports** | 14.2.8.md |
-| **Related Findings** | None |
+| **Related Findings** | - |
 
 **Description:**
 
@@ -5343,17 +5451,17 @@ Implement metadata stripping for all documents either at ingestion time (preferr
 
 ---
 
-#### FINDING-215: Sensitive Voter Identity Data Stored in Session (Likely Cookie-Backed)
+#### FINDING-218: Sensitive Voter Identity Data Stored in Session (Likely Cookie-Backed)
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟡 Medium |
 | **ASVS Level(s)** | L2 |
-| **CWE** | N/A |
+| **CWE** | - |
 | **ASVS Section(s)** | 14.3.3 |
 | **Files** | `v3/server/pages.py:62-80`, `v3/server/pages.py:107-113` |
 | **Source Reports** | 14.3.3.md |
-| **Related Findings** | None |
+| **Related Findings** | - |
 
 **Description:**
 
@@ -5365,17 +5473,17 @@ Option 1 (Recommended): Configure a server-side session backend (Redis, filesyst
 
 ---
 
-#### FINDING-216: Dependency Confusion Risk for ASF-Namespaced Internal Package asfquart
+#### FINDING-219: Dependency Confusion Risk for ASF-Namespaced Internal Package asfquart
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟡 Medium |
 | **ASVS Level(s)** | L3 |
-| **CWE** | N/A |
+| **CWE** | - |
 | **ASVS Section(s)** | 15.2.4 |
 | **Files** | `v3/server/main.py:32-38` |
 | **Source Reports** | 15.2.4.md |
-| **Related Findings** | None |
+| **Related Findings** | - |
 
 **Description:**
 
@@ -5387,17 +5495,17 @@ The asfquart package is an ASF-internal web framework wrapper that provides crit
 
 ---
 
-#### FINDING-217: No SBOM Documenting Transitive Dependency Tree
+#### FINDING-220: No SBOM Documenting Transitive Dependency Tree
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟡 Medium |
 | **ASVS Level(s)** | L3 |
-| **CWE** | N/A |
+| **CWE** | - |
 | **ASVS Section(s)** | 15.2.4 |
 | **Files** | `Project root:N/A` |
 | **Source Reports** | 15.2.4.md |
-| **Related Findings** | None |
+| **Related Findings** | - |
 
 **Description:**
 
@@ -5409,17 +5517,17 @@ The application's direct dependencies pull in significant transitive dependency 
 
 ---
 
-#### FINDING-218: Development Benchmark Function Present in Production Crypto Module
+#### FINDING-221: Development Benchmark Function Present in Production Crypto Module
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟡 Medium |
 | **ASVS Level(s)** | L2 |
-| **CWE** | N/A |
+| **CWE** | - |
 | **ASVS Section(s)** | 15.2.3 |
 | **Files** | `v3/steve/crypto.py:26`, `v3/steve/crypto.py:129-158`, `v3/steve/crypto.py:160-162` |
 | **Source Reports** | 15.2.3.md |
-| **Related Findings** | None |
+| **Related Findings** | - |
 
 **Description:**
 
@@ -5431,39 +5539,17 @@ Move the benchmark to a separate development-only script excluded from productio
 
 ---
 
-#### FINDING-219: Missing Vote Value Type/Format Validation Before Resource-Intensive Cryptographic Operations
+#### FINDING-222: Web Server Log Timestamps Use Local Time Without Timezone, Year, or Seconds
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟡 Medium |
 | **ASVS Level(s)** | L2 |
-| **CWE** | N/A |
-| **ASVS Section(s)** | 15.2.2, 15.3.5 |
-| **Files** | `v3/steve/election.py:244-260`, `v3/steve/election.py:266-280`, `v3/steve/election.py:273`, `v3/server/pages.py:415-455` |
-| **Source Reports** | 15.2.2.md, 15.3.5.md |
-| **Related Findings** | None |
-
-**Description:**
-
-The add_vote() method accepts vote values from users without validating them against the expected vote type for the issue. The code contains an explicit TODO comment acknowledging this validation requirement, but the validation is not implemented. No validation of votestring length, format, or content against the issue's vote type occurs before passing the data to expensive cryptographic operations (Argon2 computation: 64 MiB memory, 4 CPU threads, ~100ms). This allows: (1) Arbitrary strings to be encrypted and stored as votes regardless of whether they match the issue's voting format (YNA, STV, etc.), (2) Voters to submit arbitrarily large or malformed votestrings that consume disproportionate resources during encryption, storage, and later decryption during tallying, (3) Repeated vote submissions to trigger unbounded Argon2 computation without throttling. A voter could submit a votestring of 10 MiB, which bypasses all vote-type validation, forces Fernet encryption of the full payload, stores the encrypted blob in SQLite, and must decrypt the full blob during tallying. Election integrity is compromised as invalid votes are encrypted and stored, then when tallied by vtypes modules, the behavior is unpredictable — tallying may crash, produce incorrect results, or silently discard/miscount votes.
-
-**Remediation:**
-
-Implement explicit type and format validation in the add_vote method before expensive operations: 1. Implement hard limit on votestring size (e.g., MAX_VOTESTRING_LEN = 4096). 2. Validate that votestring is a string type: `if not isinstance(votestring, str): raise ValueError(f'votestring must be a string, got {type(votestring).__name__}')`. 3. Retrieve the issue and validate it exists before processing: `issue = self.q_get_issue.first_row(iid); if not issue: raise IssueNotFound(iid)`. 4. Use the vtypes module's validate_vote function to ensure the vote format matches the issue type: `m = vtypes.vtype_module(issue.type); if not m.validate_vote(votestring, self.json2kv(issue.kv)): raise ValueError(f'Invalid vote format for {issue.type}: {votestring!r}')`. 5. Consider short-circuit check if identical vote already exists before computing expensive token. 6. Implement rate limiting at the web layer using quart_rate_limiter with conservative limits (e.g., 5 votes per minute per user). Example implementation: `def add_vote(self, pid: str, iid: str, votestring: str): if not isinstance(votestring, str): raise ValueError(f'votestring must be a string, got {type(votestring).__name__}'); if len(votestring) > MAX_VOTESTRING_LEN: raise ValueError(f'votestring exceeds maximum length'); issue = self.q_get_issue.first_row(iid); if not issue: raise IssueNotFound(iid); m = vtypes.vtype_module(issue.type); if not m.validate_vote(votestring, self.json2kv(issue.kv)): raise ValueError(f'Invalid vote format for {issue.type}: {votestring!r}'); md = self._all_metadata(self.S_OPEN); mayvote = self.q_get_mayvote.first_row(pid, iid); vote_token = crypto.gen_vote_token(md.opened_key, pid, iid, mayvote.salt); ciphertext = crypto.create_vote(vote_token, mayvote.salt, votestring); self.c_add_vote.perform(vote_token, ciphertext)`
-
----
-
-#### FINDING-220: Web Server Log Timestamps Use Local Time Without Timezone, Year, or Seconds
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L2 |
-| **CWE** | N/A |
+| **CWE** | - |
 | **ASVS Section(s)** | 16.2.2, 16.2.4 |
 | **Files** | `v3/server/main.py:23`, `v3/server/main.py:55-59`, `v3/server/main.py:85-91`, `v3/server/main.py:20`, `v3/server/main.py:51-56`, `v3/server/pages.py:101`, `v3/server/pages.py:371`, `v3/server/pages.py:374`, `v3/server/pages.py:394-395`, `v3/server/pages.py:415`, `v3/server/pages.py:428`, `v3/server/pages.py:451`, `v3/server/pages.py:472-473`, `v3/server/pages.py:489-490` |
 | **Source Reports** | 16.2.2.md, 16.2.4.md |
-| **Related Findings** | None |
+| **Related Findings** | - |
 
 **Description:**
 
@@ -5475,17 +5561,39 @@ Change DATE_FORMAT to '%Y-%m-%dT%H:%M:%SZ' for ISO 8601 UTC format. Create a cus
 
 ---
 
-#### FINDING-221: Source IP Address Missing From All Web Security Log Entries
+#### FINDING-223: Unsynchronized Logging Configuration Between Web Server and Tally CLI Components
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟡 Medium |
 | **ASVS Level(s)** | L2 |
-| **CWE** | N/A |
+| **CWE** | - |
+| **ASVS Section(s)** | 16.2.2, 16.2.4 |
+| **Files** | `v3/server/main.py:23`, `v3/server/main.py:55-59`, `v3/server/main.py:85-91`, `v3/server/main.py:51-56`, `v3/server/bin/tally.py:145`, `v3/server/bin/tally.py:148`, `v3/steve/election.py:186`, `v3/steve/election.py:197`, `v3/steve/election.py:381` |
+| **Source Reports** | 16.2.2.md, 16.2.4.md |
+| **Related Findings** | - |
+
+**Description:**
+
+The web server (main.py) and tally CLI (tally.py) use completely different logging configurations with incompatible formats. Web server uses '[{asctime}|{levelname}|{name}] {message}' with '%m/%d %H:%M' timestamps in local time, while tally CLI uses Python's default format '%(levelname)s:%(name)s:%(message)s' with no timestamps at all. The same election.py module produces different log formats depending on which entry point calls it, making SIEM correlation impossible and violating ASVS 16.2.2 requirement that 'time sources for all logging components are synchronized'. This format divergence creates a correlation gap at the most critical phase of the election lifecycle.
+
+**Remediation:**
+
+Create a shared logging configuration module (e.g., v3/steve/log_config.py) with a configure_logging() function that sets consistent format, date format, style, and UTC converter. Import and call this function from both main.py and tally.py entry points. Example shared config: LOG_FORMAT = '[{asctime}|{levelname}|{name}] {message}', LOG_DATEFMT = '%Y-%m-%dT%H:%M:%SZ', formatter.converter = time.gmtime. This ensures unified log processing across all components.
+
+---
+
+#### FINDING-224: Source IP Address Missing From All Web Security Log Entries
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L2 |
+| **CWE** | - |
 | **ASVS Section(s)** | 16.2.1, 16.3.1 |
 | **Files** | `v3/server/pages.py:116`, `v3/server/pages.py:438`, `v3/server/pages.py:468`, `v3/server/pages.py:490`, `v3/server/pages.py:505`, `v3/server/pages.py:529`, `v3/server/pages.py:547`, `v3/server/pages.py:565`, `v3/server/pages.py:410-443`, `v3/server/pages.py:455-473`, `v3/server/pages.py:476-493`, `v3/server/pages.py:495-509`, `v3/server/pages.py:511-532`, `v3/server/pages.py:534-555`, `v3/server/pages.py:557-575`, `v3/server/pages.py:475`, `v3/server/pages.py:498`, `v3/server/pages.py:513` |
 | **Source Reports** | 16.2.1.md, 16.3.1.md |
-| **Related Findings** | None |
+| **Related Findings** | - |
 
 **Description:**
 
@@ -5497,7 +5605,7 @@ Create a centralized security logging helper function that captures source IP ad
 
 ---
 
-#### FINDING-222: Log Injection via Unsanitized User-Controlled Input in Election Title and Form Fields
+#### FINDING-225: Log Injection via Unsanitized User-Controlled Input in Election Title and Form Fields
 
 | Attribute | Value |
 |-----------|-------|
@@ -5507,7 +5615,7 @@ Create a centralized security logging helper function that captures source IP ad
 | **ASVS Section(s)** | 16.1.1, 16.3.3, 16.4.1 |
 | **Files** | `v3/server/pages.py:455`, `v3/server/pages.py:101`, `v3/server/pages.py:517`, `v3/server/pages.py:542`, `v3/server/pages.py:459`, `v3/server/pages.py:429-431` |
 | **Source Reports** | 16.1.1.md, 16.3.3.md, 16.4.1.md |
-| **Related Findings** | FINDING-224, FINDING-225 |
+| **Related Findings** | FINDING-227, FINDING-228 |
 
 **Description:**
 
@@ -5519,7 +5627,7 @@ Implement a sanitize_for_log() utility function that removes or replaces control
 
 ---
 
-#### FINDING-223: Exception Details in Error Logs May Expose Sensitive Data
+#### FINDING-226: Exception Details in Error Logs May Expose Sensitive Data
 
 | Attribute | Value |
 |-----------|-------|
@@ -5529,7 +5637,7 @@ Implement a sanitize_for_log() utility function that removes or replaces control
 | **ASVS Section(s)** | 16.1.1, 16.2.5 |
 | **Files** | `v3/server/pages.py:419`, `v3/server/pages.py:399-403`, `v3/server/bin/tally.py:124`, `v3/server/bin/tally.py:115-118` |
 | **Source Reports** | 16.1.1.md, 16.2.5.md |
-| **Related Findings** | FINDING-017, FINDING-018 |
+| **Related Findings** | FINDING-020, FINDING-021 |
 
 **Description:**
 
@@ -5541,17 +5649,17 @@ Log only the exception type name (type(e).__name__) at ERROR level for productio
 
 ---
 
-#### FINDING-224: Debug print() Statements Output Raw Form Data to Unprotected stdout
+#### FINDING-227: Debug print() Statements Output Raw Form Data to Unprotected stdout
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟡 Medium |
 | **ASVS Level(s)** | L2 |
 | **CWE** | CWE-117 |
-| **ASVS Section(s)** | 16.1.1, 16.2.3, 16.2.4, 16.2.5, 16.4.1, 16.4.2, 14.1.1, 14.1.2, 14.2.4 |
+| **ASVS Section(s)** | 16.1.1, 16.2.3, 16.2.4, 16.2.5, 16.4.1, 16.4.2 |
 | **Files** | `v3/server/pages.py:508`, `v3/server/pages.py:537`, `v3/server/pages.py:493`, `v3/server/pages.py:516`, `v3/server/pages.py:489`, `v3/server/pages.py:513`, `v3/server/pages.py:510`, `v3/server/pages.py:531`, `v3/server/pages.py:482`, `v3/server/pages.py:499`, `v3/server/pages.py:447`, `v3/server/pages.py:467` |
-| **Source Reports** | 16.1.1.md, 16.2.3.md, 16.2.4.md, 16.2.5.md, 16.4.1.md, 16.4.2.md, 14.1.1.md, 14.1.2.md, 14.2.4.md |
-| **Related Findings** | FINDING-222, FINDING-225 |
+| **Source Reports** | 16.1.1.md, 16.2.3.md, 16.2.4.md, 16.2.5.md, 16.4.1.md, 16.4.2.md |
+| **Related Findings** | FINDING-225, FINDING-228 |
 
 **Description:**
 
@@ -5563,7 +5671,7 @@ Remove all print('FORM:', form) statements entirely from production code. If deb
 
 ---
 
-#### FINDING-225: Log Injection via URL Path Parameters in Election Constructor
+#### FINDING-228: Log Injection via URL Path Parameters in Election Constructor
 
 | Attribute | Value |
 |-----------|-------|
@@ -5573,7 +5681,7 @@ Remove all print('FORM:', form) statements entirely from production code. If deb
 | **ASVS Section(s)** | 16.4.1 |
 | **Files** | `v3/steve/election.py:40`, `v3/server/main.py:57` |
 | **Source Reports** | 16.4.1.md |
-| **Related Findings** | FINDING-222, FINDING-224 |
+| **Related Findings** | FINDING-225, FINDING-227 |
 
 **Description:**
 
@@ -5585,17 +5693,17 @@ Option 1 (Preferred): Move log statement after validation. Only log after self.q
 
 ---
 
-#### FINDING-226: No Documented Log Inventory or Centralized Log Destination Configuration
+#### FINDING-229: No Documented Log Inventory or Centralized Log Destination Configuration
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟡 Medium |
 | **ASVS Level(s)** | L2 |
-| **CWE** | N/A |
+| **CWE** | - |
 | **ASVS Section(s)** | 16.2.3 |
 | **Files** | `v3/server/main.py:58-63`, `v3/server/main.py:92-97`, `v3/server/bin/tally.py:157` |
 | **Source Reports** | 16.2.3.md |
-| **Related Findings** | None |
+| **Related Findings** | - |
 
 **Description:**
 
@@ -5607,17 +5715,39 @@ Create a formal log inventory document specifying approved log destinations. Cen
 
 ---
 
-#### FINDING-227: Election State-Change Operations Lack Error Handling and Recovery
+#### FINDING-230: Multi-Issue Vote Submission Lacks Atomicity; Partial Failure Creates Inconsistent State
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L2, L3 |
+| **CWE** | - |
+| **ASVS Section(s)** | 16.5.2, 16.5.3 |
+| **Files** | `v3/server/pages.py:349-378`, `v3/server/pages.py:425-444` |
+| **Source Reports** | 16.5.2.md, 16.5.3.md |
+| **Related Findings** | - |
+
+**Description:**
+
+The vote submission endpoint processes multiple issue votes in a loop, with each vote committed individually. If a failure occurs mid-loop (database lock, crypto failure, disk full), votes processed before the failure are permanently recorded while subsequent votes are lost. The voter receives only a generic error message and cannot determine which votes were successfully recorded. This creates an election integrity violation where partial vote recording without voter awareness could alter election outcomes. This violates ASVS 16.5.2 (graceful degradation) and 16.5.3 (secure failure) requirements.
+
+**Remediation:**
+
+Implement atomic batch vote submission by wrapping all vote operations in a single database transaction. Add a new add_votes_batch() method in election.py that uses BEGIN TRANSACTION/COMMIT/ROLLBACK to ensure all votes succeed or none are committed. Validate all votes before committing any, and provide clear feedback to users about whether the entire batch succeeded or failed. Log transaction start, commit, and rollback events with user context.
+
+---
+
+#### FINDING-231: Election State-Change Operations Lack Error Handling and Recovery
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟡 Medium |
 | **ASVS Level(s)** | L2 |
-| **CWE** | N/A |
+| **CWE** | - |
 | **ASVS Section(s)** | 16.5.2 |
 | **Files** | `v3/server/pages.py:399`, `v3/server/pages.py:419`, `v3/steve/election.py:70` |
 | **Source Reports** | 16.5.2.md |
-| **Related Findings** | None |
+| **Related Findings** | - |
 
 **Description:**
 
@@ -5629,17 +5759,17 @@ Wrap PersonDB.open() and election.open() calls in try/except blocks with proper 
 
 ---
 
-#### FINDING-228: No X-Frame-Options or frame-ancestors CSP Directive — Clickjacking Unmitigated
+#### FINDING-232: No X-Frame-Options or frame-ancestors CSP Directive — Clickjacking Unmitigated
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟡 Medium |
 | **ASVS Level(s)** | L3 |
-| **CWE** | N/A |
+| **CWE** | - |
 | **ASVS Section(s)** | 3.1.1 |
 | **Files** | `v3/server/pages.py:203`, `v3/server/pages.py:315`, `v3/server/pages.py:448`, `v3/server/pages.py:468` |
 | **Source Reports** | 3.1.1.md |
-| **Related Findings** | None |
+| **Related Findings** | - |
 
 **Description:**
 
@@ -5667,17 +5797,17 @@ Additionally, convert state-changing GET endpoints to POST:
 
 ---
 
-#### FINDING-229: No Browser Security Feature Documentation or Degradation Behavior
+#### FINDING-233: No Browser Security Feature Documentation or Degradation Behavior
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟡 Medium |
 | **ASVS Level(s)** | L3 |
-| **CWE** | N/A |
+| **CWE** | - |
 | **ASVS Section(s)** | 3.1.1 |
 | **Files** | `v3/server/main.py:32-42` |
 | **Source Reports** | 3.1.1.md |
-| **Related Findings** | None |
+| **Related Findings** | - |
 
 **Description:**
 
@@ -5729,17 +5859,39 @@ async def apply_documented_security_headers(response):
 
 ---
 
-#### FINDING-230: Missing SRI for Self-Hosted Third-Party Library (bootstrap-icons.css)
+#### FINDING-234: Externally Hosted SVG Image Without SRI or Documented Security Decision
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟡 Medium |
 | **ASVS Level(s)** | L3 |
-| **CWE** | N/A |
+| **CWE** | - |
+| **ASVS Section(s)** | 3.6.1 |
+| **Files** | `v3/server/templates/header.ezt:18` |
+| **Source Reports** | 3.6.1.md |
+| **Related Findings** | - |
+
+**Description:**
+
+The Apache feather logo is loaded at runtime from an external domain (www.apache.org). This resource is not versioned (the URL has no version identifier, meaning content can change), has no SRI integrity attribute (the integrity attribute is not supported on &lt;img&gt; elements), and has no documented security decision justifying this external dependency. ASVS 3.6.1 requires that when SRI is not possible, there should be a documented security decision to justify this for each resource. While SVG loaded via &lt;img&gt; is sandboxed (no script execution), a compromised resource could still be used for phishing (visual replacement) or tracking. If the external host is compromised or the resource is modified, the application would display attacker-controlled visual content to all users. In a voting application, this could undermine trust or be used for social engineering.
+
+**Remediation:**
+
+Self-host the SVG image alongside other static assets. In fetch-thirdparty.sh, add: FEATHER_URL="https://www.apache.org/foundation/press/kit/feather.svg"; echo "Fetching: ${FEATHER_URL}"; curl -q --fail "${FEATHER_URL}" --output "${STATIC_DIR}/img/feather.svg". In header.ezt, change to: &lt;img src="/static/img/feather.svg" alt="Logo" width="30" height="30" class="d-inline-block align-text-top"&gt;
+
+---
+
+#### FINDING-235: Missing SRI for Self-Hosted Third-Party Library (bootstrap-icons.css)
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L3 |
+| **CWE** | - |
 | **ASVS Section(s)** | 3.6.1 |
 | **Files** | `v3/server/templates/header.ezt:10`, `v3/server/bin/fetch-thirdparty.sh:70-74` |
 | **Source Reports** | 3.6.1.md |
-| **Related Findings** | None |
+| **Related Findings** | - |
 
 **Description:**
 
@@ -5751,17 +5903,17 @@ Add SRI hash generation and template integration. In fetch-thirdparty.sh, after 
 
 ---
 
-#### FINDING-231: Build Script Downloads Third-Party Assets Without Pre-Download Integrity Verification
+#### FINDING-236: Build Script Downloads Third-Party Assets Without Pre-Download Integrity Verification
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟡 Medium |
 | **ASVS Level(s)** | L3 |
-| **CWE** | N/A |
+| **CWE** | - |
 | **ASVS Section(s)** | 3.6.1 |
 | **Files** | `v3/server/bin/fetch-thirdparty.sh:47`, `v3/server/bin/fetch-thirdparty.sh:60-62`, `v3/server/bin/fetch-thirdparty.sh:67`, `v3/server/bin/fetch-thirdparty.sh:82`, `v3/server/bin/fetch-thirdparty.sh:92` |
 | **Source Reports** | 3.6.1.md |
-| **Related Findings** | None |
+| **Related Findings** | - |
 
 **Description:**
 
@@ -5773,17 +5925,17 @@ Add known-good hash verification before extraction. Define expected hashes from 
 
 ---
 
-#### FINDING-232: TLS Certificates Loaded Without Integrity Verification
+#### FINDING-237: TLS Certificates Loaded Without Integrity Verification
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟡 Medium |
 | **ASVS Level(s)** | L3 |
-| **CWE** | N/A |
+| **CWE** | - |
 | **ASVS Section(s)** | 6.7.1 |
 | **Files** | `v3/server/main.py:37`, `v3/server/main.py:85-90` |
 | **Source Reports** | 6.7.1.md |
-| **Related Findings** | None |
+| **Related Findings** | - |
 
 **Description:**
 
@@ -5821,17 +5973,17 @@ if app.cfg.server.certfile:
 
 ---
 
-#### FINDING-233: Certificate File Paths Accept Unvalidated Configuration Input
+#### FINDING-238: Certificate File Paths Accept Unvalidated Configuration Input
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟡 Medium |
 | **ASVS Level(s)** | L3 |
-| **CWE** | N/A |
+| **CWE** | - |
 | **ASVS Section(s)** | 6.7.1 |
 | **Files** | `v3/server/main.py:85`, `v3/server/main.py:86` |
 | **Source Reports** | 6.7.1.md |
-| **Related Findings** | None |
+| **Related Findings** | - |
 
 **Description:**
 
@@ -5860,39 +6012,39 @@ kwargs['keyfile'] = safe_cert_path(CERTS_DIR, app.cfg.server.keyfile)
 
 ---
 
-#### FINDING-234: Bulk Vote Decryption Retains All Plaintext in Memory Without Cleanup
+#### FINDING-239: Cryptographic Key Material Not Cleared From Memory After Use
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟡 Medium |
 | **ASVS Level(s)** | L3 |
-| **CWE** | N/A |
+| **CWE** | - |
 | **ASVS Section(s)** | 11.7.2 |
-| **Files** | `v3/steve/election.py:238-280`, `v3/server/bin/tally.py:96-125` |
+| **Files** | `v3/steve/crypto.py:65`, `v3/steve/crypto.py:73`, `v3/steve/crypto.py:51`, `v3/steve/election.py:224`, `v3/steve/election.py:238` |
 | **Source Reports** | 11.7.2.md |
-| **Related Findings** | None |
+| **Related Findings** | - |
 
 **Description:**
 
-The tallying process decrypts all votes for an issue into a single in-memory list before processing. ALL plaintext votes exist simultaneously in process memory during tallying, persisting beyond the tally computation until Python's garbage collector reclaims them (with no guaranteed timing). For an election with 1000 voters, all 1000 plaintext votes are simultaneously resident. A process memory dump (via crash, core dump, swap to disk, or memory forensics on the host) would expose every voter's individual ballot content for the current issue. Python's string interning means plaintext vote strings may persist longer than the `votes` list scope.
+Per-voter encryption keys, the election opened_key, and derived key material remain in process memory beyond their operational need. During tallying, key material for every voter/issue pair accumulates across loop iterations. No cleanup mechanism exists for sensitive cryptographic material after use. The vulnerable functions include create_vote(), decrypt_votestring(), _b64_vote_key(), add_vote(), and tally_issue(). Memory disclosure vulnerabilities (e.g., via /proc/&lt;pid&gt;/mem, heap inspection, or swap) would expose these keys, allowing decryption of any intercepted ciphertexts. The opened_key (election master key) remaining in the md variable is particularly critical as it enables derivation of all vote tokens.
 
 **Remediation:**
 
-Implement streaming/incremental tallying where each vote is decrypted, contributed to the tally accumulator, and discarded immediately. Modify vtype modules to support incremental input with an accumulator pattern. Shuffle encrypted references before decryption, then decrypt one-at-a-time, explicitly deleting plaintext after contributing to accumulator.
+While Python doesn't natively support secure memory erasure for immutable types, use bytearray for mutable key storage and explicit zeroing. Implement a _secure_zero() function using ctypes.memset for critical material. Wrap key operations in try/finally blocks to ensure cleanup. Consider using ctypes-based wrappers or compiled-language crypto modules for the most sensitive operations to achieve better memory control.
 
 ---
 
-#### FINDING-235: Unbounded Synchronous Vote Processing Loop Amplifies Event Loop Starvation
+#### FINDING-240: Unbounded Synchronous Vote Processing Loop Amplifies Event Loop Starvation
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟡 Medium |
 | **ASVS Level(s)** | L3 |
-| **CWE** | N/A |
+| **CWE** | - |
 | **ASVS Section(s)** | 15.4.4 |
 | **Files** | `v3/server/pages.py:399-432`, `v3/steve/election.py:231-244` |
 | **Source Reports** | 15.4.4.md |
-| **Related Findings** | None |
+| **Related Findings** | - |
 
 **Description:**
 
@@ -5906,469 +6058,690 @@ Offload each blocking add_vote() call to thread pool using await asyncio.to_thre
 
 # 4. Positive Security Controls
 
-| Control ID | Control Description | Evidence Location | Domain |
-|------------|-------------------|-------------------|---------|
-| PSC-001 | 100% parameterized SQL queries using ? placeholders | All database queries in queries.yaml consistently use parameter binding via asfpy.db wrapper, preventing SQL injection | Input Encoding |
-| PSC-002 | Data stored in canonical (raw) form without pre-encoding | All database writes store raw data, satisfying ASVS 1.1.1 requirement for single decoding | Input Encoding |
-| PSC-003 | Single URL decoding by Quart framework | Framework performs canonicalization exactly once, no double-decoding in application code | Input Encoding |
-| PSC-004 | LDAP filter hardcoded with no user input | LDAP filter is constant 'uid=*', not user-derived, preventing LDAP injection | Input Encoding |
-| PSC-005 | send_from_directory for file serving | Framework-provided protection against path traversal attacks (v3/server/pages.py:572, 575) | Input Encoding |
-| PSC-006 | Python's arbitrary precision integers | Eliminates traditional integer overflow/underflow vulnerabilities in arithmetic operations | Input Encoding |
-| PSC-007 | Hardcoded cryptographic parameters | All Argon2 and HKDF parameters are constants, preventing user-controlled integer manipulation at cryptographic boundary | Input Encoding |
-| PSC-008 | Language choice provides inherent memory safety | Python runtime eliminates buffer overflows, dangling pointers, stack smashing, and string corruption at language level | Input Encoding |
-| PSC-009 | Zero OS command execution surface | No imports or usage of os.system(), subprocess, or other command execution primitives | Input Encoding |
-| PSC-010 | Static regex patterns | Single hardcoded regex pattern r'doc:([^\s]+)' with no user input in pattern construction | Input Encoding |
-| PSC-011 | Subresource Integrity (SRI) on CDN resources | integrity= attributes on CSS/JS prevents tampered CDN delivery (header.ezt, footer.ezt) | Input Encoding |
-| PSC-012 | LDAPS encrypted connection | Uses ldaps:// for encrypted LDAP communication (asf-load-ldap.py:46) | Input Encoding |
-| PSC-013 | Cryptographic vote anonymization | Per-voter salts and vote tokens decouple identity from votes | Input Encoding |
-| PSC-014 | State machine enforcement | Assert-based state checks prevent invalid operations (is_editable(), is_open(), is_closed()) | Input Encoding |
-| PSC-015 | Client-side escapeHtml() function | JavaScript escapeHtml() function provides defense-in-depth for client-side rendering (vote-on.ezt) | Input Encoding |
-| PSC-016 | Minimal Regex Usage | Only one regex pattern exists with O(n) time complexity and no catastrophic backtracking possible | Input Encoding |
-| PSC-017 | No eval() usage | Zero occurrences of eval(), exec(), compile(), pickle deserialization, or subprocess calls across all files | Input Encoding |
-| PSC-018 | Safe template engine (EZT) | EZT supports only substitution, iteration, conditionals — no code execution capability, inherently prevents SSTI | Input Encoding |
-| PSC-019 | No outbound HTTP client usage | No imports of HTTP client libraries (requests, urllib, httpx, aiohttp) | Input Encoding |
-| PSC-020 | Exclusive Use of Safe JSON Deserialization | Application uses json.loads()/json.dumps() exclusively for structured data serialization | Input Encoding |
-| PSC-021 | Database Type Safety with STRICT Mode | SQLite tables use STRICT mode with explicit type constraints, preventing type confusion | Input Encoding |
-| PSC-022 | Proper state check via _all_metadata(required_state) | Used correctly in add_vote(), tally_issue(), and has_voted_upon() methods with exception-based enforcement | Business Logic |
-| PSC-023 | Election state derivation from database fields | State computed from actual column values (salt, opened_key, closed) in _compute_state() method | Business Logic |
-| PSC-024 | Cryptographic ID generation prevents enumeration | Uses crypto.create_id() for issue and election IDs with 10-character hex random values and CHECK constraints | Business Logic |
-| PSC-025 | Integrity loop on ID collision | While loop with IntegrityError catch handles concurrent ID creation safely | Business Logic |
-| PSC-026 | Transactional operations for multi-step modifications | BEGIN TRANSACTION / COMMIT used in state-modifying operations | Business Logic |
-| PSC-027 | Tamper detection via opened_key cryptographic binding | is_tampered() method detects post-opening modifications to election data by recomputing opened_key | Business Logic |
-| PSC-028 | Voter eligibility enforcement via mayvote table | Database-level check using q_get_mayvote.first_row(pid, iid) before accepting votes | Business Logic |
-| PSC-029 | Re-voting support via MAX(vid) ordering with audit trail | Vote table with AUTOINCREMENT vid ensures latest vote counted while preserving history | Business Logic |
-| PSC-030 | Non-sequential IDs | Election and issue IDs use 10 hex characters generated by crypto.create_id(), preventing enumeration | Business Logic |
-| PSC-031 | Per-voter cryptographic salts | Each voter/issue pair has a unique salt for vote token generation and encryption key derivation | Business Logic |
-| PSC-032 | Schema-level constraints | CHECK constraints, STRICT mode, foreign keys with ON DELETE RESTRICT, and prevent_open_close_update trigger | Business Logic |
-| PSC-033 | Vote shuffling before tallying | crypto.shuffle(votes) prevents database-order leakage | Business Logic |
-| PSC-034 | Referential integrity via foreign keys | Schema defines FOREIGN KEY constraints with ON DELETE RESTRICT, preventing orphaned records | Business Logic |
-| PSC-035 | Election state immutability | prevent_open_close_update trigger prevents modification of advisory timestamps after election closure | Business Logic |
-| PSC-036 | Sensitive Data Exclusion | get_metadata() and get_issue() explicitly exclude salt and opened_key from returned data | Business Logic |
-| PSC-037 | STV Candidate Randomization | random.shuffle(issue.candidates) prevents ballot-order bias in STV ballots | Business Logic |
-| PSC-038 | Authentication on all state-changing endpoints | Every mutating endpoint uses @asfquart.auth.require with appropriate requirement levels | Business Logic |
-| PSC-039 | Elevated privilege for election creation | POST /do-create-election requires R.pmc_member, a higher privilege level than general committer access | Business Logic |
-| PSC-040 | Structured logging of sensitive operations | All state-changing operations log the user ID, action, and target resource | Business Logic |
-| PSC-041 | Safe YAML parsing | Uses yaml.safe_load() preventing arbitrary object deserialization (create-election.py:74) | Business Logic |
-| PSC-042 | LDAP Connection Security | asf-load-ldap.py uses ldaps:// (LDAP over TLS) and data comes from trusted LDAP directory | Business Logic |
-| PSC-043 | Redirect after POST (PRG pattern) | All POST handlers redirect with code=303, preventing form resubmission | Session/CSRF |
-| PSC-044 | TLS support | Certificate and keyfile loading for HTTPS (main.py:70-72) | Session/CSRF |
-| PSC-045 | Audit logging | All state-changing operations logged with user/election IDs | Session/CSRF |
-| PSC-046 | .textContent for DOM text | openDeleteIssueModal() uses .textContent instead of .innerHTML for confirmation message | Session/CSRF |
-| PSC-047 | .value for input fields | openEditIssueModal() sets .value properties rather than rendering HTML | Session/CSRF |
-| PSC-048 | IIFE namespace isolation with 'use strict' directive | vote-on.ezt script wrapped in (function() { 'use strict'; ... })() providing proper namespace isolation | Session/CSRF |
-| PSC-049 | const/let variable declarations | Modern variable declarations prevent accidental global creation within their scope | Session/CSRF |
-| PSC-050 | Secure Default: No CORS Headers | Application does not import any CORS library, no CORS middleware configured, no manual CORS headers set | Session/CSRF |
-| PSC-051 | Session token not exposed in response bodies | Only session data (uid, name, email) is extracted and passed to templates | Session/CSRF |
-| PSC-052 | OAuth over HTTPS | OAuth endpoints hardcoded to https://oauth.apache.org/..., ensuring token exchange is encrypted | Session/CSRF |
-| PSC-053 | POST method used for most state-changing operations | 7 of 9 state-changing endpoints correctly use @APP.post() decorator | Session/CSRF |
-| PSC-054 | JSON Content-Type for date-setting endpoints triggers CORS preflight | /do-set-open_at/&lt;eid&gt; and /do-set-close_at/&lt;eid&gt; endpoints accept application/json | Session/CSRF |
-| PSC-055 | Single-origin application architecture | All application components (pages, API, static assets) are served from the same hostname | Session/CSRF |
-| PSC-056 | No postMessage usage | Application avoids postMessage entirely, using same-origin form submissions and fetch() calls instead | Session/CSRF |
-| PSC-057 | No JSONP functionality | No callback/jsonp query parameter handling, no wrapping of JSON in function calls | Session/CSRF |
-| PSC-058 | HTML-First Response Architecture | All data-serving routes use server-side EZT templating to produce text/html responses, preventing XSSI | Session/CSRF |
-| PSC-059 | Modern client-side technology stack | Uses Bootstrap 5.3.1, Bootstrap Icons 1.13.1, SortableJS 1.15.7 with version pinning and SRI hash generation | Session/CSRF |
-| PSC-060 | Self-hosted dependencies | All third-party assets are self-hosted, reducing CDN risks | Session/CSRF |
-| PSC-061 | All redirects use absolute paths | Every quart.redirect() call uses a path starting with /, preventing protocol-relative URL injection | Session/CSRF |
-| PSC-062 | Database validation before redirect | Dynamic redirect components are always validated via database lookup before use | Session/CSRF |
-| PSC-063 | Framework-delegated HTTP parsing | All request body parsing uses Quart's built-in request.form and request.get_json() | Content Type |
-| PSC-064 | Strong cryptographic primitives | Argon2 (Type D, 64MB memory), HKDF-SHA256, Fernet encryption, secrets module throughout | Content Type |
+| Control ID | Control Description | Evidence | Implementation Files | ASVS Coverage |
+|------------|-------------------|----------|---------------------|---------------|
+| PSC-001 | 100% parameterized SQL queries using ? placeholders | All database queries in queries.yaml consistently use parameter binding via asfpy.db wrapper, preventing SQL injection | `v3/queries.yaml`, `v3/steve/election.py`, `v3/steve/persondb.py` | 1.2.4 |
+| PSC-002 | Data stored in canonical (raw) form without pre-encoding | All database writes store raw data, satisfying ASVS 1.1.1 requirement for single decoding | `v3/queries.yaml` | 1.1.1 |
+| PSC-003 | Single URL decoding by Quart framework | Framework performs canonicalization exactly once, no double-decoding in application code | `v3/server/pages.py` | 1.1.1 |
+| PSC-004 | LDAP filter hardcoded with no user input | LDAP filter is constant 'uid=*', not user-derived, preventing LDAP injection | `v3/server/bin/asf-load-ldap.py:52, 62` | 1.2.6 |
+| PSC-005 | send_from_directory for file serving | Framework-provided protection against path traversal attacks | `v3/server/pages.py:572, 575` | 5.3.2 |
+| PSC-006 | JSON serialization/deserialization handled correctly | KV data stored as JSON text, parsed once without double-encoding | `v3/steve/election.py` | 1.5.2 |
+| PSC-007 | Python's arbitrary precision integers | Eliminates traditional integer overflow/underflow vulnerabilities in arithmetic operations | `v3/steve/crypto.py`, `v3/steve/election.py`, `v3/server/pages.py` | 1.4.2 |
+| PSC-008 | Hardcoded cryptographic parameters | All Argon2 and HKDF parameters are constants, preventing user-controlled integer manipulation at cryptographic boundary | `v3/steve/crypto.py:22, 31, 58, 59, 82-88, 94, 119` | 1.4.2 |
+| PSC-009 | Language choice provides inherent memory safety | Python runtime eliminates buffer overflows, dangling pointers, stack smashing, and string corruption at language level | All `.py` files | 1.4.1 |
+| PSC-010 | Zero OS command execution surface | No imports or usage of os.system(), subprocess, or other command execution primitives | All `.py` files | 1.2.5 |
+| PSC-011 | Static regex patterns | Single hardcoded regex pattern r'doc:([^\s]+)' with no user input in pattern construction | `v3/server/pages.py:43` | 1.3.12 |
+| PSC-012 | Client-side HTML escaping for dynamic DOM | JavaScript escapeHtml() function provides defense-in-depth for client-side rendering | `v3/server/templates/vote-on.ezt` | 1.2.1 |
+| PSC-013 | Subresource Integrity (SRI) on CDN resources | integrity= attributes on CSS/JS prevents tampered CDN delivery | `v3/server/templates/header.ezt`, `v3/server/templates/footer.ezt` | 3.6.1 |
+| PSC-014 | LDAPS encrypted connection | Uses ldaps:// for encrypted LDAP communication | `v3/server/bin/asf-load-ldap.py:46` | 12.3.1 |
+| PSC-015 | Cryptographic vote anonymization | Per-voter salts and vote tokens decouple identity from votes | `v3/steve/election.py` | 14.1.1 |
+| PSC-016 | State machine enforcement | Assert-based state checks prevent invalid operations (is_editable(), is_open(), is_closed()) | `v3/steve/election.py` | 2.3.1 |
+| PSC-017 | Authentication on all sensitive endpoints | All data-modifying endpoints require authentication via @asfquart.auth.require | `v3/server/pages.py` | 8.2.1 |
+| PSC-018 | Minimal Regex Usage | Only one regex pattern exists with O(n) time complexity and no catastrophic backtracking possible | `v3/server/pages.py:42-49` | 1.3.12 |
+| PSC-019 | No eval() usage | Zero occurrences of eval(), exec(), compile(), pickle deserialization, or subprocess calls across all files | All files | 1.3.2 |
+| PSC-020 | Safe template engine (EZT) | EZT supports only substitution, iteration, conditionals — no code execution capability, inherently prevents SSTI | All `*.ezt` template files | 1.3.7 |
+| PSC-021 | No outbound HTTP client usage | The application imports no HTTP client libraries; no web endpoints construct or fetch external URLs based on user input | N/A | 1.3.6 |
+| PSC-022 | Exclusive Use of Safe JSON Deserialization | Uses json.loads()/json.dumps() exclusively for structured data serialization | `v3/steve/election.py:301, 305` | 1.5.2 |
+| PSC-023 | Database Type Safety with STRICT Mode | SQLite tables use STRICT mode with explicit type constraints, preventing type confusion | `schema.md` | 1.5.2 |
+| PSC-024 | Proper state check via _all_metadata(required_state) | Used correctly in add_vote(), tally_issue(), and has_voted_upon() methods with exception-based enforcement | `v3/steve/election.py:160-177, 286, 305, 363` | 2.3.1 |
+| PSC-025 | Election state derivation from database fields | State computed from actual column values in _compute_state() method | `v3/steve/election.py:424-437, 389` | 2.3.1 |
+| PSC-026 | Cryptographic ID generation prevents enumeration | Uses crypto.create_id() for issue and election IDs with 10-character hex random values and CHECK constraints | `v3/steve/election.py:209-214, 453-458`; `v3/schema.sql:10, 98` | 7.2.2 |
+| PSC-027 | Integrity loop on ID collision | While loop with IntegrityError catch handles concurrent ID creation safely | `v3/steve/election.py:209-214, 453-458, 222-228` | 7.2.2 |
+| PSC-028 | Transactional operations for multi-step modifications | BEGIN TRANSACTION / COMMIT used in state-modifying operations | `v3/steve/election.py:delete(), add_salts(), 56, 132` | 2.3.3 |
+| PSC-029 | Tamper detection via opened_key cryptographic binding | is_tampered() method detects post-opening modifications by recomputing opened_key from current data | `v3/steve/election.py:387-405, 351, 404-421` | 9.1.1 |
+| PSC-030 | Voter eligibility enforcement via mayvote table | Database-level check using q_get_mayvote.first_row(pid, iid) before accepting votes | `v3/steve/election.py:add_vote(), 264, 265` | 8.2.2 |
+| PSC-031 | Re-voting support via MAX(vid) ordering | Vote table with AUTOINCREMENT vid ensures latest vote counted while preserving history | `v3/schema.sql` | 2.3.2 |
+| PSC-032 | Per-voter cryptographic salts | Each voter/issue pair has a unique salt for vote token generation and encryption key derivation | `v3/steve/election.py:121` | 11.5.1 |
+| PSC-033 | Schema-level constraints | CHECK constraints, STRICT mode, foreign keys with ON DELETE RESTRICT provide defense-in-depth | `v3/schema.sql:140-154, 94` | 2.3.1 |
+| PSC-034 | Vote shuffling before tallying | crypto.shuffle(votes) prevents database-order leakage | Multiple files | 14.1.1 |
+| PSC-035 | Referential integrity via foreign keys | Schema defines FOREIGN KEY constraints with ON DELETE RESTRICT, preventing orphaned records | `v3/schema.sql` | 2.3.3 |
+| PSC-036 | Election state immutability | prevent_open_close_update trigger prevents modification of advisory timestamps after election closure | `v3/schema.sql` | 2.3.1 |
+| PSC-037 | Sensitive Data Exclusion | get_metadata() and get_issue() explicitly exclude salt and opened_key from returned data | `v3/steve/election.py` | 14.2.6 |
+| PSC-038 | STV Candidate Randomization | random.shuffle(issue.candidates) prevents ballot-order bias in STV ballots | `v3/server/pages.py:302`; `v3/steve/election.py` | 2.1.1 |
+| PSC-039 | Elevated privilege for election creation | POST /do-create-election requires R.pmc_member, a higher privilege level than general committer access | `v3/server/pages.py:473-490, 388` | 8.2.1 |
+| PSC-040 | Structured logging of sensitive operations | All state-changing operations log the user ID, action, and target resource | `v3/server/pages.py:426-592` | 16.2.1 |
+| PSC-041 | Safe YAML parsing | Uses yaml.safe_load() preventing arbitrary object deserialization | `v3/server/bin/create-election.py:74` | 1.5.2 |
+| PSC-042 | Redirect after POST (PRG pattern) | All POST handlers redirect with code=303, preventing form resubmission | `v3/server/pages.py:430-431` | 3.5.1 |
+| PSC-043 | TLS support | Certificate and keyfile loading for HTTPS | `v3/server/main.py:70-72` | 12.1.1 |
+| PSC-044 | IIFE namespace isolation with 'use strict' | vote-on.ezt script wrapped in (function() { 'use strict'; ... })() providing proper namespace isolation | `v3/server/templates/vote-on.ezt` | 3.2.3 |
+| PSC-045 | const/let variable declarations | Modern variable declarations prevent accidental global creation | `v3/server/static/js/steve.js`, multiple template files | 3.2.3 |
+| PSC-046 | Secure Default: No CORS Headers | Application does not import any CORS library, no CORS middleware configured | `v3/server/main.py:44`; `v3/server/pages.py` | 3.4.2 |
+| PSC-047 | Session token not exposed in response bodies | Only session data (uid, name, email) is extracted and passed to templates | `pages.py:73-82` | 7.2.3 |
+| PSC-048 | OAuth over HTTPS | OAuth endpoints hardcoded to https://oauth.apache.org/..., ensuring token exchange is encrypted | `v3/server/main.py:35-38` | 10.1.1 |
+| PSC-049 | POST method used for most state-changing operations | 7 of 9 state-changing endpoints correctly use @APP.post() decorator | `v3/server/pages.py:373, 379, 393, 517, 572, 597, 617` | 3.5.3 |
+| PSC-050 | JSON Content-Type for date-setting endpoints triggers CORS preflight | /do-set-open_at/&lt;eid&gt; and /do-set-close_at/&lt;eid&gt; accept application/json | `v3/server/pages.py` | 3.5.2 |
+| PSC-051 | Single-origin application architecture | All application components served from the same hostname | `v3/ARCHITECTURE.md` | 3.5.4 |
+| PSC-052 | No postMessage usage | Application avoids postMessage entirely, using same-origin form submissions | Multiple JavaScript files | 3.5.5 |
+| PSC-053 | No JSONP functionality | No callback/jsonp query parameter handling, no wrapping of JSON in function calls | `v3/server/pages.py` | 3.5.6 |
+| PSC-054 | HTML-First Response Architecture | All data-serving routes use server-side EZT templating to produce text/html responses | `v3/server/pages.py` | 3.5.7 |
+| PSC-055 | Modern client-side technology stack | Uses Bootstrap 5.3.1, Bootstrap Icons 1.13.1, SortableJS 1.15.7 with version pinning | `v3/server/bin/fetch-thirdparty.sh` | 3.7.1 |
+| PSC-056 | Self-hosted dependencies | All third-party assets are self-hosted, reducing CDN risks | `v3/server/bin/fetch-thirdparty.sh` | 3.7.1 |
+| PSC-057 | All redirects use absolute paths | Every quart.redirect() call uses a path starting with / | `v3/server/pages.py` | 3.7.2 |
+| PSC-058 | Database validation before redirect | Dynamic redirect components validated via database lookup through decorators | `v3/server/pages.py` | 3.7.2 |
+| PSC-059 | Framework-delegated HTTP parsing | All request body parsing uses Quart's built-in request.form and request.get_json() | `v3/server/pages.py` | 4.2.2 |
+| PSC-060 | Strong cryptographic primitives | Argon2 (Type D, 64MB memory), HKDF-SHA256, Fernet encryption, secrets module | `v3/steve/crypto.py` | 11.2.3 |
 
 ---
 
 # 5. ASVS Compliance Summary
 
-| ASVS ID | Title | Status | Critical Findings |
-|---------|-------|--------|-------------------|
-| **1.1.1** | Encoding and Sanitization Architecture | ❌ Fail | FINDING-001, FINDING-002, FINDING-020, FINDING-093 |
-| **1.1.2** | Encoding and Sanitization Architecture | ❌ Fail | FINDING-001, FINDING-002, FINDING-020, FINDING-093 |
-| **1.2.1** | Output Encoding for HTTP Response Context | ❌ Fail | FINDING-001, FINDING-002, FINDING-003, FINDING-020, FINDING-093 |
-| **1.2.2** | Injection Prevention - Dynamic URL Building | ❌ Fail | FINDING-020 |
-| **1.2.3** | JavaScript/JSON Injection Prevention | ❌ Fail | FINDING-002 |
-| **1.2.4** | Injection Prevention - Parameterized Queries | ✅ Pass | PSC-001, PSC-009 |
-| **1.2.5** | OS Command Injection Prevention | ✅ Pass | PSC-009 |
-| **1.2.6** | LDAP Injection Prevention | ✅ Pass | PSC-004, PSC-012 |
-| **1.2.7** | XPath/Injection Prevention | ❌ Fail | FINDING-097 |
-| **1.2.8** | LaTeX Processor Security | N/A | Not applicable |
-| **1.2.9** | Injection Prevention - Encoding/Sanitization | ⚠️ Partial | FINDING-020 |
-| **1.2.10** | CSV and Formula Injection Protection | ❌ Fail | FINDING-096 |
-| **1.3.1** | WYSIWYG HTML Sanitization | ❌ Fail | FINDING-003, FINDING-004 |
-| **1.3.2** | Avoid eval() and Dynamic Code Execution | ✅ Pass | PSC-017 |
-| **1.3.3** | Sanitization for Dangerous Contexts | ❌ Fail | FINDING-002, FINDING-097, FINDING-099 |
-| **1.3.4** | SVG Scriptable Content Validation | ❌ Fail | FINDING-001, FINDING-003, FINDING-004 |
-| **1.3.5** | Template Language Content Sanitization | ❌ Fail | FINDING-001, FINDING-002, FINDING-003, FINDING-021 |
-| **1.3.6** | SSRF Protection | ⚠️ Partial | FINDING-038, PSC-019 |
-| **1.3.7** | Template Injection Protection | ❌ Fail | FINDING-002, FINDING-021, PSC-018 |
-| **1.3.8** | JNDI Query Sanitization | ⚠️ Partial | FINDING-097 |
-| **1.3.9** | Memcache Injection Sanitization | N/A | Not applicable |
-| **1.3.10** | Format String Sanitization | ❌ Fail | FINDING-002, FINDING-003, FINDING-021 |
-| **1.3.11** | SMTP/IMAP Injection Sanitization | ❌ Fail | FINDING-098 |
-| **1.3.12** | ReDoS/Runaway Regex Protection | ✅ Pass | PSC-010, PSC-016 |
-| **1.4.1** | Memory Safety Analysis | ✅ Pass | PSC-008 |
-| **1.4.2** | Integer Overflow Prevention | ⚠️ Partial | FINDING-094, PSC-006, PSC-007 |
-| **1.4.3** | Dynamic Resource Release | ❌ Fail | FINDING-095 |
-| **1.5.1** | XML Parser Restrictive Configuration | ✅ Pass | No XML parsing |
-| **1.5.2** | Deserialization Safe Input Handling | ✅ Pass | PSC-020, PSC-041 |
-| **1.5.3** | Parser Consistency | ❌ Fail | FINDING-100, FINDING-101, FINDING-102 |
-| **2.1.1** | Validation and Business Logic Documentation | ✅ Pass | Documentation exists |
-| **2.1.2** | Logical/Contextual Data Consistency | ❌ Fail | FINDING-005, FINDING-006, FINDING-097, FINDING-105 |
-| **2.1.3** | Validation Documentation | ❌ Fail | FINDING-005, FINDING-006, FINDING-097, FINDING-107 |
-| **2.2.1** | Input Validation | ❌ Fail | FINDING-097 |
-| **2.2.2** | Trusted Service Layer Validation | ❌ Fail | FINDING-097 |
-| **2.2.3** | Reasonable Data Combinations | ❌ Fail | FINDING-097, FINDING-105, FINDING-106 |
-| **2.3.1** | Sequential Flow Enforcement | ❌ Fail | FINDING-005, FINDING-097 |
-| **2.3.2** | Business Logic Limits | ❌ Fail | FINDING-005, FINDING-006, FINDING-007, FINDING-104, FINDING-107 |
-| **2.3.3** | Transaction Atomicity | ❌ Fail | FINDING-022, FINDING-023, FINDING-103 |
-| **2.3.4** | Business Logic Level Locking | ❌ Fail | FINDING-005, FINDING-022, FINDING-023, FINDING-024 |
-| **2.3.5** | Multi-user Approval for High-Value Ops | ❌ Fail | FINDING-006, FINDING-007, FINDING-025 |
-| **2.4.1** | Anti-Automation Controls | ❌ Fail | FINDING-026, FINDING-107, FINDING-108 |
-| **2.4.2** | Realistic Human Timing | ❌ Fail | FINDING-026, FINDING-108 |
-| **3.1.1** | Web Frontend Security Documentation | ❌ Fail | FINDING-118, FINDING-228, FINDING-229 |
-| **3.2.1** | Unintended Content Interpretation | ❌ Fail | FINDING-027, FINDING-109, FINDING-110 |
-| **3.2.2** | Unintended Content Interpretation | ❌ Fail | FINDING-002, FINDING-003, FINDING-021, FINDING-031, FINDING-114 |
-| **3.2.3** | DOM Clobbering Prevention | ❌ Fail | FINDING-115, FINDING-116, FINDING-117 |
-| **3.3.1** | Cookie Setup | ❌ Fail | FINDING-028, FINDING-111 |
-| **3.3.2** | Cookie SameSite Attribute | ❌ Fail | FINDING-029, FINDING-030 |
-| **3.3.3** | Cookie __Host- Prefix Requirement | ❌ Fail | FINDING-111 |
-| **3.3.4** | Cookie Setup | ⚠️ Partial | FINDING-112 |
-| **3.3.5** | Cookie Setup | ❌ Fail | FINDING-113 |
-| **3.4.1** | Strict Transport Security | ❌ Fail | FINDING-118 |
-| **3.4.2** | CORS Configuration | ✅ Pass | PSC-050 |
-| **3.4.3** | Content-Security-Policy Header | ❌ Fail | FINDING-032, FINDING-121 |
-| **3.4.4** | X-Content-Type-Options | ❌ Fail | FINDING-119 |
-| **3.4.5** | Referrer Policy | ❌ Fail | FINDING-120 |
-| **3.4.6** | frame-ancestors directive | ❌ Fail | FINDING-032 |
-| **3.4.7** | CSP Violation Reporting | ❌ Fail | FINDING-121 |
-| **3.4.8** | Cross-Origin-Opener-Policy | ❌ Fail | FINDING-122 |
-| **3.5.1** | CSRF Protection | ❌ Fail | FINDING-007, FINDING-008, FINDING-033 |
-| **3.5.2** | CORS Preflight Bypass Prevention | ❌ Fail | FINDING-007, FINDING-034, FINDING-123 |
-| **3.5.3** | HTTP Method Appropriateness | ❌ Fail | FINDING-007 |
-| **3.5.4** | Browser Origin Separation | ❌ Fail | FINDING-034 |
-| **3.5.5** | postMessage Origin Validation | N/A | PSC-056 |
-| **3.5.6** | JSONP/XSSI Prevention | ✅ Pass | PSC-057 |
-| **3.5.7** | Authorized Data in Script Resources | ✅ Pass | PSC-058 |
-| **3.5.8** | Cross-Origin Resource Loading Protection | ❌ Fail | FINDING-035, FINDING-036, FINDING-124 |
-| **3.6.1** | External Resource Integrity | ⚠️ Partial | FINDING-209, FINDING-230, FINDING-231, PSC-011 |
-| **3.7.1** | Client-Side Technology Security | ✅ Pass | PSC-059 |
-| **3.7.2** | Automatic Redirect Allowlist | ✅ Pass | PSC-061, PSC-062 |
-| **3.7.3** | External URL Navigation Warning | ❌ Fail | FINDING-125 |
-| **3.7.4** | HSTS Preload List | ❌ Fail | FINDING-118 |
-| **3.7.5** | Browser Security Feature Detection | ❌ Fail | FINDING-126 |
-| **4.1.1** | Content-Type Header Validation | ❌ Fail | FINDING-127, FINDING-128 |
-| **4.1.2** | API and Web Service Security | ❌ Fail | FINDING-129, FINDING-130 |
-| **4.1.3** | Proxy Header Protection | ❌ Fail | FINDING-131 |
-| **4.1.4** | HTTP Method Restriction | ❌ Fail | FINDING-007, FINDING-132 |
-| **4.1.5** | Per-Message Digital Signatures | ❌ Fail | FINDING-037, FINDING-132 |
-| **4.2.1** | HTTP Message Structure Validation | ⚠️ Partial | FINDING-133, FINDING-134 |
-| **4.2.2** | HTTP Message Structure Validation | ✅ Pass | PSC-063 |
-| **4.2.3** | HTTP/2 & HTTP/3 Header Validation | ❌ Fail | FINDING-135 |
-| **4.2.4** | CRLF Injection Prevention | ❌ Fail | FINDING-136, FINDING-137 |
-| **4.2.5** | Overly Long URI/Header Prevention | ❌ Fail | FINDING-138 |
-| **4.3.1** | GraphQL DoS Prevention | N/A | Not applicable |
-| **4.3.2** | GraphQL Introspection | N/A | Not applicable |
-| **4.4.1** | WebSocket over TLS | ⚠️ Partial | FINDING-011 |
-| **4.4.2** | WebSocket Origin Validation | ❌ Fail | FINDING-139 |
-| **4.4.3** | WebSocket Session Management | N/A | FINDING-140 |
-| **4.4.4** | WebSocket Session Token Validation | N/A | Not applicable |
-| **5.1.1** | File Handling Documentation | ❌ Fail | FINDING-038, FINDING-141, FINDING-142 |
-| **5.2.1** | File Upload Size Limits | N/A | Not applicable |
-| **5.2.2** | File Upload Content Validation | ⚠️ Partial | FINDING-038 |
-| **5.2.3** | Compressed File Validation | N/A | Not applicable |
-| **5.2.4** | File Size Quota Per User | N/A | Not applicable |
-| **5.2.5** | Compressed File Symlink Validation | N/A | Not applicable |
-| **5.2.6** | Image Pixel Size Validation | N/A | Not applicable |
-| **5.3.1** | Server-Side Execution Prevention | ⚠️ Partial | FINDING-038 |
-| **5.3.2** | File Path Security | ❌ Fail | FINDING-039 |
-| **5.3.3** | Server-Side File Processing Path | N/A | Not applicable |
-| **5.4.1** | File Download Filename Validation | ❌ Fail | FINDING-038 |
-| **5.4.2** | File Name Encoding/Sanitization | N/A | Not applicable |
-| **5.4.3** | Antivirus Scanning | ❌ Fail | FINDING-143 |
-| **6.1.1** | Authentication Documentation | ❌ Fail | FINDING-144, FINDING-145 |
-| **6.1.3** | Multiple Authentication Pathways | ❌ Fail | FINDING-006 |
-| **6.3.1** | Brute Force Prevention | ❌ Fail | FINDING-040, FINDING-146 |
-| **6.3.2** | Default User Accounts | ✅ Pass | No default accounts |
-| **6.3.3** | Multi-Factor Authentication | ❌ Fail | Delegated to OAuth provider |
-| **6.3.8** | User Enumeration Protection | ⚠️ Partial | Limited protection |
-| **6.6.3** | OOB Brute Force Protection | ❌ Fail | FINDING-147 |
-| **7.1.1** | Session Timeout Documentation | ❌ Fail | FINDING-041, FINDING-149 |
-| **7.1.2** | Concurrent Session Limits | ❌ Fail | FINDING-150 |
-| **7.1.3** | Federated Identity Session Management | ❌ Fail | FINDING-041, FINDING-042, FINDING-044 |
-| **7.2.1** | Fundamental Session Management | ⚠️ Partial | FINDING-148, PSC-042 |
-| **7.2.2** | Dynamic Token Generation | ✅ Pass | Delegated to framework |
-| **7.2.3** | Session Token Entropy | ⚠️ Partial | FINDING-184 |
-| **7.2.4** | Session Regeneration | ❌ Fail | FINDING-042, FINDING-043, FINDING-044 |
-| **7.3.1** | Inactivity Timeout | ❌ Fail | FINDING-041, FINDING-042 |
-| **7.3.2** | Absolute Maximum Lifetime | ❌ Fail | FINDING-041 |
-| **7.4.1** | Session Termination on Logout | ❌ Fail | FINDING-042 |
-| **7.4.2** | Session Termination on Account Change | ❌ Fail | FINDING-045 |
-| **7.4.3** | Session Termination on Factor Change | ❌ Fail | FINDING-046 |
-| **7.4.4** | Logout Functionality Visibility | ✅ Pass | Logout link present |
-| **7.4.5** | Administrator Session Termination | ❌ Fail | FINDING-047 |
-| **7.5.1** | Re-authentication for Account Mods | ✅ Pass | Not applicable (no account modification) |
-| **7.5.2** | View and Terminate Active Sessions | ❌ Fail | FINDING-048 |
-| **7.5.3** | Re-authentication for Sensitive Ops | ❌ Fail | FINDING-044 |
-| **7.6.1** | Federated Re-authentication | ❌ Fail | FINDING-041, FINDING-042 |
-| **7.6.2** | Explicit User Consent for Session | ❌ Fail | FINDING-148, FINDING-151 |
-| **8.1.1** | Authorization Documentation | ❌ Fail | FINDING-006, FINDING-049, FINDING-152 |
-| **8.1.2** | Field-Level Authorization Documentation | ❌ Fail | FINDING-005, FINDING-006, FINDING-049, FINDING-050, FINDING-152 |
-| **8.1.3** | Environmental/Contextual Authorization | ❌ Fail | FINDING-005, FINDING-050, FINDING-152 |
-| **8.1.4** | Authorization Decision-Making Documentation | ❌ Fail | FINDING-005, FINDING-006, FINDING-007, FINDING-049, FINDING-152 |
-| **8.2.1** | Function-Level Access Control | ✅ Pass | PSC-038, PSC-039 |
-| **8.2.2** | Data-Specific Access Control (IDOR) | ❌ Fail | FINDING-006, FINDING-009, FINDING-049 |
-| **8.2.3** | Field-Level Access Control (BOPLA) | ❌ Fail | FINDING-006, FINDING-051, FINDING-154 |
-| **8.2.4** | Adaptive Security Controls | ❌ Fail | No adaptive controls |
-| **8.3.1** | Operation Level Authorization | ❌ Fail | FINDING-006, FINDING-007, FINDING-153 |
-| **8.3.2** | Immediate Application of Changes | ❌ Fail | FINDING-049 |
-| **8.3.3** | Subject-Based Permission Enforcement | ❌ Fail | FINDING-006, FINDING-009, FINDING-049 |
-| **8.4.1** | Multi-Tenant Cross-Tenant Control | ❌ Fail | FINDING-006, FINDING-009, FINDING-049 |
-| **8.4.2** | Administrative Interface Security | ❌ Fail | No additional security layer |
-| **9.1.1** | Self-Contained Token Integrity | ❌ Fail | FINDING-104 |
-| **9.2.1** | Time-based Validity Verification | ⚠️ Partial | FINDING-155 |
-| **9.2.4** | Token Audience Restriction | ✅ Pass | Single-application scope |
-| **10.1.1** | Token Distribution Restriction | ⚠️ Partial | FINDING-156, FINDING-157 |
-| **10.1.2** | Transaction Binding | ❌ Fail | FINDING-158, FINDING-159 |
-| **10.2.1** | CSRF Protection in Authorization Flow | ❌ Fail | FINDING-158, FINDING-159 |
-| **10.2.3** | Required Scopes Only | ❌ Fail | FINDING-160 |
-| **10.3.1** | Resource Server Audience Validation | ❌ Fail | FINDING-156 |
-| **10.3.2** | Delegated Authorization Claims | ❌ Fail | FINDING-006, FINDING-049, FINDING-160 |
-| **10.3.3** | User Identity from Access Tokens | ❌ Fail | FINDING-161 |
-| **10.3.4** | Authentication Strength Verification | ❌ Fail | FINDING-162, FINDING-163 |
-| **10.3.5** | Sender-Constrained Access Tokens | ❌ Fail | FINDING-052 |
-| **10.4.6** | PKCE for Authorization Code Flow | ❌ Fail | FINDING-158 |
-| **10.4.8** | Refresh Token Absolute Expiration | ❌ Fail | FINDING-167 |
-| **10.4.9** | Token Revocation | ❌ Fail | FINDING-042 |
-| **10.4.10** | Client Authentication for Backchannel | ❌ Fail | FINDING-164 |
-| **10.4.11** | Required Scopes Assignment | ❌ Fail | FINDING-006, FINDING-049, FINDING-160 |
-| **10.4.12** | Response Mode Validation | ⚠️ Partial | FINDING-165 |
-| **10.4.13** | PAR Requirement | ❌ Fail | FINDING-053 |
-| **10.4.14** | Sender-Constrained Access Tokens | ❌ Fail | FINDING-052 |
-| **10.4.15** | Server-Side Parameter Integrity | ❌ Fail | FINDING-053 |
-| **10.4.16** | Client Auth with Public-Key Crypto | ❌ Fail | FINDING-054 |
-| **10.5.1** | ID Token Replay Mitigation | ❌ Fail | FINDING-168 |
-| **10.5.2** | Unique User Identification | ❌ Fail | FINDING-055, FINDING-169 |
-| **10.5.3** | Issuer Validation | ❌ Fail | FINDING-170 |
-| **10.5.4** | ID Token Audience Validation | ❌ Fail | FINDING-056 |
-| **10.6.1** | Response Mode Restrictions | ⚠️ Partial | FINDING-171 |
-| **10.6.2** | Forced Logout DoS Mitigation | ❌ Fail | FINDING-042 |
-| **10.7.1** | User Consent for Authorization | ⚠️ Partial | FINDING-172 |
-| **10.7.2** | Clear Consent Information | ❌ Fail | FINDING-173, FINDING-174, FINDING-175 |
-| **10.7.3** | Review/Modify/Revoke Consents | ❌ Fail | FINDING-176 |
-| **11.1.1** | Cryptographic Key Management Policy | ❌ Fail | FINDING-012, FINDING-062, FINDING-181 |
-| **11.1.2** | Cryptographic Inventory | ❌ Fail | FINDING-012, FINDING-062, FINDING-181, FINDING-182 |
-| **11.1.3** | Discovery Mechanisms | ❌ Fail | FINDING-012, FINDING-062, FINDING-181, FINDING-182 |
-| **11.1.4** | PQC Migration Plan | ❌ Fail | FINDING-062 |
-| **11.2.1** | Secure Cryptography Implementation | ⚠️ Partial | FINDING-012, FINDING-181, FINDING-182 |
-| **11.2.2** | Crypto Agility | ❌ Fail | FINDING-063, FINDING-076 |
-| **11.2.3** | Minimum 128-bit Security | ⚠️ Partial | FINDING-012, FINDING-182 |
-| **11.2.4** | Constant-Time Operations | ❌ Fail | FINDING-181, FINDING-182 |
-| **11.2.5** | Secure Failure | ⚠️ Partial | FINDING-183 |
-| **11.3.1** | Insecure Block Modes | ✅ Pass | No ECB mode |
-| **11.3.2** | Approved Ciphers and Modes | ❌ Fail | FINDING-012 |
-| **11.3.3** | Authenticated Encryption | ⚠️ Partial | FINDING-012, FINDING-181, FINDING-182 |
-| **11.3.4** | Nonce and IV Uniqueness | ⚠️ Partial | FINDING-012 |
-| **11.3.5** | Encrypt-then-MAC Mode | ⚠️ Partial | FINDING-012 |
-| **11.4.1** | Hash Function Usage | ✅ Pass | SHA-256 used |
-| **11.4.2** | Password Storage with KDF | ❌ Fail | FINDING-181, FINDING-182 |
-| **11.4.3** | Hash Function Security | ⚠️ Partial | FINDING-182, FINDING-185 |
-| **11.4.4** | KDF Parameters | ⚠️ Partial | FINDING-182, FINDING-185 |
-| **11.5.1** | Random Values | ⚠️ Partial | FINDING-184 |
-| **11.5.2** | Random Number Generation Under Load | ✅ Pass | secrets module used |
-| **11.6.1** | Approved Algorithms | ⚠️ Partial | FINDING-012, FINDING-104, FINDING-181, FINDING-182 |
-| **11.6.2** | Key Exchange and Parameters | ⚠️ Partial | FINDING-012, FINDING-104, FINDING-181, FINDING-182 |
-| **11.7.1** | Full Memory Encryption | ❌ Fail | FINDING-092, FINDING-181 |
-| **11.7.2** | Data Minimization and Encryption | ⚠️ Partial | FINDING-092, FINDING-182, FINDING-234 |
-| **12.1.1** | Secure Communication | ❌ Fail | FINDING-010, FINDING-011 |
-| **12.1.2** | Cipher Suite Configuration | ❌ Fail | FINDING-057, FINDING-177, FINDING-178 |
-| **12.1.3** | mTLS Certificate Validation | ❌ Fail | FINDING-060, FINDING-177 |
-| **12.1.4** | Certificate Revocation (OCSP) | ❌ Fail | FINDING-058, FINDING-178, FINDING-179 |
-| **12.1.5** | Encrypted Client Hello (ECH) | ❌ Fail | FINDING-059 |
-| **12.2.1** | HTTPS for External Services | ❌ Fail | FINDING-011, FINDING-061 |
-| **12.2.2** | Publicly Trusted TLS Certificates | ❌ Fail | FINDING-061 |
-| **12.3.1** | Encrypted Protocol Enforcement | ❌ Fail | FINDING-010, FINDING-011, FINDING-057, FINDING-177 |
-| **12.3.2** | TLS Certificate Validation | ❌ Fail | FINDING-061, FINDING-179 |
-| **12.3.3** | HTTP-based Services Security | ❌ Fail | FINDING-011, FINDING-057, FINDING-177 |
-| **12.3.4** | Trusted Certificates | ❌ Fail | FINDING-057, FINDING-060, FINDING-180 |
-| **12.3.5** | Strong Authentication | ❌ Fail | FINDING-060, FINDING-180 |
-| **13.1.1** | Communication Documentation | ❌ Fail | FINDING-186, FINDING-187 |
-| **13.1.2** | Connection Limits and Fallback | ❌ Fail | FINDING-064, FINDING-065, FINDING-189, FINDING-190 |
-| **13.1.3** | Resource Management Documentation | ❌ Fail | FINDING-190 |
-| **13.1.4** | Secrets Documentation and Rotation | ❌ Fail | FINDING-066, FINDING-067, FINDING-191 |
-| **13.2.1** | Backend Communication Configuration | ⚠️ Partial | FINDING-164, FINDING-192 |
-| **13.2.2** | Least Privilege Communication | ❌ Fail | FINDING-005, FINDING-193 |
-| **13.2.3** | No Default Credentials | ✅ Pass | No default credentials |
-| **13.2.4** | Communication Allowlist | ❌ Fail | FINDING-194, FINDING-195 |
-| **13.2.5** | Encrypted Communication | ❌ Fail | FINDING-194 |
-| **13.2.6** | Connection Configuration | ❌ Fail | FINDING-064, FINDING-190, FINDING-196 |
-| **13.3.1** | Secrets Management Solution | ❌ Fail | FINDING-068, FINDING-069 |
-| **13.3.2** | Least Privilege Access to Secrets | ⚠️ Partial | FINDING-197 |
-| **13.3.3** | Isolated Security Module | ❌ Fail | FINDING-070, FINDING-183, FINDING-198 |
-| **13.3.4** | Secret Expiration and Rotation | ❌ Fail | FINDING-067, FINDING-069, FINDING-180, FINDING-199 |
-| **13.4.1** | Source Control Metadata Exclusion | ⚠️ Partial | .gitignore present |
-| **13.4.2** | Unintended Information Leakage | ❌ Fail | FINDING-188, FINDING-200 |
-| **13.4.3** | Directory Listings | ✅ Pass | Framework prevents |
-| **13.4.4** | HTTP TRACE Blocking | ❌ Fail | FINDING-201 |
-| **13.4.5** | Documentation/Monitoring Endpoints | ❌ Fail | FINDING-202, FINDING-203 |
-| **13.4.6** | Backend Version Disclosure | ❌ Fail | FINDING-188, FINDING-204 |
-| **13.4.7** | File Extension Restrictions | ⚠️ Partial | FINDING-205, FINDING-206 |
-| **14.1.1** | Data Protection Documentation | ❌ Fail | FINDING-007, FINDING-071, FINDING-073 |
-| **14.1.2** | Data Protection Documentation | ❌ Fail | FINDING-006, FINDING-072, FINDING-073, FINDING-207, FINDING-224 |
-| **14.2.1** | Sensitive Data in URLs | ✅ Pass | No sensitive data in URLs |
-| **14.2.2** | Server Component Cache Prevention | ❌ Fail | FINDING-073, FINDING-208 |
-| **14.2.3** | Sensitive Data to Untrusted Parties | ❌ Fail | FINDING-209 |
-| **14.2.4** | Controls Around Sensitive Data | ❌ Fail | FINDING-006, FINDING-007, FINDING-073, FINDING-100, FINDING-207, FINDING-224 |
-| **14.2.5** | Cache Control and WCD Prevention | ❌ Fail | FINDING-073, FINDING-208 |
-| **14.2.6** | Minimum Sensitive Data Return | ❌ Fail | FINDING-074, FINDING-210, FINDING-211 |
-| **14.2.7** | Data Retention Classification | ❌ Fail | FINDING-075, FINDING-076, FINDING-212, FINDING-213 |
-| **14.2.8** | Metadata Removal | ❌ Fail | FINDING-214 |
-| **14.3.1** | Authenticated Data Clearing | ❌ Fail | FINDING-013 |
-| **14.3.2** | Cache-Control for Sensitive Data | ❌ Fail | FINDING-073 |
-| **14.3.3** | Browser Storage of Sensitive Data | ⚠️ Partial | FINDING-215 |
-| **15.1.1** | Risk-Based Remediation Timeframes | ❌ Fail | FINDING-014 |
-| **15.1.2** | SBOM and Library Inventory | ❌ Fail | FINDING-014, FINDING-217 |
-| **15.1.3** | Resource-Intensive Functionality Doc | ❌ Fail | FINDING-078 |
-| **15.1.4** | Risky Third-Party Components Doc | ❌ Fail | FINDING-077, FINDING-182 |
-| **15.1.5** | Dangerous Functionality Documentation | ❌ Fail | FINDING-005, FINDING-079, FINDING-182 |
-| **15.2.1** | Component Update Timeframes | ❌ Fail | FINDING-014 |
-| **15.2.2** | Resource-Demanding Functionality Defense | ❌ Fail | FINDING-078, FINDING-219 |
-| **15.2.3** | Production Environment Functionality | ⚠️ Partial | FINDING-188, FINDING-218 |
-| **15.2.4** | Repository Verification | ❌ Fail | FINDING-216, FINDING-217 |
-| **15.2.5** | Dangerous Functionality Protections | ❌ Fail | FINDING-080 |
-| **15.3.1** | Data Minimization in Responses | ❌ Fail | FINDING-210, FINDING-211 |
-| **15.3.2** | External URL Redirect Following | ✅ Pass | No automatic following |
-| **15.3.3** | Mass Assignment Protection | ⚠️ Partial | Limited exposure |
-| **15.3.4** | IP Address Handling | ❌ Fail | FINDING-131 |
-| **15.3.5** | Type Safety and Strict Equality | ❌ Fail | FINDING-219 |
-| **15.3.6** | Prototype Pollution Prevention | ⚠️ Partial | Limited JavaScript |
-| **15.3.7** | HTTP Parameter Pollution Defense | ⚠️ Partial | Framework handling |
-| **15.4.1** | Safe Concurrency | ❌ Fail | FINDING-005, FINDING-019, FINDING-023, FINDING-024, FINDING-089 |
-| **15.4.2** | TOCTOU Prevention | ❌ Fail | FINDING-019, FINDING-024, FINDING-089, FINDING-090 |
-| **15.4.3** | Safe Concurrency | ❌ Fail | FINDING-005, FINDING-023, FINDING-024, FINDING-089 |
-| **15.4.4** | Resource Allocation | ❌ Fail | FINDING-091, FINDING-235 |
-| **16.1.1** | Security Logging Documentation | ❌ Fail | FINDING-015, FINDING-016, FINDING-081, FINDING-082, FINDING-222, FINDING-223, FINDING-224 |
-| **16.2.1** | Log Entry Metadata | ❌ Fail | FINDING-015, FINDING-016, FINDING-081, FINDING-221 |
-| **16.2.2** | Time Source Synchronization | ❌ Fail | FINDING-016, FINDING-220 |
-| **16.2.3** | Log Destination Documentation | ❌ Fail | FINDING-015, FINDING-224, FINDING-226 |
-| **16.2.4** | Log Format and Correlation | ❌ Fail | FINDING-015, FINDING-220, FINDING-224 |
-| **16.2.5** | Sensitive Data Logging Protection | ⚠️ Partial | FINDING-223, FINDING-224 |
-| **16.3.1** | Authentication Operation Logging | ❌ Fail | FINDING-016, FINDING-082, FINDING-221 |
-| **16.3.2** | Failed Authorization Logging | ❌ Fail | FINDING-016, FINDING-081 |
-| **16.3.3** | Security Events Logging | ❌ Fail | FINDING-015, FINDING-081, FINDING-083, FINDING-084, FINDING-222 |
-| **16.4.1** | Prevent Log Injection | ❌ Fail | FINDING-222, FINDING-224, FINDING-225 |
-| **16.4.2** | Log Protection | ❌ Fail | FINDING-085, FINDING-224 |
-| **16.4.3** | Secure Log Transmission | ❌ Fail | FINDING-085 |
-| **16.5.1** | Generic Error Messages | ❌ Fail | FINDING-017, FINDING-018 |
-| **16.5.2** | Graceful Degradation | ❌ Fail | FINDING-023, FINDING-088, FINDING-103, FINDING-227 |
-| **16.5.3** | Graceful and Secure Failure | ❌ Fail | FINDING-084, FINDING-086 |
-| **16.5.4** | Last Resort Exception Handler | ❌ Fail | FINDING-017, FINDING-087 |
-
-**Summary Statistics:**
-- ✅ **Pass**: 31 (15.4%)
-- ⚠️ **Partial**: 32 (15.9%)
-- ❌ **Fail**: 122 (60.7%)
-- **N/A**: 16 (8.0%)
+| ASVS ID | Status | Title | Related Findings |
+|---------|--------|-------|------------------|
+| 1.1.1 | **Fail** | Encoding and Sanitization Architecture | FINDING-001, FINDING-002, FINDING-003, FINDING-091 |
+| 1.1.2 | **Fail** | Encoding and Sanitization Architecture | FINDING-001, FINDING-002, FINDING-003, FINDING-091 |
+| 1.2.1 | **Fail** | Output Encoding for HTTP Response Context | FINDING-001, FINDING-002, FINDING-003, FINDING-091 |
+| 1.2.2 | **Fail** | Injection Prevention - Dynamic URL Building with Untrusted Data | FINDING-003 |
+| 1.2.3 | **Fail** | JavaScript/JSON Injection Prevention | FINDING-002 |
+| 1.2.4 | **Pass** | Injection Prevention - Parameterized Queries | PSC-001 |
+| 1.2.5 | **Pass** | OS Command Injection Prevention | PSC-010 |
+| 1.2.6 | **Pass** | LDAP Injection Prevention | PSC-004 |
+| 1.2.7 | **Fail** | XPath Injection Prevention / Injection Prevention | FINDING-095 |
+| 1.2.8 | **N/A** | LaTeX Processor Security Configuration | — |
+| 1.2.9 | **Partial** | Injection Prevention - Encoding and Sanitization | FINDING-003 |
+| 1.2.10 | **Fail** | CSV and Formula Injection Protection | FINDING-094 |
+| 1.3.1 | **Fail** | HTML input from WYSIWYG sanitization | FINDING-003, FINDING-004 |
+| 1.3.2 | **Pass** | Avoid eval() and dynamic code execution | PSC-019 |
+| 1.3.3 | **Fail** | Data sanitization before dangerous contexts | FINDING-002, FINDING-095, FINDING-098 |
+| 1.3.4 | **Fail** | SVG scriptable content validation | FINDING-003, FINDING-004 |
+| 1.3.5 | **Fail** | Template language content sanitization | FINDING-001, FINDING-002, FINDING-003, FINDING-022 |
+| 1.3.6 | **Partial** | SSRF protection | PSC-021, FINDING-097 |
+| 1.3.7 | **Fail** | Template injection protection | FINDING-002, FINDING-022, PSC-020 |
+| 1.3.8 | **Partial** | JNDI query sanitization | FINDING-095 |
+| 1.3.9 | **N/A** | Memcache injection sanitization | — |
+| 1.3.10 | **Fail** | Format string sanitization | FINDING-002, FINDING-003, FINDING-004, FINDING-022 |
+| 1.3.11 | **Fail** | SMTP/IMAP injection sanitization | FINDING-096 |
+| 1.3.12 | **Pass** | ReDoS prevention | PSC-011, PSC-018 |
+| 1.4.1 | **Pass** | Memory Safety Analysis | PSC-009 |
+| 1.4.2 | **Partial** | Integer Overflow Prevention | PSC-007, PSC-008, FINDING-092 |
+| 1.4.3 | **Fail** | Dynamic Resource Release | FINDING-093 |
+| 1.5.1 | **Pass** | XML parser restrictive configuration | — |
+| 1.5.2 | **Pass** | Safe deserialization | PSC-006, PSC-022, PSC-023, PSC-041 |
+| 1.5.3 | **Fail** | Parser consistency | FINDING-099, FINDING-100, FINDING-101 |
+| 2.1.1 | **Pass** | Validation and Business Logic Documentation | PSC-038 |
+| 2.1.2 | **Fail** | Combined data item consistency validation | FINDING-005, FINDING-095, FINDING-104 |
+| 2.1.3 | **Fail** | Validation and Business Logic Documentation | FINDING-005, FINDING-038, FINDING-095, FINDING-106 |
+| 2.2.1 | **Fail** | Input Validation | FINDING-095 |
+| 2.2.2 | **Fail** | Input Validation at Trusted Service Layer | FINDING-095 |
+| 2.2.3 | **Fail** | Reasonable data combinations verification | FINDING-095, FINDING-104, FINDING-105 |
+| 2.3.1 | **Fail** | Business Logic Sequential Flow Enforcement | FINDING-005, FINDING-095, PSC-016, PSC-024, PSC-025, PSC-033, PSC-036 |
+| 2.3.2 | **Fail** | Business Logic Limits Implementation | FINDING-005, FINDING-095, FINDING-103, PSC-031 |
+| 2.3.3 | **Fail** | Transaction Atomicity | FINDING-023, FINDING-024, FINDING-102, PSC-028, PSC-035 |
+| 2.3.4 | **Fail** | Business Logic Level Locking | FINDING-005, FINDING-023, FINDING-024, FINDING-025 |
+| 2.3.5 | **Fail** | Multi-user Approval for High-Value Operations | FINDING-006, FINDING-007, FINDING-026 |
+| 2.4.1 | **Fail** | Anti-Automation Controls | FINDING-027, FINDING-106, FINDING-107 |
+| 2.4.2 | **Fail** | Realistic Human Timing | FINDING-027, FINDING-107 |
+| 3.1.1 | **Fail** | Web Frontend Security Documentation | FINDING-118, FINDING-121, FINDING-232, FINDING-233 |
+| 3.2.1 | **Fail** | Unintended Content Interpretation | FINDING-028, FINDING-108, FINDING-109 |
+| 3.2.2 | **Fail** | Unintended Content Interpretation | FINDING-002, FINDING-003, FINDING-031, FINDING-113, FINDING-114 |
+| 3.2.3 | **Fail** | DOM Clobbering Prevention | FINDING-115, FINDING-116, FINDING-117 |
+| 3.3.1 | **Fail** | Cookie Setup | FINDING-029, FINDING-110 |
+| 3.3.2 | **Fail** | Cookie SameSite Attribute | FINDING-007, FINDING-030 |
+| 3.3.3 | **Fail** | Cookie __Host- Prefix Requirement | FINDING-110 |
+| 3.3.4 | **Partial** | Cookie Setup | FINDING-111 |
+| 3.3.5 | **Fail** | Cookie Setup | FINDING-112 |
+| 3.4.1 | **Fail** | Strict Transport Security | FINDING-118 |
+| 3.4.2 | **Pass** | CORS Configuration | PSC-046 |
+| 3.4.3 | **Fail** | Content-Security-Policy Response Header | FINDING-032, FINDING-121 |
+| 3.4.4 | **Fail** | X-Content-Type-Options | FINDING-119 |
+| 3.4.5 | **Fail** | Referrer Policy | FINDING-120 |
+| 3.4.6 | **Fail** | frame-ancestors directive | FINDING-032 |
+| 3.4.7 | **Fail** | CSP Violation Reporting | FINDING-121 |
+| 3.4.8 | **Fail** | Cross-Origin-Opener-Policy Header | FINDING-122 |
+| 3.5.1 | **Fail** | CSRF Protection for Sensitive Functionality | FINDING-007, FINDING-008, FINDING-009, FINDING-033, PSC-042 |
+| 3.5.2 | **Fail** | CORS Preflight Bypass Prevention | FINDING-009, FINDING-034, FINDING-123, PSC-050 |
+| 3.5.3 | **Fail** | HTTP Method Appropriateness | FINDING-007, FINDING-009, PSC-049 |
+| 3.5.4 | **Fail** | Browser Origin Separation via Hostname | FINDING-034, PSC-051 |
+| 3.5.5 | **N/A** | postMessage Interface Origin Validation | PSC-052 |
+| 3.5.6 | **Pass** | JSONP / XSSI Prevention | PSC-053 |
+| 3.5.7 | **Pass** | Authorized Data in Script Resources Prevention | PSC-054 |
+| 3.5.8 | **Fail** | Authenticated Resource Cross-Origin Loading Protection | FINDING-035, FINDING-036, FINDING-124 |
+| 3.6.1 | **Partial** | External Resource Integrity | PSC-013, FINDING-234, FINDING-235, FINDING-236 |
+| 3.7.1 | **Pass** | Client-Side Technology Security | PSC-055, PSC-056 |
+| 3.7.2 | **Pass** | Automatic Redirect Allowlist Validation | PSC-057, PSC-058 |
+| 3.7.3 | **Fail** | External URL Navigation Warning | FINDING-125 |
+| 3.7.4 | **Fail** | HSTS Preload List | FINDING-118 |
+| 3.7.5 | **Fail** | Browser Security Feature Detection | FINDING-126 |
+| 4.1.1 | **Fail** | Content-Type Header Validation | FINDING-127, FINDING-128 |
+| 4.1.2 | **Fail** | API and Web Service | FINDING-129, FINDING-130 |
+| 4.1.3 | **Fail** | Proxy Header Protection | FINDING-131 |
+| 4.1.4 | **Fail** | HTTP Method Restriction | FINDING-007, FINDING-009 |
+| 4.1.5 | **Fail** | Per-Message Digital Signatures | FINDING-037, FINDING-132 |
+| 4.2.1 | **Partial** | HTTP Message Structure Validation | FINDING-133, FINDING-134 |
+| 4.2.2 | **Pass** | HTTP Message Structure Validation | PSC-059 |
+| 4.2.3 | **Fail** | HTTP/2 Connection-Specific Header Validation | FINDING-135 |
+| 4.2.4 | **Fail** | HTTP Message Structure Validation | FINDING-136, FINDING-137 |
+| 4.2.5 | **Fail** | Overly Long URI/Header Prevention | FINDING-138 |
+| 4.3.1 | **N/A** | GraphQL DoS prevention | — |
+| 4.3.2 | **N/A** | GraphQL Introspection Queries | — |
+| 4.4.1 | **Partial** | WebSocket over TLS | FINDING-014 |
+| 4.4.2 | **Fail** | WebSocket Origin Header Validation | FINDING-139 |
+| 4.4.3 | **N/A** | WebSocket Session Management | — |
+| 4.4.4 | **N/A** | WebSocket Session Management Token Validation | — |
+| 5.1.1 | **Fail** | File Handling Documentation | FINDING-038, FINDING-140, FINDING-141 |
+| 5.2.1 | **N/A** | File Upload Size Limits | — |
+| 5.2.2 | **Partial** | File Upload and Content Validation | FINDING-038 |
+| 5.2.3 | **N/A** | Compressed File Validation | — |
+| 5.2.4 | **N/A** | File Size Quota Per User | — |
+| 5.2.5 | **N/A** | Compressed File Symlink Validation | — |
+| 5.2.6 | **N/A** | Image Pixel Size Validation | — |
+| 5.3.1 | **Partial** | Prevention of Server-Side Execution | FINDING-038 |
+| 5.3.2 | **Fail** | File Path Security | FINDING-039, PSC-005 |
+| 5.3.3 | **N/A** | Server-Side File Processing Path Validation | — |
+| 5.4.1 | **Fail** | File Download Filename Validation | FINDING-038 |
+| 5.4.2 | **N/A** | File Name Encoding/Sanitization | — |
+| 5.4.3 | **Fail** | File Download - Antivirus Scanning | FINDING-142 |
+| 6.1.1 | **Fail** | Authentication Documentation | FINDING-040, FINDING-143, FINDING-144 |
+| 6.1.2 | **N/A** | — | — |
+| 6.1.3 | **Fail** | Multiple Authentication Pathways Documentation | — |
+| 6.2.1–6.2.12 | **N/A** | Password authentication requirements | — |
+| 6.3.1 | **Fail** | Brute Force and Credential Stuffing Prevention | FINDING-040, FINDING-145 |
+| 6.3.2 | **Pass** | Default User Accounts | — |
+| 6.3.3 | **Fail** | Multi-Factor Authentication Requirements | — |
+| 6.3.4 | **Fail** | Consistent security controls across authentication pathways | — |
+| 6.3.5 | **Fail** | Suspicious Authentication Notification | — |
+| 6.3.6 | **Pass** | Email not used as authentication mechanism | — |
+| 6.3.7 | **Fail** | Notification after credential updates | — |
+| 6.3.8 | **Partial** | User Enumeration Protection | — |
+| 6.4.1–6.4.3 | **N/A** | Credential storage requirements | — |
+| 6.4.4 | **Fail** | Authentication Factor Lifecycle | — |
+| 6.4.5 | **Fail** | Authentication Factor Recovery | — |
+| 6.4.6 | **N/A** | Admin Password Reset | — |
+| 6.5.1 | **N/A** | General MFA requirements | — |
+| 6.5.2 | **Partial** | Lookup Secret Storage | — |
+| 6.5.3 | **Pass** | Cryptographically Secure RNG | — |
+| 6.5.4–6.5.5 | **N/A** | Lookup secret entropy | — |
+| 6.5.6 | **Fail** | Authentication Factor Revocation | — |
+| 6.5.7 | **N/A** | — | — |
+| 6.5.8 | **N/A** | TOTP Time Source Verification | — |
+| 6.6.1 | **N/A** | Out-of-Band authentication | — |
+| 6.6.2 | **Fail** | Out-of-Band authentication | — |
+| 6.6.3 | **Fail** | Code-based OOB brute force protection | FINDING-146 |
+| 6.6.4 | **N/A** | — | — |
+| 6.7.1 | **Fail** | Cryptographic authentication mechanism | FINDING-237, FINDING-238 |
+| 6.7.2 | **N/A** | Challenge Nonce Length | — |
+| 6.8.1 | **Partial** | Identity Provider Namespace Verification | — |
+| 6.8.2 | **Fail** | Digital signature validation on assertions | — |
+| 6.8.3 | **N/A** | — | — |
+| 6.8.4 | **Fail** | Authentication strength verification from IdP | — |
+| 7.1.1 | **Fail** | Session timeout documentation | FINDING-041, FINDING-148 |
+| 7.1.2 | **Fail** | Concurrent Session Limits | FINDING-149 |
+| 7.1.3 | **Fail** | Federated Identity session management | FINDING-041, FINDING-042, FINDING-044 |
+| 7.2.1 | **Partial** | Fundamental Session Management Security | FINDING-147 |
+| 7.2.2 | **Pass** | Dynamic Token Generation | PSC-026, PSC-027 |
+| 7.2.3 | **Partial** | Fundamental Session Management Security | FINDING-183, PSC-047 |
+| 7.2.4 | **Fail** | Session Token Regeneration | FINDING-042, FINDING-043, FINDING-044 |
+| 7.3.1 | **Fail** | Inactivity timeout enforcement | FINDING-041, FINDING-042 |
+| 7.3.2 | **Fail** | Absolute Maximum Session Lifetime | FINDING-041 |
+| 7.4.1 | **Fail** | Session Termination on Logout | FINDING-042 |
+| 7.4.2 | **Fail** | Session Termination on account deletion | FINDING-045 |
+| 7.4.3 | **Fail** | Session Termination after factor changes | FINDING-046 |
+| 7.4.4 | **Pass** | Logout Functionality Visibility | — |
+| 7.4.5 | **Fail** | Administrator session termination | FINDING-047 |
+| 7.5.1 | **Pass** | Re-authentication for Sensitive Account Modifications | — |
+| 7.5.2 | **Fail** | View and Terminate Active Sessions | FINDING-048 |
+| 7.5.3 | **Fail** | Re-authentication Before Highly Sensitive Operations | FINDING-044, FINDING-147 |
+| 7.6.1 | **Fail** | Federated Re-authentication | FINDING-041, FINDING-042, FINDING-044 |
+| 7.6.2 | **Fail** | Session creation requires user consent | FINDING-147, FINDING-150 |
+| 8.1.1 | **Fail** | Authorization Documentation | FINDING-006, FINDING-049, FINDING-151 |
+| 8.1.2 | **Fail** | Field-Level Authorization Documentation | FINDING-005, FINDING-006, FINDING-049, FINDING-050, FINDING-151 |
+| 8.1.3 | **Fail** | Environmental/Contextual Authorization | FINDING-005, FINDING-050, FINDING-151 |
+| 8.1.4 | **Fail** | Authorization Decision-Making Documentation | FINDING-005, FINDING-006, FINDING-007, FINDING-049 |
+| 8.2.1 | **Pass** | Function-Level Access Control | PSC-017, PSC-039 |
+| 8.2.2 | **Fail** | Data-Specific Access Control (IDOR/BOLA) | FINDING-006, FINDING-010, FINDING-049, PSC-030 |
+| 8.2.3 | **Fail** | Field-Level Access Control (BOPLA) | FINDING-006, FINDING-051, FINDING-153 |
+| 8.2.4 | **Fail** | Adaptive Security Controls | — |
+| 8.3.1 | **Fail** | Operation Level Authorization | FINDING-006, FINDING-007, FINDING-152 |
+| 8.3.2 | **Fail** | Immediate Application of Authorization Changes | FINDING-007, FINDING-049 |
+| 8.3.3 | **Fail** | Subject-Based Permission Enforcement | FINDING-006, FINDING-010, FINDING-049 |
+| 8.4.1 | **Fail** | Multi-Tenant Cross-Tenant Control | FINDING-006, FINDING-010, FINDING-049 |
+| 8.4.2 | **Fail** | Administrative Interface Multi-Layer Security | — |
+| 9.1.1 | **Fail** | Self-Contained Token Integrity Validation | FINDING-103 |
+| 9.1.2 | **Pass** | Algorithm Allowlist | — |
+| 9.1.3 | **N/A** | Key Material from Trusted Sources | — |
+| 9.2.1 | **Partial** | Time-based validity verification | FINDING-154 |
+| 9.2.2 | **N/A** | Token Type and Purpose Validation | — |
+| 9.2.3 | **N/A** | Token Audience Validation | — |
+| 9.2.4 | **Pass** | Token Audience Restriction | — |
+| 10.1.1 | **Partial** | Token Distribution Restriction | FINDING-155, FINDING-156 |
+| 10.1.2 | **Fail** | OAuth Authorization Flow Transaction Binding | FINDING-157, FINDING-158 |
+| 10.2.1 | **Fail** | CSRF Protection in Authorization Code Flow | FINDING-008, FINDING-157, FINDING-158 |
+| 10.2.2 | **N/A** | Defense Against Mix-Up Attacks | — |
+| 10.2.3 | **Fail** | Required Scopes Only | FINDING-159 |
+| 10.3.1 | **Fail** | OAuth Resource Server Audience Validation | FINDING-155 |
+| 10.3.2 | **Fail** | Delegated Authorization Claims Enforcement | FINDING-011, FINDING-012, FINDING-159 |
+| 10.3.3 | **Fail** | User Identity from Access Tokens | FINDING-160 |
+| 10.3.4 | **Fail** | Authentication Strength Verification | FINDING-161, FINDING-162 |
+| 10.3.5 | **Fail** | Sender-Constrained Access Tokens | FINDING-052 |
+| 10.4.1 | **N/A** | Redirect URI Validation | — |
+| 10.4.2–10.4.5 | **N/A** | Authorization Server requirements | — |
+| 10.4.6 | **Fail** | PKCE for Authorization Code Flow | FINDING-157 |
+| 10.4.7 | **N/A** | Dynamic Client Registration Security | — |
+| 10.4.8 | **Fail** | Refresh Token Absolute Expiration | FINDING-166 |
+| 10.4.9 | **Fail** | Token Revocation | FINDING-167 |
+| 10.4.10 | **Fail** | Client Authentication for Backchannel Requests | FINDING-163 |
+| 10.4.11 | **Fail** | Required Scopes Assignment | FINDING-011, FINDING-012, FINDING-159 |
+| 10.4.12 | **Partial** | Response Mode Validation | FINDING-164 |
+| 10.4.13 | **Fail** | PAR Requirement | FINDING-053 |
+| 10.4.14 | **Fail** | Sender-Constrained Access Tokens | FINDING-052 |
+| 10.4.15 | **Fail** | Server-Side Client Authorization Parameter Integrity | FINDING-053 |
+| 10.4.16 | **Fail** | Client Authentication with Public-Key Cryptography | FINDING-054, FINDING-165 |
+| 10.5.1 | **Fail** | ID Token Replay Attack Mitigation via Nonce | FINDING-158 |
+| 10.5.2 | **Fail** | Unique User Identification from ID Token | FINDING-055, FINDING-168 |
+| 10.5.3 | **Fail** | Authorization Server Issuer Validation | FINDING-169 |
+| 10.5.4 | **Fail** | ID Token Audience Validation | FINDING-056 |
+| 10.5.5 | **N/A** | OIDC Back-Channel Logout Security | — |
+| 10.6.1 | **Partial** | OpenID Provider Response Mode Restrictions | FINDING-170 |
+| 10.6.2 | **Fail** | Denial of Service through Forced Logout | FINDING-042 |
+| 10.7.1 | **Partial** | User Consent for Authorization Requests | FINDING-171 |
+| 10.7.2 | **Fail** | Clear Consent Information | FINDING-159, FINDING-172, FINDING-173 |
+| 10.7.3 | **Fail** | Review, Modify, and Revoke Consents | FINDING-174 |
+| 11.1.1 | **Fail** | Cryptographic Key Management Policy | FINDING-062, FINDING-179 |
+| 11.1.2 | **Fail** | Cryptographic Inventory and Documentation | FINDING-062, FINDING-179, FINDING-180, FINDING-181 |
+| 11.1.3 | **Fail** | Discovery Mechanisms | FINDING-062, FINDING-179, FINDING-180, FINDING-181 |
+| 11.1.4 | **Fail** | PQC Migration Plan | FINDING-062 |
+| 11.2.1 | **Partial** | Secure Cryptography Implementation | FINDING-179, FINDING-180, FINDING-181 |
+| 11.2.2 | **Fail** | Crypto Agility | FINDING-063, FINDING-075 |
+| 11.2.3 | **Partial** | Minimum 128-bit Security | FINDING-180, PSC-060 |
+| 11.2.4 | **Fail** | Constant-Time Cryptographic Operations | FINDING-179, FINDING-180 |
+| 11.2.5 | **Partial** | Cryptographic modules fail securely | FINDING-182 |
+| 11.3.1 | **Pass** | Insecure Block Modes and Weak Padding | — |
+| 11.3.2 | **Fail** | Approved Ciphers and Modes | FINDING-015 |
+| 11.3.3 | **Partial** | Authenticated Encryption | FINDING-015, FINDING-179, FINDING-180, FINDING-181 |
+| 11.3.4 | **Partial** | Nonce and IV Uniqueness | FINDING-181 |
+| 11.3.5 | **Partial** | Encrypt-then-MAC Mode | FINDING-181 |
+| 11.4.1 | **Pass** | Hash Function Usage | — |
+| 11.4.2 | **Fail** | Password Storage with Approved KDF | FINDING-180 |
+| 11.4.3 | **Partial** | Hashing and Hash-based Functions | FINDING-180, FINDING-184 |
+| 11.4.4 | **Partial** | Hashing and Hash-based Functions | FINDING-180, FINDING-184 |
+| 11.5.1 | **Partial** | Random Values | FINDING-183, PSC-032 |
+| 11.5.2 | **Pass** | Random number generation under demand | — |
+| 11.6.1 | **Partial** | Approved Cryptographic Algorithms | FINDING-179, FINDING-180, FINDING-181 |
+| 11.6.2 | **Partial** | Key Exchange and Secure Parameters | FINDING-103, FINDING-179, FINDING-180, FINDING-181 |
+| 11.7.1 | **Fail** | Full Memory Encryption | FINDING-090, FINDING-179, FINDING-180 |
+| 11.7.2 | **Partial** | Data Minimization and Immediate Encryption | FINDING-078, FINDING-180, FINDING-239 |
+| 12.1.1 | **Fail** | Secure Communication | FINDING-013, PSC-043 |
+| 12.1.2 | **Fail** | Cipher Suite Configuration | FINDING-057, FINDING-175, FINDING-176 |
+| 12.1.3 | **Fail** | mTLS Client Certificate Validation | FINDING-060, FINDING-175 |
+| 12.1.4 | **Fail** | Certificate Revocation (OCSP Stapling) | FINDING-058, FINDING-176, FINDING-177 |
+| 12.1.5 | **Fail** | Encrypted Client Hello (ECH) Support | FINDING-059 |
+| 12.2.1 | **Fail** | HTTPS Communication with External Services | FINDING-014 |
+| 12.2.2 | **Fail** | Publicly Trusted TLS Certificates | FINDING-061 |
+| 12.3.1 | **Fail** | Encrypted Protocol Enforcement | FINDING-013, FINDING-014, FINDING-057, FINDING-175, PSC-014 |
+| 12.3.2 | **Fail** | TLS Certificate Validation | FINDING-177 |
+| 12.3.3 | **Fail** | HTTP-based Services | FINDING-014, FINDING-057, FINDING-175 |
+| 12.3.4 | **Fail** | Trusted Certificates | FINDING-060, FINDING-177, FINDING-178 |
+| 12.3.5 | **Fail** | Strong Authentication | FINDING-060, FINDING-178 |
+| 13.1.1 | **Fail** | Communication Needs Documentation | FINDING-185, FINDING-186, FINDING-187 |
+| 13.1.2 | **Fail** | Service Connection Limits | FINDING-064, FINDING-188, FINDING-189 |
+| 13.1.3 | **Fail** | Resource Management Documentation | FINDING-189 |
+| 13.1.4 | **Fail** | Secrets Documentation and Rotation | FINDING-066, FINDING-067, FINDING-190 |
+| 13.2.1 | **Partial** | Backend Communication Configuration | FINDING-191, FINDING-192 |
+| 13.2.2 | **Fail** | Backend Communication Configuration | FINDING-005, FINDING-193 |
+| 13.2.3 | **Pass** | No Default Credentials | — |
+| 13.2.4 | **Fail** | Backend Communication Configuration | FINDING-194, FINDING-195 |
+| 13.2.5 | **Fail** | Backend Communication Configuration | FINDING-194 |
+| 13.2.6 | **Fail** | Backend Communication Configuration | FINDING-064, FINDING-189, FINDING-196 |
+| 13.3.1 | **Fail** | Secrets Management Solution | FINDING-068, FINDING-199 |
+| 13.3.2 | **Partial** | Least Privilege Access to Secrets | FINDING-197, FINDING-198 |
+| 13.3.3 | **Fail** | Isolated Security Module | FINDING-069, FINDING-199, FINDING-200 |
+| 13.3.4 | **Fail** | Secret Expiration and Rotation | FINDING-068, FINDING-178, FINDING-201 |
+| 13.4.1 | **Partial** | Source Control Metadata Exclusion | — |
+| 13.4.2 | **Fail** | Unintended Information Leakage | FINDING-187 |
+| 13.4.3 | **Pass** | Directory Listings | — |
+| 13.4.4 | **Fail** | HTTP TRACE Method Blocking | FINDING-202 |
+| 13.4.5 | **Fail** | Documentation and Monitoring Endpoints | FINDING-203, FINDING-204 |
+| 13.4.6 | **Fail** | Backend Component Version Disclosure | FINDING-187, FINDING-205 |
+| 13.4.7 | **Partial** | File Extension Restrictions | FINDING-206, FINDING-207 |
+| 14.1.1 | **Fail** | Data Protection Documentation | FINDING-007, FINDING-070, FINDING-208, PSC-015 |
+| 14.1.2 | **Fail** | Data Protection Documentation | FINDING-006, FINDING-071, FINDING-072, FINDING-208, FINDING-209 |
+| 14.2.1 | **Pass** | Sensitive Data in URLs | — |
+| 14.2.2 | **Fail** | Server Component Cache Prevention | FINDING-072, FINDING-210 |
+| 14.2.3 | **Fail** | Sensitive Data Not Sent to Untrusted Parties | FINDING-211 |
+| 14.2.4 | **Fail** | Controls around sensitive data | FINDING-006, FINDING-007, FINDING-072, FINDING-208, FINDING-209, FINDING-212 |
+| 14.2.5 | **Fail** | Cache Control and Web Cache Deception | FINDING-072, FINDING-210 |
+| 14.2.6 | **Fail** | Minimum Sensitive Data Return | FINDING-073, FINDING-213, FINDING-214, PSC-037 |
+| 14.2.7 | **Fail** | Data Retention Classification | FINDING-074, FINDING-075, FINDING-215, FINDING-216 |
+| 14.2.8 | **Fail** | Metadata Removal | FINDING-217 |
+| 14.3.1 | **Fail** | Authenticated Data Clearing | FINDING-016 |
+| 14.3.2 | **Fail** | Cache-Control Header for Sensitive Data | FINDING-072 |
+| 14.3.3 | **Partial** | Browser Storage of Sensitive Data | FINDING-218 |
+| 15.1.1 | **Fail** | Risk-Based Remediation Timeframes | FINDING-017 |
+| 15.1.2 | **Fail** | SBOM and Third-Party Library Inventory | FINDING-017, FINDING-220 |
+| 15.1.3 | **Fail** | Resource-Intensive Functionality Documentation | FINDING-065 |
+| 15.1.4 | **Fail** | Risky Third-Party Components Documentation | FINDING-076, FINDING-180 |
+| 15.1.5 | **Fail** | Dangerous Functionality Documentation | FINDING-005, FINDING-077, FINDING-180 |
+| 15.2.1 | **Fail** | Component Update and Remediation | FINDING-017 |
+| 15.2.2 | **Fail** | Resource-Demanding Functionality DoS Defenses | FINDING-065, FINDING-099 |
+| 15.2.3 | **Partial** | Production Environment Functionality | FINDING-187, FINDING-221 |
+| 15.2.4 | **Fail** | Third-Party Component Repository Verification | FINDING-219, FINDING-220 |
+| 15.2.5 | **Fail** | Additional Protections for Dangerous Functionality | FINDING-078 |
+| 15.3.1 | **Fail** | Data Minimization in API/Data Responses | — |
+| 15.3.2 | **Pass** | External URL Redirect Following | — |
+| 15.3.3 | **Partial** | Mass Assignment Protection | — |
+| 15.3.4 | **Fail** | IP Address Handling in Proxied Environments | — |
+| 15.3.5 | **Fail** | Type Safety and Strict Equality | FINDING-099 |
+| 15.3.6 | **Partial** | Prototype Pollution Prevention | — |
+| 15.3.7 | **Partial** | HTTP Parameter Pollution Defense | — |
+| 15.4.1 | **Fail** | Safe Concurrency | FINDING-005, FINDING-023, FINDING-024, FINDING-025, FINDING-087 |
+| 15.4.2 | **Fail** | TOCTOU Prevention | FINDING-023, FINDING-024, FINDING-025, FINDING-087, FINDING-088 |
+| 15.4.3 | **Fail** | Safe Concurrency | FINDING-005, FINDING-024, FINDING-025, FINDING-087 |
+| 15.4.4 | **Fail** | Resource Allocation and Thread Starvation | FINDING-089, FINDING-240 |
+| 16.1.1 | **Fail** | Security Logging Documentation | FINDING-018, FINDING-019, FINDING-079, FINDING-225, FINDING-226, FINDING-227 |
+| 16.2.1 | **Fail** | Log Entry Metadata Completeness | FINDING-018, FINDING-019, FINDING-079, FINDING-224, PSC-040 |
+| 16.2.2 | **Fail** | Time Source Synchronization and UTC Timestamps | FINDING-019, FINDING-222, FINDING-223 |
+| 16.2.3 | **Fail** | Log Destination Documentation | FINDING-018, FINDING-227, FINDING-229 |
+| 16.2.4 | **Fail** | Log Format and Correlation | FINDING-018, FINDING-222, FINDING-223, FINDING-227 |
+| 16.2.5 | **Partial** | Sensitive Data Logging Protection | FINDING-226, FINDING-227 |
+| 16.3.1 | **Fail** | Authentication Operation Logging | FINDING-019, FINDING-080, FINDING-224 |
+| 16.3.2 | **Fail** | Failed Authorization Logging | FINDING-019, FINDING-079 |
+| 16.3.3 | **Fail** | Security events and bypass attempts logging | FINDING-018, FINDING-019, FINDING-081, FINDING-082, FINDING-225 |
+| 16.4.1 | **Fail** | Prevent Log Injection | FINDING-225, FINDING-227, FINDING-228 |
+| 16.4.2 | **Fail** | Log Protection | FINDING-083, FINDING-227 |
+| 16.4.3 | **Fail** | Secure Transmission to Separate System | FINDING-083 |
+| 16.5.1 | **Fail** | Generic Error Messages | FINDING-020, FINDING-021 |
+| 16.5.2 | **Fail** | Graceful Degradation on External Resource Failure | FINDING-086, FINDING-102, FINDING-230, FINDING-231 |
+| 16.5.3 | **Fail** | Graceful and Secure Failure Analysis | FINDING-082, FINDING-084, FINDING-230 |
+| 16.5.4 | **Fail** | Last Resort Exception Handler | FINDING-085 |
+| 17.1.1–17.3.2 | **N/A** | WebRTC requirements | — |
 
 ---
 
 # 6. Cross-Reference Matrix
 
-## Critical Findings to ASVS Mapping
+## Findings → ASVS Requirements
 
-| Finding ID | Severity | ASVS Controls | Positive Controls Negated |
-|------------|----------|---------------|---------------------------|
-| FINDING-001 | Critical | 1.1.1, 1.1.2, 1.2.1, 1.3.4, 1.3.5 | PSC-018 (EZT safety bypassed by missing escaping) |
-| FINDING-002 | Critical | 1.1.1, 1.1.2, 1.2.1, 1.2.3, 1.3.10, 1.3.5, 1.3.7, 1.3.3, 3.2.2 | PSC-015, PSC-018 |
-| FINDING-003 | Critical | 1.3.1, 1.3.4, 1.3.5, 1.3.10, 3.2.2 | PSC-018 |
-| FINDING-004 | Critical | 1.3.1, 1.3.4, 1.3.5, 1.3.10 | PSC-018 |
-| FINDING-005 | Critical | 2.3.1, 2.3.2, 2.3.4, 2.1.2, 2.1.3, 8.1.2, 8.1.3, 8.1.4, 13.2.2, 15.1.5, 15.4.1, 15.4.3 | PSC-014, PSC-022 (assert can be disabled) |
-| FINDING-006 | Critical | 2.3.2, 2.3.5, 2.1.2, 2.1.3, 8.1.1, 8.1.2, 8.1.4, 8.2.2, 8.2.3, 8.3.1, 8.3.3, 8.4.1, 4.4.3, 14.1.2, 14.2.4, 7.2.1, 10.3.2, 10.4.11 | PSC-038 (function-level only, no object-level) |
-| FINDING-007 | Critical | 2.3.2, 2.3.5, 2.1.2, 2.1.3, 4.1.4, 3.5.1, 3.5.2, 3.5.3, 14.1.1, 14.1.2, 14.2.4, 8.1.4, 8.3.1, 8.3.2, 10.2.1 | PSC-043 (POST used for some, not all) |
-| FINDING-008 | Critical | 3.5.1, 10.2.1 | None (no CSRF protection exists) |
-| FINDING-009 | Critical | 8.2.2, 8.3.3, 8.4.1 | PSC-001 (SQL injection prevented, but logic flaw remains) |
-| FINDING-010 | Critical | 12.1.1, 12.3.1 | PSC-044 (TLS supported but not enforced) |
-| FINDING-011 | Critical | 12.2.1, 12.3.1, 12.3.3, 4.4.1 | PSC-044, PSC-052 |
-| FINDING-012 | Critical | 11.3.2, 11.3.3, 11.3.4, 11.3.5, 11.6.1, 11.6.2, 11.1.1, 11.1.2, 11.1.3, 11.2.1 | PSC-064 (strong primitives used incorrectly) |
-| FINDING-013 | Critical | 14.3.1 | None |
-| FINDING-014 | Critical | 15.1.1, 15.1.2, 15.2.1 | None |
-| FINDING-015 | Critical | 16.1.1, 16.2.1, 16.2.3, 16.2.4, 16.3.3 | PSC-040, PSC-045 (partial logging exists) |
-| FINDING-016 | Critical | 16.1.1, 16.2.1, 16.3.1, 16.3.2, 16.3.3, 16.2.2 | PSC-040, PSC-045 |
-| FINDING-017 | Critical | 16.5.1 | None |
-| FINDING-018 | Critical | 16.5.1 | None |
-| FINDING-019 | Critical | 15.4.1, 15.4.2 | PSC-026 (transactions used, but not for all critical paths) |
+| Finding ID | ASVS Requirements |
+|------------|-------------------|
+| FINDING-001 | 1.1.1, 1.1.2, 1.2.1, 1.3.4, 1.3.5 |
+| FINDING-002 | 1.1.1, 1.1.2, 1.2.1, 1.2.3, 1.3.10, 1.3.5, 1.3.7, 1.3.3, 3.2.2 |
+| FINDING-003 | 1.3.1, 1.3.4, 1.3.5, 1.3.10, 1.1.1, 1.1.2, 1.2.1, 1.2.2, 1.2.9, 3.2.2 |
+| FINDING-004 | 1.3.1, 1.3.4, 1.3.5, 1.3.10 |
+| FINDING-005 | 2.3.1, 2.3.2, 2.3.4, 2.1.2, 2.1.3, 8.1.2, 8.1.3, 8.1.4, 13.2.2, 15.1.5, 15.4.1, 15.4.3 |
+| FINDING-006 | 2.3.2, 2.3.5, 2.1.2, 2.1.3, 4.4.3, 7.2.1, 8.1.1, 8.1.2, 8.1.4, 8.2.2, 8.2.3, 8.3.1, 8.3.3, 8.4.1, 14.1.2, 14.2.4 |
+| FINDING-007 | 2.3.2, 2.3.5, 2.1.2, 2.1.3, 3.3.2, 4.1.4, 4.4.3, 8.1.4, 8.3.1, 8.3.2, 10.2.1, 14.1.1, 14.1.2, 14.2.4 |
+| FINDING-008 | 3.5.1, 10.2.1 |
+| FINDING-009 | 3.5.1, 3.5.2, 3.5.3 |
+| FINDING-010 | 8.2.2, 8.3.3, 8.4.1 |
+| FINDING-011 | 10.3.2, 10.4.11 |
+| FINDING-012 | 10.3.2, 10.4.11 |
+| FINDING-013 | 12.1.1, 12.3.1 |
+| FINDING-014 | 12.2.1, 12.3.1, 12.3.3, 4.4.1 |
+| FINDING-015 | 11.3.2 |
+| FINDING-016 | 14.3.1 |
+| FINDING-017 | 15.1.1, 15.1.2, 15.2.1 |
+| FINDING-018 | 16.1.1, 16.2.1, 16.2.3, 16.2.4, 16.3.3 |
+| FINDING-019 | 16.1.1, 16.2.1, 16.3.1, 16.3.2, 16.3.3, 16.2.2 |
+| FINDING-020 | 16.5.1 |
+| FINDING-021 | 16.5.1 |
+| FINDING-022 | 1.3.10, 1.3.5, 1.3.7, 1.3.3 |
+| FINDING-023 | 2.3.3, 2.3.4, 15.4.1, 15.4.2 |
+| FINDING-024 | 2.3.3, 2.3.4, 15.4.1, 15.4.2, 15.4.3 |
+| FINDING-025 | 2.3.4, 15.4.1, 15.4.2, 15.4.3 |
+| FINDING-026 | 2.3.5 |
+| FINDING-027 | 2.4.1, 2.4.2 |
+| FINDING-028 | 3.2.1 |
+| FINDING-029 | 3.3.1 |
+| FINDING-030 | 3.3.2 |
+| FINDING-031 | 3.2.2 |
+| FINDING-032 | 3.4.6, 3.4.3 |
+| FINDING-033 | 3.5.1 |
+| FINDING-034 | 3.5.2, 3.5.4 |
+| FINDING-035 | 3.5.8 |
+| FINDING-036 | 3.5.8 |
+| FINDING-037 | 4.1.5 |
+| FINDING-038 | 5.1.1, 5.2.2, 5.3.1, 5.4.1, 2.1.3 |
+| FINDING-039 | 5.3.2 |
+| FINDING-040 | 6.3.1 |
+| FINDING-041 | 7.1.1, 7.3.1, 7.3.2, 7.1.3, 7.6.1 |
+| FINDING-042 | 7.1.3, 7.2.4, 7.3.1, 7.4.1, 7.6.1, 10.6.2 |
+| FINDING-043 | 7.2.4 |
+| FINDING-044 | 7.1.3, 7.2.4, 7.5.3, 7.6.1 |
+| FINDING-045 | 7.4.2 |
+| FINDING-046 | 7.4.3 |
+| FINDING-047 | 7.4.5 |
+| FINDING-048 | 7.5.2 |
+| FINDING-049 | 8.1.1, 8.1.2, 8.1.4, 8.2.2, 8.3.2, 8.3.3, 8.4.1 |
+| FINDING-050 | 8.1.2, 8.1.3 |
+| FINDING-051 | 8.2.3 |
+| FINDING-052 | 10.3.5, 10.4.14 |
+| FINDING-053 | 10.4.13, 10.4.15 |
+| FINDING-054 | 10.4.16 |
+| FINDING-055 | 10.5.2 |
+| FINDING-056 | 10.5.4 |
+| FINDING-057 | 12.1.2, 12.3.1, 12.3.3, 12.3.4 |
+| FINDING-058 | 12.1.4 |
+| FINDING-059 | 12.1.5 |
+| FINDING-060 | 12.1.3, 12.3.4, 12.3.5 |
+| FINDING-061 | 12.2.2 |
+| FINDING-062 | 11.1.1, 11.1.2, 11.1.3, 11.1.4 |
+| FINDING-063 | 11.2.2 |
+| FINDING-064 | 13.1.2, 13.2.6 |
+| FINDING-065 | 13.1.2, 15.1.3, 15.2.2 |
+| FINDING-066 | 13.1.4 |
+| FINDING-067 | 13.1.4 |
+| FINDING-068 | 13.3.1, 13.3.4 |
+| FINDING-069 | 13.3.3 |
+| FINDING-070 | 14.1.1 |
+| FINDING-071 | 14.1.2 |
+| FINDING-072 | 14.1.2, 14.2.2, 14.2.4, 14.2.5, 14.3.2, 14.1.1 |
+| FINDING-073 | 14.2.6 |
+| FINDING-074 | 14.2.7 |
+| FINDING-075 | 14.2.7, 11.2.2 |
+| FINDING-076 | 15.1.4 |
+| FINDING-077 | 15.1.5 |
+| FINDING-078 | 15.2.5, 11.7.2 |
+| FINDING-079 | 16.1.1, 16.2.1, 16.3.1, 16.3.2, 16.3.3 |
+| FINDING-080 | 16.3.1 |
+| FINDING-081 | 16.3.3 |
+| FINDING-082 | 16.3.3, 16.5.3 |
+| FINDING-083 | 16.4.2, 16.4.3 |
+| FINDING-084 | 16.5.3 |
+| FINDING-085 | 16.5.4 |
+| FINDING-086 | 16.5.2 |
+| FINDING-087 | 15.4.1, 15.4.2, 15.4.3 |
+| FINDING-088 | 15.4.2 |
+| FINDING-089 | 15.4.4 |
+| FINDING-090 | 11.7.1 |
+| FINDING-091 | 1.1.1, 1.1.2, 1.2.1 |
+| FINDING-092 | 1.4.2 |
+| FINDING-093 | 1.4.3 |
+| FINDING-094 | 1.2.10 |
+| FINDING-095 | 1.2.7, 1.3.8, 1.3.9, 1.3.3, 2.3.1, 2.3.2, 2.2.1, 2.2.2, 2.2.3, 2.1.2, 2.1.3 |
+| FINDING-096 | 1.3.11 |
+| FINDING-097 | 1.3.6 |
+| FINDING-098 | 1.3.3 |
+| FINDING-099 | 1.5.3, 15.2.2, 15.3.5 |
+| FINDING-100 | 1.5.3 |
+| FINDING-101 | 1.5.3 |
+| FINDING-102 | 2.3.3, 16.5.2 |
+| FINDING-103 | 2.3.2, 9.1.1, 11.6.2 |
+| FINDING-104 | 2.1.2, 2.2.3 |
+| FINDING-105 | 2.2.3 |
+| FINDING-106 | 2.1.3, 2.4.1 |
+| FINDING-107 | 2.4.1, 2.4.2 |
+| FINDING-108 | 3.2.1 |
+| FINDING-109 | 3.2.1 |
+| FINDING-110 | 3.3.1, 3.3.3 |
+| FINDING-111 | 3.3.4 |
+| FINDING-112 | 3.3.5 |
+| FINDING-113 | 3.2.2 |
+| FINDING-114 | 3.2.2 |
+| FINDING-115 | 3.2.3 |
+| FINDING-116 | 3.2.3 |
+| FINDING-117 | 3.2.3 |
+| FINDING-118 | 3.4.1, 3.7.4, 3.1.1 |
+| FINDING-119 | 3.4.4 |
+| FINDING-120 | 3.4.5 |
+| FINDING-121 | 3.4.7, 3.1.1 |
+| FINDING-122 | 3.4.8 |
+| FINDING-123 | 3.5.2 |
+| FINDING-124 | 3.5.8 |
+| FINDING-125 | 3.7.3 |
+| FINDING-126 | 3.7.5 |
+| FINDING-127 | 4.1.1 |
+| FINDING-128 | 4.1.1 |
+| FINDING-129 | 4.1.2 |
+| FINDING-130 | 4.1.2 |
+| FINDING-131 | 4.1.3 |
+| FINDING-132 | 4.1.5 |
+| FINDING-133 | 4.2.1 |
+| FINDING-134 | 4.2.1 |
+| FINDING-135 | 4.2.3 |
+| FINDING-136 | 4.2.4 |
+| FINDING-137 | 4.2.4 |
+| FINDING-138 | 4.2.5 |
+| FINDING-139 | 4.4.2 |
+| FINDING-140 | 5.1.1 |
+| FINDING-141 | 5.1.1 |
+| FINDING-142 | 5.4.3 |
+| FINDING-143 | 6.1.1 |
+| FINDING-144 | 6.1.1 |
+| FINDING-145 | 6.3.1 |
+| FINDING-146 | 6.6.3 |
+| FINDING-147 | 7.2.1, 7.5.3, 7.6.2 |
+| FINDING-148 | 7.1.1 |
+| FINDING-149 | 7.1.2 |
+| FINDING-150 | 7.6.2 |
+| FINDING-151 | 8.1.1, 8.1.2, 8.1.3 |
+| FINDING-152 | 8.3.1 |
+| FINDING-153 | 8.2.3 |
+| FINDING-154 | 9.2.1 |
+| FINDING-155 | 10.1.1, 10.3.1 |
+| FINDING-156 | 10.1.1 |
+| FINDING-157 | 10.1.2, 10.2.1, 10.4.6 |
+| FINDING-158 | 10.1.2, 10.5.1 |
+| FINDING-159 | 10.2.3, 10.3.2, 10.4.11, 10.7.2 |
+| FINDING-160 | 10.3.3 |
+| FINDING-161 | 10.3.4 |
+| FINDING-162 | 10.3.4 |
+| FINDING-163 | 10.4.10 |
+| FINDING-164 | 10.4.12 |
+| FINDING-165 | 10.4.16 |
+| FINDING-166 | 10.4.8 |
+| FINDING-167 | 10.4.9 |
+| FINDING-168 | 10.5.2 |
+| FINDING-169 | 10.5.3 |
+| FINDING-170 | 10.6.1 |
+| FINDING-171 | 10.7.1 |
+| FINDING-172 | 10.7.2 |
+| FINDING-173 | 10.7.2 |
+| FINDING-174 | 10.7.3 |
+| FINDING-175 | 12.1.2, 12.1.3, 12.3.1, 12.3.3 |
+| FINDING-176 | 12.1.2, 12.1.4 |
+| FINDING-177 | 12.1.4, 12.3.2, 12.3.4 |
+| FINDING-178 | 12.3.4, 12.3.5, 13.3.4 |
+| FINDING-179 | 11.1.1, 11.1.2, 11.1.3, 11.2.1, 11.2.3, 11.2.4, 11.2.5, 11.3.3, 11.4.2, 11.6.1, 11.6.2, 11.7.1 |
+| FINDING-180 | 11.2.3, 11.2.4, 11.3.3, 11.4.2, 11.4.3, 11.4.4, 11.6.1, 11.6.2, 11.1.1, 11.1.2, 11.1.3, 11.2.1, 15.1.4, 15.1.5, 11.7.1, 11.7.2 |
+| FINDING-181 | 11.3.3, 11.3.4, 11.3.5, 11.6.1, 11.6.2, 11.1.1, 11.1.2, 11.1.3, 11.2.1 |
+| FINDING-182 | 11.2.5 |
+| FINDING-183 | 11.5.1, 7.2.3 |
+| FINDING-184 | 11.4.4 |
+| FINDING-185 | 13.1.1 |
+| FINDING-186 | 13.1.1 |
+| FINDING-187 | 13.1.1, 13.4.2, 15.2.3, 13.4.6 |
+| FINDING-188 | 13.1.2 |
+| FINDING-189 | 13.1.2, 13.1.3, 13.2.6 |
+| FINDING-190 | 13.1.4 |
+| FINDING-191 | 13.2.1 |
+| FINDING-192 | 13.2.1 |
+| FINDING-193 | 13.2.2 |
+| FINDING-194 | 13.2.4, 13.2.5 |
+| FINDING-195 | 13.2.4 |
+| FINDING-196 | 13.2.6 |
+| FINDING-197 | 13.3.2 |
+| FINDING-198 | 13.3.2 |
+| FINDING-199 | 13.3.1, 13.3.3 |
+| FINDING-200 | 13.3.3 |
+| FINDING-201 | 13.3.4 |
+| FINDING-202 | 13.4.4 |
+| FINDING-203 | 13.4.5 |
+| FINDING-204 | 13.4.5 |
+| FINDING-205 | 13.4.6 |
+| FINDING-206 | 13.4.7 |
+| FINDING-207 | 13.4.7 |
+| FINDING-208 | 14.1.1, 14.1.2, 14.2.4 |
+| FINDING-209 | 14.1.2, 14.2.4 |
+| FINDING-210 | 14.2.2, 14.2.5 |
+| FINDING-211 | 14.2.3 |
+| FINDING-212 | 14.2.4 |
+| FINDING-213 | 14.2.6 |
+| FINDING-214 | 14.2.6 |
+| FINDING-215 | 14.2.7 |
+| FINDING-216 | 14.2.7 |
+| FINDING-217 | 14.2.8 |
+| FINDING-218 | 14.3.3 |
+| FINDING-219 | 15.2.4 |
+| FINDING-220 | 15.2.4 |
+| FINDING-221 | 15.2.3 |
+| FINDING-222 | 16.2.2, 16.2.4 |
+| FINDING-223 | 16.2.2, 16.2.4 |
+| FINDING-224 | 16.2.1, 16.3.1 |
+| FINDING-225 | 16.1.1, 16.3.3, 16.4.1 |
+| FINDING-226 | 16.1.1, 16.2.5 |
+| FINDING-227 | 16.1.1, 16.2.3, 16.2.4, 16.2.5, 16.4.1, 16.4.2 |
+| FINDING-228 | 16.4.1 |
+| FINDING-229 | 16.2.3 |
+| FINDING-230 | 16.5.2, 16.5.3 |
+| FINDING-231 | 16.5.2 |
+| FINDING-232 | 3.1.1 |
+| FINDING-233 | 3.1.1 |
+| FINDING-234 | 3.6.1 |
+| FINDING-235 | 3.6.1 |
+| FINDING-236 | 3.6.1 |
+| FINDING-237 | 6.7.1 |
+| FINDING-238 | 6.7.1 |
+| FINDING-239 | 11.7.2 |
+| FINDING-240 | 15.4.4 |
 
-## ASVS Control to Finding Mapping (High-Impact Controls)
+## ASVS Requirements → Findings/Controls
 
-| ASVS ID | Title | Failed By | Partially Satisfied By |
-|---------|-------|-----------|------------------------|
-| 1.1.1 | Encoding Architecture | FINDING-001, 002, 020, 093 | PSC-002, PSC-003 |
-| 1.2.4 | Parameterized Queries | None | PSC-001, PSC-009 |
-| 2.3.1 | Sequential Flow | FINDING-005, 097 | PSC-014, PSC-022 |
-| 3.5.1 | CSRF Protection | FINDING-007, 008, 033 | None |
-| 8.2.1 | Function-Level Access | None | PSC-038, PSC-039 |
-| 8.2.2 | Object-Level Access | FINDING-006, 009, 049 | None |
-| 11.3.1 | Insecure Block Modes | None | PSC-064 |
-| 11.5.2 | Random Generation Under Load | None | PSC-064 |
-| 12.1.1 | Secure Communication | FINDING-010, 011 | PSC-044, PSC-052 |
-| 15.4.1 | Safe Concurrency | FINDING-005, 019, 023, 024, 089 | PSC-026 |
-| 16.3.3 | Security Events Logging | FINDING-015, 081, 083, 084, 222 | PSC-040, PSC-045 |
+| ASVS ID | Findings | Positive Controls |
+|---------|----------|-------------------|
+| 1.1.1 | FINDING-001, FINDING-002, FINDING-003, FINDING-091 | PSC-002, PSC-003 |
+| 1.1.2 | FINDING-001, FINDING-002, FINDING-003, FINDING-091 | PSC-002, PSC-003 |
+| 1.2.1 | FINDING-001, FINDING-002, FINDING-003, FINDING-091 | PSC-012 |
+| 1.2.4 | — | PSC-001 |
+| 1.2.5 | — | PSC-010 |
+| 1.2.6 | — | PSC-004 |
+| 1.3.2 | — | PSC-019 |
+| 1.3.6 | FINDING-097 | PSC-021 |
+| 1.3.7 | FINDING-002, FINDING-022 | PSC-020 |
+| 1.3.12 | — | PSC-011, PSC-018 |
+| 1.4.1 | — | PSC-009 |
+| 1.4.2 | FINDING-092 | PSC-007, PSC-008 |
+| 1.5.2 | — | PSC-006, PSC-022, PSC-023, PSC-041 |
+| 2.3.1 | FINDING-005, FINDING-095 | PSC-016, PSC-024, PSC-025, PSC-033, PSC-036 |
+| 2.3.3 | FINDING-023, FINDING-024, FINDING-102 | PSC-028, PSC-035 |
+| 3.4.2 | — | PSC-046 |
+| 3.5.1 | FINDING-007, FINDING-008, FINDING-009, FINDING-033 | PSC-042 |
+| 3.5.2 | FINDING-009, FINDING-034, FINDING-123 | PSC-050 |
+| 3.5.3 | FINDING-007, FINDING-009 | PSC-049 |
+| 3.5.4 | FINDING-034 | PSC-051 |
+| 3.5.5 | — | PSC-052 |
+| 3.5.6 | — | PSC-053 |
+| 3.5.7 | — | PSC-054 |
+| 3.6.1 | FINDING-234, FINDING-235, FINDING-236 | PSC-013 |
+| 3.7.1 | — | PSC-055, PSC-056 |
+| 3.7.2 | — | PSC-057, PSC-058 |
+| 4.2.2 | — | PSC-059 |
+| 5.3.2 | FINDING-039 | PSC-005 |
+| 7.2.2 | — | PSC-026, PSC-027 |
+| 7.2.3 | FINDING-183 | PSC-047 |
+| 8.2.1 | — | PSC-017, PSC-039 |
+| 8.2.2 | FINDING-006, FINDING-010, FINDING-049 | PSC-030 |
+| 9.1.1 | FINDING-103 | PSC-029 |
+| 10.1.1 | FINDING-155, FINDING-156 | PSC-048 |
+| 11.2.3 | FINDING-180 | PSC-060 |
+| 11.5.1 | FINDING-183 | PSC-032 |
+| 12.1.1 | FINDING-013 | PSC-043 |
+| 12.3.1 | FINDING-013, FINDING-014, FINDING-057, FINDING-175 | PSC-014 |
+| 14.1.1 | FINDING-007, FINDING-070, FINDING-208 | PSC-015, PSC-034 |
+| 14.2.6 | FINDING-073, FINDING-213, FINDING-214 | PSC-037 |
+| 16.2.1 | FINDING-018, FINDING-019, FINDING-079, FINDING-224 | PSC-040 |
 
-## Domain-Based Control Effectiveness
+---
 
-| Domain | Positive Controls | Critical Gaps | Effectiveness Rating |
-|--------|-------------------|---------------|---------------------|
-| Input Encoding | 21 controls | Missing output encoding (FINDING-001-004) | 60% |
-| Business Logic | 20 controls | Missing authorization (FINDING-006, 009) | 55% |
-| Session/CSRF | 18 controls | No CSRF protection (FINDING-008) | 40% |
-| Cryptography | 3 controls | Wrong cipher mode (FINDING-012) | 45% |
-| TLS/Transport | 3 controls | Optional TLS (FINDING-010, 011) | 35% |
-| Logging/Monitoring | 3 controls | Incomplete coverage (FINDING-015, 016) | 30% |
-| Authorization | 6 controls | Object-level missing (FINDING-006) | 40% |
-
-## Finding Dependency Chain Analysis
-
-**Critical Path 1: XSS Attack Chain**
-```
-FINDING-001 (Missing HTML escaping) 
-  → FINDING-002 (JS injection)
-  → FINDING-003 (Stored XSS)
-  → FINDING-004 (Title XSS)
-  → FINDING-020 (HTML injection)
-  → FINDING-021 (Reflected XSS)
-  → FINDING-031 (Additional stored XSS)
-  → FINDING-093 (Flash message XSS)
-  → FINDING-114 (Error page XSS)
-```
-**Impact**: Complete compromise of voter sessions and election integrity
-
-**Critical Path 2: Authorization Bypass Chain**
-```
-FINDING-006 (Missing owner checks)
-  → FINDING-009 (Cross-election access)
-  → FINDING-049 (Missing eligibility check)
-  → FINDING-050 (Unused authz field)
-  → FINDING-051 (No per-issue authz)
-  → FINDING-074 (Ownership bypass)
-```
-**Impact**: Unauthorized election manipulation and data access
-
-**Critical Path 3: CSRF Attack Chain**
-```
-FINDING-008 (No CSRF validation)
-  → FINDING-007 (GET state changes)
-  → FINDING-033 (Vote CSRF)
-  → FINDING-030 (SameSite bypass)
-```
-**Impact**: Complete election manipulation via CSRF
-
-**Critical Path 4: Cryptographic Weakness Chain**
-```
-FINDING-012 (AES-128-CBC instead of AEAD)
-  → FINDING-181 (Non-constant-time comparison)
-  → FINDING-182 (Argon2d instead of Argon2id)
-  → FINDING-183 (Insecure error handling)
-  → FINDING-092 (No memory protection)
-```
-**Impact**: Vote decryption and anonymization compromise
-
-This cross-reference matrix demonstrates that while 64 positive security controls exist, critical gaps in output encoding, authorization, CSRF protection, and cryptographic implementation create exploitable attack chains that negate many of the implemented protections.
+**End of Report**
 
 ## 7. Level Coverage Analysis
 
@@ -6377,11 +6750,11 @@ This cross-reference matrix demonstrates that while 64 positive security control
 
 | Level | Sections Audited | Findings Found |
 |-------|-----------------|----------------|
-| L1 | 70 | 48 |
-| L2 | 182 | 144 |
-| L3 | 92 | 119 |
+| L1 | 70 | 47 |
+| L2 | 182 | 146 |
+| L3 | 92 | 121 |
 
-**Total consolidated findings: 235**
+**Total consolidated findings: 240**
 
 
 ### Reports Not Included in Consolidation
