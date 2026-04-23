@@ -1,31 +1,21 @@
 # Apache Tooling Agents
 
-*Exploring AI-driven approaches to security auditing and code review*
+*AI-driven security auditing and code review for ASF projects*
 
 <a href="https://github.com/apache/tooling-agents/blob/main/LICENSE">
   <img alt="Apache License" src="https://img.shields.io/github/license/apache/tooling-agents" /></a>
 
-We're using this repository to discuss ideas, gather community input, and prototype approaches. Nothing here is production-ready yet.
-
-## What This Is
-
-This repository is a space for the Apache community to explore how AI agents might help with automated security auditing and code review. We're interested in questions like:
-
-- How can agents help ASF projects achieve security and other compliance?
-- What existing tools work well, and where are the gaps?
-- What should we build versus adopt?
-
-We're gathering input, prototyping ideas, and working toward tooling that could benefit the broader Apache ecosystem. **Your participation is welcome**, whether that's joining the discussion, sharing experiences, or contributing code.
-
-## Projects
+## Pipelines
 
 ### [ASVS Security Audit](ASVS/)
 
-Automated OWASP ASVS compliance auditing for any GitHub-hosted codebase. An orchestration pipeline downloads source code, discovers the codebase architecture, runs per-requirement security analysis, and produces a consolidated report with GitHub issues. See the [ASVS README](ASVS/README.md) for the full pipeline reference.
+Automated [OWASP ASVS v5.0.0](https://github.com/OWASP/ASVS/blob/v5.0.0/5.0/OWASP_Application_Security_Verification_Standard_5.0.0_en.pdf) compliance auditing for any GitHub-hosted codebase. Downloads source code, discovers the architecture, runs per-requirement security analysis with Claude, and produces a consolidated report with deduplicated findings and GitHub issues. In production — piloted on ATR and Apache Steve.
 
 ### [GitHub Actions Review](gha-review/)
 
-Automated scan of GitHub Actions workflows across an organization to identify security vulnerabilities in CI/CD pipelines, find publishing channels, and flag policy violations. See the [GitHub Review README](gha-review/README.md) for agent details and check definitions.
+Automated security scan of GitHub Actions workflows across an entire GitHub organization. Combines LLM classification (which repos publish what, where) with static pattern matching (12 check types from CRITICAL to INFO) to identify exploitable workflows, supply chain risks, and policy violations. Scanned 2,500+ Apache repos.
+
+Both pipelines run on [Gofannon](https://github.com/The-AI-Alliance/gofannon) — see [docs/gofannon](docs/gofannon/) for platform setup.
 
 ## Repository Structure
 
@@ -33,57 +23,49 @@ Automated scan of GitHub Actions workflows across an organization to identify se
 ├── ASVS/                  # ASVS security audit pipeline
 │   ├── agents/            # Pipeline agent code (6 agents)
 │   ├── audit_guidance/    # Project-specific false positive guidance
-│   └── reports/           # Audit output organized by project and commit
-├── gha-review/         # GitHub Actions security review
+│   ├── reports/           # Audit output organized by project and commit
+│   └── rerun-sections.sh  # QA: re-run failed sections, re-consolidate
+├── gha-review/            # GitHub Actions security review
 │   ├── agents/            # Review pipeline agents (7 agents + tests)
 │   └── reports/           # Review output
-├── docs/                  # Platform documentation
+├── docs/
 │   ├── gofannon/          # Gofannon setup and agent development guide
+│   ├── tooling/           # Security tooling landscape and comparisons
+│   ├── roadmap/           # Eval framework, multi-spec expansion plans
 │   └── how-to-contribute.md
 └── util/                  # Utility scripts
 ```
 
-## Getting Involved
+## Documentation
 
-Community feedback is encouraged! Whether you're an ASF committer, contributor, or just interested in security tooling:
+- **[ASVS Pipeline Reference](ASVS/README.md)** — inputs, agent reference, QA and remediation, troubleshooting
+- **[GHA Review Reference](gha-review/README.md)** — agent architecture, check types, report guide
+- **[Security Tooling Landscape](docs/tooling/)** — comparison with Scorecard, OSS-CRS, Strix, zizmor, and others
+- **[Roadmap](docs/roadmap/)** — eval framework, ASVS applicability, multi-spec expansion (CWE Top 25, API Top 10, ASF Baseline, SLSA)
+
+## Getting Involved
 
 ### Join the Conversation
 
-1. **Introduce yourself on the mailing list**: Say hello at 📧 [dev@tooling.apache.org](mailto:dev@tooling.apache.org)
+1. **Mailing list**: Say hello at 📧 [dev@tooling.apache.org](mailto:dev@tooling.apache.org)
    *(Subscribe by sending an email with empty subject and body to [dev-subscribe@tooling.apache.org](mailto:dev-subscribe@tooling.apache.org) and replying to the automated response, per the [ASF mailing list how-to](https://apache.org/foundation/mailinglists.html))*
 
-2. **Share ideas or file issues**: Use [GitHub Issues](https://github.com/apache/tooling-agents/issues) to ask questions, suggest approaches, or start a discussion
+2. **Slack**: `#tooling-discuss` on the [ASF Slack](https://the-asf.slack.com/archives/C086X8CKEMB)
 
-3. **Try things out**: Experiment with the tools we're evaluating and share what you learn
+3. **Issues**: Use [GitHub Issues](https://github.com/apache/tooling-agents/issues) to ask questions, suggest approaches, or report bugs
 
-### Contribute Code or Docs
+### Contribute
 
 - [**How to contribute**](docs/how-to-contribute.md)
-- **Documentation helps**: Add research notes or proposals to [`docs/`](docs/)
-- **Evaluate tools**: Try existing tooling on your project and report back
+- **Request an audit**: Just ask on the mailing list or Slack — we handle everything. No tokens, no setup needed.
+- **Write audit guidance**: Help reduce false positives for your project — see [audit_guidance/README.md](ASVS/audit_guidance/README.md)
 
 **Note:** Please introduce yourself on the mailing list before submitting a PR; this helps us deter spam and means your contribution won't be overlooked.
-
-## Community
-
-- **Mailing List**: [dev@tooling.apache.org](mailto:dev@tooling.apache.org) ([subscribe](mailto:dev-subscribe@tooling.apache.org))
-- **Slack**: `#tooling-discuss` on the [ASF Slack](https://the-asf.slack.com/archives/C086X8CKEMB)
-- **Issues**: [GitHub Issues](https://github.com/apache/tooling-agents/issues)
 
 ## License
 
 This project is licensed under the [Apache License 2.0](LICENSE).
 
-## Related Work
-
-- [Alpha-Omega Project](https://alpha-omega.dev): Improving OSS security
-- [OWASP ASVS](https://owasp.org/www-project-application-security-verification-standard/): The security standard we're targeting
-- [OpenSSF Scorecard](https://securityscorecards.dev): Automated security health checks
-- [VEX](https://github.com/vex-generation-toolset): Automated CVE detection
-- [AI Alliance](https://thealliance.ai): Open AI innovation community
-- [Gofannon](https://github.com/The-AI-Alliance/gofannon): Agent-building workflow
-
 ---
 
 *Part of the [Apache Tooling Initiative](https://tooling.apache.org/).*
-For more information about the ASF, visit [https://www.apache.org/](https://www.apache.org/).
