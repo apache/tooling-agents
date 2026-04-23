@@ -55,8 +55,9 @@ call_agent() {
     local agent_name="$1"
     local input_json="$2"
 
-    curl -s -X POST "${API_BASE}/api/agents/${agent_name}/run" \
+    curl -s -X POST "${API_BASE}/rest/${agent_name}" \
         -H "Content-Type: application/json" \
+        -H "Authorization: Bearer local" \
         -d "${input_json}"
 }
 
