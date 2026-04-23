@@ -278,23 +278,23 @@ comm -23 /tmp/asvs_sections.txt /tmp/github_reports.txt
 
 ### Re-run failed sections
 
-Use `rerun_sections.sh` to audit missing sections and push them to a `rerun` subdirectory under the original output directory:
+Use `rerun-sections.sh` to audit missing sections and push them to a `rerun` subdirectory under the original output directory:
 
 ```bash
-./rerun_sections.sh <namespace> <output_repo> <output_token> <output_dir> <section> [section...]
+./rerun-sections.sh <namespace> <output_repo> <output_token> <output_dir> <section> [section...]
 ```
 
 Example:
 
 ```bash
-./rerun_sections.sh "files:apache/steve/v3" apache/tooling-agents ghp_xxx \
+./rerun-sections.sh "files:apache/steve/v3" apache/tooling-agents ghp_xxx \
   ASVS/reports/steve/v3/d0aa7e9 1.3.3 1.5.1 1.5.2 1.5.3 3.5.7
 ```
 
 To re-run consolidation after filling in the gaps, add `--consolidate`:
 
 ```bash
-./rerun_sections.sh "files:apache/steve/v3" apache/tooling-agents ghp_xxx \
+./rerun-sections.sh "files:apache/steve/v3" apache/tooling-agents ghp_xxx \
   ASVS/reports/steve/v3/d0aa7e9 --consolidate 1.3.3 1.5.1 1.5.2 1.5.3 3.5.7
 ```
 
