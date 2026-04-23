@@ -275,15 +275,41 @@ Return ONLY valid JSON:
                         provider=FAST_PROVIDER, model=FAST_MODEL,
                         messages=messages, parameters=FAST_PARAMS, timeout=600,
                     )
-                    json_match = re.search(r'\{[\s\S]*\}', result)
+                    # Strip markdown fences before extracting JSON
+                    clean_result = re.sub(r'```(?:json)?\s*', '', result)
+                    # Look for JSON starting with known extraction keys, not random code blocks
+                    json_match = re.search(r'\{\s*"(?:asvs_section|findings|asvs_status)', clean_result)
+                    if not json_match:
+                        # Try single-quoted variant
+                        json_match = re.search(r"\{\s*'(?:asvs_section|findings|asvs_status)", clean_result)
                     if json_match:
-                        extracted = parse_llm_json(json_match.group())
+                        # Find the balanced closing brace from the match start
+                        start = json_match.start()
+                        depth = 0
+                        end = start
+                        for i in range(start, len(clean_result)):
+                            if clean_result[i] == '{':
+                                depth += 1
+                            elif clean_result[i] == '}':
+                                depth -= 1
+                                if depth == 0:
+                                    end = i + 1
+                                    break
+                        raw = clean_result[start:end]
+                        try:
+                            extracted = parse_llm_json(raw)
+                        except Exception as e:
+                            print(f"ERROR: {e}")
+                            print(f"  DEBUG first 300 chars: {raw[:300]}")
+                            print(f"  DEBUG last 200 chars: {raw[-200:]}")
+                            return report_key, None, str(e)
                         extracted["source_report"] = report_key
                         extraction_ns.set(report_key, extracted)
                         print(f"{len(extracted.get('findings', []))} findings, status: {extracted.get('asvs_status', '?')}")
                         return report_key, extracted, None
                     else:
-                        print(f"WARNING: no JSON")
+                        print(f"WARNING: no JSON found with expected keys")
+                        print(f"  DEBUG first 500 chars: {clean_result[:500]}")
                         return report_key, None, "No JSON in result"
                 except Exception as e:
                     print(f"ERROR: {e}")
