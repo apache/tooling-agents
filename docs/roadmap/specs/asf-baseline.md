@@ -63,19 +63,36 @@ Draft requirements, organized by category. These should be developed collaborati
 | ASF-VULN-3 | Known vulnerable dependencies MUST be updated within 30 days of disclosure for Critical, 90 days for High | L2 |
 | ASF-VULN-4 | Projects SHOULD participate in the ASF coordinated disclosure process | L2 |
 
+## Relationship to Apache Trusted Releases (ATR)
+
+ATR already verifies many of the same properties — release signing, checksums, license compliance — at distribution time. The ASF Baseline checks these at development time, in the source code and CI configuration that produces the release.
+
+| Concern | ATR (runtime) | ASF Baseline (source) |
+|---|---|---|
+| Release signing | "Is this artifact signed with a KEYS-listed key?" | "Does the release workflow include a signing step?" |
+| Checksums | "Does this artifact have a published SHA-512?" | "Does the CI generate checksums before upload?" |
+| License headers | "Does the source archive contain Apache headers?" | "Do all source files have headers? Is the check in CI?" |
+| NOTICE file | "Is NOTICE present in the release?" | "Is NOTICE maintained in source and updated with deps?" |
+| Dependency licenses | "Does the binary release include Category X deps?" | "Does the CI check license compatibility before merge?" |
+
+This is belt-and-suspenders: ATR is the gate that catches problems at release time, ASF Baseline is the shift-left check that catches them during development so they never reach the gate. A project passing ASF Baseline should have a smooth ATR release process. A project failing ASF Baseline will hit friction at release time that ATR surfaces.
+
+For projects already using ATR, the ASF Baseline findings are mostly informational ("you'll pass ATR because your CI already handles this"). For projects not yet using ATR, the ASF Baseline tells them what to fix before they try to release.
+
 ## How This Differs from Other Specs
 
-| Concern | ASVS | Scorecard | ASF Baseline |
-|---|---|---|---|
-| Release signing | No | Partial (signed-releases check) | Full (KEYS file, checksums, reproducibility) |
-| License compliance | No | No | Full (header, NOTICE, Category X/B) |
-| ASF OAuth | No | No | Yes |
-| Committer/PMC authz | No | No | Yes |
-| GHA SHA pinning | No | Partial | Full (per ASF policy) |
-| SECURITY.md | No | Yes | Yes (aligned) |
-| Dependency scanning | No | Yes | Yes (aligned, adds SLA) |
+| Concern | ASVS | Scorecard | ATR | ASF Baseline |
+|---|---|---|---|---|
+| Release signing | No | Partial | ✅ Verifies at release | Checks source/CI for signing steps |
+| Checksums | No | No | ✅ Verifies at release | Checks CI generates them |
+| License compliance | No | No | ✅ Verifies in archive | Checks source files + CI enforcement |
+| ASF OAuth | No | No | No | Yes |
+| Committer/PMC authz | No | No | No | Yes |
+| GHA SHA pinning | No | Partial | No | Full (per ASF policy) |
+| SECURITY.md | No | Yes | No | Yes (aligned) |
+| Dependency scanning | No | Yes | No | Yes (aligned, adds SLA) |
 
-The ASF Baseline is complementary to both ASVS and Scorecard. It covers the ASF-specific layer that neither addresses.
+The ASF Baseline is complementary to ASVS, Scorecard, and ATR. It covers the development-time layer that none of them address.
 
 ## Data Store Schema
 
