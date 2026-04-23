@@ -4,6 +4,51 @@
 
 The [CWE/SANS Top 25 Most Dangerous Software Weaknesses](https://cwe.mitre.org/top25/) covers vulnerability classes that affect all software, not just web applications. It's the primary gap-filler for libraries, backend services, and any project where ASVS has limited coverage.
 
+## The 25 Requirements + On the Cusp
+
+The [CWE Top 25](https://cwe.mitre.org/top25/) is the primary list. The [On the Cusp](https://cwe.mitre.org/top25/archive/2025/2025_onthecusp_list.html) list (ranks 26–40) adds weaknesses that nearly made the cut. Rankings shift year to year — a few CWEs appear in both the 2024 Top 25 and the 2025 On the Cusp as the lists evolve.
+
+| Rank | CWE | Name | List | ASVS Overlap | Unique Value |
+|---|---|---|---|---|---|
+| 1 | CWE-79 | Cross-site Scripting | Top 25 | 1.2.x, 5.1.x | — (ASVS covers well) |
+| 2 | CWE-787 | Out-of-bounds Write | Top 25 | None | Memory safety — C/C++ buffer overflows |
+| 3 | CWE-89 | SQL Injection | Top 25 | 1.2.x, 1.3.x | — (ASVS covers well) |
+| 4 | CWE-352 | Cross-Site Request Forgery | Top 25 | 3.5.x | — (ASVS covers well) |
+| 5 | CWE-22 | Path Traversal | Top 25 | 1.4.x (partial) | Non-web path traversal (CLI tools, libraries) |
+| 6 | CWE-125 | Out-of-bounds Read | Top 25 | None | Memory read overflows, info leaks — C/C++ |
+| 7 | CWE-78 | OS Command Injection | Top 25 | 1.2.x (partial) | Non-web command injection (scripts, backend) |
+| 8 | CWE-416 | Use After Free | Top 25 | None | Memory safety — C/C++ only |
+| 9 | CWE-862 | Missing Authorization | Top 25 | 4.x, 10.x | API-level object authorization (overlaps API Top 10) |
+| 10 | CWE-434 | Unrestricted Upload | Top 25 | 1.4.x | — (ASVS covers well) |
+| 11 | CWE-94 | Code Injection | Top 25 | 1.2.x (partial) | Template injection, eval-based injection |
+| 12 | CWE-20 | Improper Input Validation | Top 25 | 1.x (broad) | Generic validation — ASVS is more specific |
+| 13 | CWE-77 | Command Injection | Top 25 | 1.2.x (partial) | Argument injection vs shell injection distinction |
+| 14 | CWE-287 | Improper Authentication | Top 25 | 2.x, 7.x | — (ASVS covers well) |
+| 15 | CWE-269 | Improper Privilege Management | Top 25 | 4.x, 10.x | Privilege escalation patterns |
+| 16 | CWE-502 | Deserialization | Top 25 | 1.x (minimal) | Java/Python deserialization gadgets |
+| 17 | CWE-200 | Exposure of Sensitive Info | Top 25 | 8.x, 17.x | Broader than ASVS — any info leak channel |
+| 18 | CWE-863 | Incorrect Authorization | Top 25 | 4.x, 10.x | Subtle authz logic bugs vs missing authz |
+| 19 | CWE-918 | Server-Side Request Forgery | Top 25 | 1.x (partial) | SSRF in non-web contexts (internal services) |
+| 20 | CWE-119 | Buffer Overflow (generic) | Top 25 | None | Parent class of CWE-787/125 — C/C++ |
+| 21 | CWE-476 | NULL Pointer Dereference | Top 25 | None | Availability impact — C/C++, Rust (unsafe) |
+| 22 | CWE-190 | Integer Overflow | Top 25 | None | Arithmetic overflow — C/C++, Java (partial) |
+| 23 | CWE-362 | Race Condition | Top 25 | None | TOCTOU, concurrent state — all languages |
+| 24 | CWE-306 | Missing Authentication | Top 25 | 2.x | — (ASVS covers well) |
+| 25 | CWE-295 | Improper Certificate Validation | Top 25 | 12.x | TLS certificate pinning, chain validation |
+| 26 | CWE-266 | Incorrect Privilege Assignment | On the Cusp | 4.x (partial) | Multi-role apps (Steve, Airflow) |
+| 27 | CWE-276 | Incorrect Default Permissions | On the Cusp | None | File/config permission handling |
+| 28 | CWE-288 | Auth Bypass via Alternate Path | On the Cusp | 2.x (partial) | 6 CVEs in CISA KEV — high real-world impact |
+| 29 | CWE-400 | Uncontrolled Resource Consumption | On the Cusp | 2.4.x (partial) | DoS via APIs, unbounded queries, memory exhaustion |
+| 30 | CWE-798 | Use of Hard-coded Credentials | On the Cusp | 6.x | All projects — secrets in source |
+| 31 | CWE-401 | Memory Leak | On the Cusp | None | C/C++ libraries (trending upward) |
+| 32 | CWE-601 | Open Redirect | On the Cusp | 1.x (partial) | Web apps — redirect-based phishing |
+
+Note: A few On the Cusp CWEs omitted — PHP-specific or overlap with existing Top 25 entries. CWE-269, CWE-287, CWE-190, and CWE-362 appear in both the 2024 Top 25 and 2025 On the Cusp due to year-over-year ranking shifts; they're listed under Top 25 above.
+
+Of the Top 25, roughly 10 have strong ASVS overlap (web-focused CWEs), 7 have partial overlap, and 8 have no ASVS coverage at all (memory safety, race conditions, integer overflow). The On the Cusp entries add coverage for privilege assignment, resource exhaustion, and auth bypass patterns that ASVS touches only lightly.
+
+The consolidator deduplicates overlapping entries using `cross_references` — when ASVS 1.2.1 and CWE-79 flag the same XSS issue, they merge into a single finding.
+
 ## Why CWE Top 25
 
 | What ASVS misses | CWE that covers it |
@@ -16,8 +61,9 @@ The [CWE/SANS Top 25 Most Dangerous Software Weaknesses](https://cwe.mitre.org/t
 | Deserialization | CWE-502 |
 | Command injection (non-web) | CWE-78 |
 | Path traversal (non-web) | CWE-22 |
-
-ASVS and CWE Top 25 overlap on web-specific issues (XSS → CWE-79, SQLi → CWE-89). The consolidator deduplicates these using `cross_references`.
+| Memory leak | CWE-401 (On the Cusp) |
+| Resource exhaustion | CWE-400 (On the Cusp) |
+| Hard-coded credentials | CWE-798 (On the Cusp) |
 
 ## Requirements
 
@@ -52,13 +98,14 @@ Key: cwe-top-25:requirements:CWE-79
 
 ### Level Mapping
 
-CWE entries don't have ASVS-style levels. Map using the CWE Top 25 ranking:
+CWE entries don't have ASVS-style levels. Map using the ranking from the combined table above:
 
 | Level | CWE Rank | Count | Rationale |
 |---|---|---|---|
-| L1 | 1–10 | 10 | Most dangerous, always audit |
-| L2 | 11–20 | 10 | Important, audit for mature projects |
-| L3 | 21–25 | 5 | Complete coverage |
+| L1 | 1–10 (Top 25) | 10 | Most dangerous, always audit |
+| L2 | 11–20 (Top 25) | 10 | Important, audit for mature projects |
+| L3 | 21–25 (Top 25) | 5 | Complete Top 25 coverage |
+| L3+ | 26–32 (On the Cusp) | 7 | Extended coverage for high-assurance projects |
 
 ### Language Filtering
 
@@ -159,7 +206,7 @@ When both ASVS and CWE Top 25 are selected, the consolidator uses cross-referenc
 
 | Task | Effort | Dependencies |
 |---|---|---|
-| Write ingest script for CWE data | 1 day | None |
+| Write ingest script for CWE data (Top 25 + On the Cusp) | 1 day | None |
 | Build cross-reference mapping (CWE ↔ ASVS) | 1 day | Ingest script |
 | Adapt audit prompt template for CWE format | Half day | None |
 | Add language filtering to discovery agent | Half day | [Phase 0](../multi-spec-architecture.md) |

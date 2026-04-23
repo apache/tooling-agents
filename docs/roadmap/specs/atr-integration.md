@@ -8,7 +8,7 @@ ATR runs a verification pipeline on release artifacts before they reach mirrors.
 
 **GPG signature verification** (`signature.py`) — Full cryptographic verification, not just "does .asc exist." ATR imports the PMC's public signing keys from the database, verifies the detached signature using `gnupg.GPG.verify_file()`, and confirms the signing key has an Apache UID. A valid signature from a non-ASF key is rejected. Reports key ID, fingerprint, timestamp, and trust level.
 
-**Hash verification** (`hashing.py`) — Computes SHA-256 or SHA-512 from the actual artifact bytes and compares against the published hash file using timing-safe `secrets.compare_digest`. MD5 is forbidden; SHA-1 is deprecated. Hash mismatch is a blocker (not just a warning).
+**Hash verification** (`hashing.py`) — Computes SHA-256 or SHA-512 from the actual artifact bytes and compares against the published hash file using timing-safe `secrets.compare_digest`. MD5 is forbidden; SHA-1 is deprecated. Hash mismatch is a blocker.
 
 **Source-to-release comparison** (`compare.py`) — Clones the tagged Git source using `dulwich` and compares the file tree against the release archive. Catches unauthorized file additions, modifications, or deletions between the tagged source and what's actually in the release.
 
@@ -20,31 +20,33 @@ ATR runs a verification pipeline on release artifacts before they reach mirrors.
 
 **OSV vulnerability scanning** (`sbom/osv.py`) — Queries the OSV API using PackageURLs extracted from the SBOM to identify known vulnerabilities in dependencies. Covers CVE, GHSA, and 30+ other vulnerability databases.
 
-## What ATR Can't See
+## What ATR Doesn't Analyze
 
-ATR operates on release artifacts. It doesn't have access to:
+ATR has access to project source code — the compare check clones the tagged repo to verify the file tree matches the release archive. But ATR's scope is release verification, not code analysis. It doesn't run:
 
-- **Source code logic** — SQL injection, XSS, authentication bypass, race conditions, and other code-level vulnerabilities are invisible at the artifact level. A perfectly signed release can contain critically vulnerable code.
-- **CI/CD pipeline security** — ATR verifies the output of the build, not the build process itself. A compromised CI pipeline can produce a tampered artifact that a legitimate committer then signs and releases through ATR.
-- **Development practices** — Whether the project has SECURITY.md, uses Dependabot, pins GHA actions to SHAs, or follows ASF OAuth patterns. ATR checks the release, not the repo.
-- **Build provenance** — ATR verifies that a human (committer) signed the artifact. It doesn't verify that the build system was tamper-resistant or that the artifact is reproducible.
+- **Code-level security analysis** — SQL injection, XSS, authentication bypass, race conditions, and other vulnerabilities in application logic. A perfectly signed release can contain critically vulnerable code.
+- **CI/CD pipeline security checks** — ATR verifies the output of the build, not the build process itself. A compromised CI pipeline can produce a tampered artifact that a legitimate committer then signs and releases through ATR.
+- **Development practice validation** — Whether the project has SECURITY.md, uses Dependabot, pins GHA actions to SHAs, or follows ASF OAuth patterns.
+- **Build environment verification** — ATR captures Trusted Publisher provenance (commit SHA, workflow ref, runner environment) but doesn't verify that the build was isolated or reproducible.
+
+A future direction could be to offer optional code analysis within ATR — for example, allowing PMCs to connect their own LLM API keys to run lightweight tooling-agents checks during the release process. This would bring some shift-left benefits directly into the release workflow without requiring projects to run tooling-agents separately.
 
 ## Three Layers of Assurance
 
 ```
-Development                    Build                        Distribution
-┌────────────────────┐   ┌──────────────────┐   ┌──────────────────────┐
-│  tooling-agents    │   │  tooling-agents  │   │  ATR                 │
-│                    │   │  (SLSA assess.)  │   │                      │
-│  • Code security   │   │  • Provenance    │   │  • GPG signature     │
-│    (ASVS, CWE)     │   │    generation?   │   │    verification      │
-│  • CI/CD security  │──▶│  • Build         │──▶│  • SHA-256/512 hash  │
-│    (GHA Review)    │   │    isolation?    │   │  • Source-to-release  │
-│  • ASF practices   │   │  • Reproducible  │   │    tree comparison   │
-│    (Baseline)      │   │    builds?       │   │  • License/NOTICE    │
-│                    │   │                  │   │  • SBOM + OSV scan   │
-│                    │   │                  │   │  • TP provenance     │
-└────────────────────┘   └──────────────────┘   └──────────────────────┘
+Development                  Build                      Distribution
+┌──────────────────┐   ┌────────────────────┐   ┌────────────────────────┐
+│  tooling-agents  │   │  tooling-agents    │   │  ATR                   │
+│                  │   │  (SLSA assess.)    │   │                        │
+│  • Code security │   │  • Provenance      │   │  • GPG signature       │
+│    (ASVS, CWE)   │   │    generation?     │   │    verification        │
+│  • CI/CD security│──▶│  • Build           │──▶│  • SHA-256/512 hash    │
+│    (GHA Review)  │   │    isolation?      │   │  • Source-to-release   │
+│  • ASF practices │   │  • Reproducible    │   │    tree comparison     │
+│    (Baseline)    │   │    builds?         │   │  • License/NOTICE      │
+│                  │   │                    │   │  • SBOM + OSV scan     │
+│                  │   │                    │   │  • TP provenance       │
+└──────────────────┘   └────────────────────┘   └────────────────────────┘
 ```
 
 ## Per-Tool Complement
