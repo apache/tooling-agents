@@ -278,20 +278,27 @@ comm -23 /tmp/asvs_sections.txt /tmp/github_reports.txt
 
 ### Re-run failed sections
 
-Use `rerun-sections.sh` to audit missing sections and push them to a `rerun` subdirectory under the original output directory:
+Use `rerun-sections.sh` to audit missing sections and/or re-consolidate:
+
+| Mode | Command |
+|---|---|
+| Audit + consolidate (default) | `./rerun-sections.sh <namespace> <repo> <token> <dir> <section> [section...]` |
+| Audit only | `./rerun-sections.sh --no-consolidate <namespace> <repo> <token> <dir> <section> [section...]` |
+| Consolidate only | `./rerun-sections.sh --consolidate-only <repo> <token> <dir>` |
+
+Examples:
 
 ```bash
-./rerun-sections.sh <namespace> <output_repo> <output_token> <output_dir> <section> [section...]
+# Audit 5 missing sections then consolidate:
+./rerun-sections.sh "files:apache/steve" apache/tooling-agents ghp_xxx \
+  ASVS/reports/steve/v3/d0aa7e9 1.3.3 1.5.1 1.5.2 1.5.3 3.5.7
+
+# Re-consolidate only (e.g., after deploying a fix to the consolidation agent):
+./rerun-sections.sh --consolidate-only apache/tooling-agents ghp_xxx \
+  ASVS/reports/steve/v3/d0aa7e9
 ```
 
-To re-run consolidation after filling in the gaps (typically you would), add `--consolidate`:
-
-```bash
-./rerun-sections.sh "files:apache/steve/v3" apache/tooling-agents ghp_xxx \
-  ASVS/reports/steve/v3/d0aa7e9 --consolidate 1.3.3 1.5.1 1.5.2 1.5.3 3.5.7
-```
-
-The consolidator reads all subdirectories (including `rerun/`) and deduplicates findings across them.
+Audited sections are pushed to a `rerun/` subdirectory. The consolidator reads all subdirectories (including `rerun/`) and deduplicates findings across them.
 
 ### Data store inspection
 

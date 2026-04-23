@@ -9,6 +9,44 @@ async def run(input_dict, tools):
     try:
         import json
         import re
+        import ast
+
+        def parse_llm_json(raw):
+            """Parse JSON from LLM output with multiple fallbacks for common issues."""
+            # 1. Standard JSON
+            try:
+                return json.loads(raw)
+            except json.JSONDecodeError:
+                pass
+
+            # 2. Fix single-quoted keys/values (most common Sonnet issue)
+            try:
+                # Replace single quotes used as JSON delimiters with double quotes
+                # This is naive but catches {'key': 'value'} patterns
+                fixed = re.sub(r"(?<=[{,\[])\s*'([^']+)'\s*:", r' "\1":', raw)
+                fixed = re.sub(r":\s*'([^']*)'", r': "\1"', fixed)
+                # Fix trailing commas
+                fixed = re.sub(r",\s*([}\]])", r"\1", fixed)
+                return json.loads(fixed)
+            except (json.JSONDecodeError, Exception):
+                pass
+
+            # 3. Python literal (handles True/False/None + single quotes)
+            try:
+                return ast.literal_eval(raw)
+            except Exception:
+                pass
+
+            # 4. Last resort: strip non-JSON wrapper and retry
+            try:
+                # Sometimes Sonnet wraps JSON in markdown or extra text
+                inner = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', raw)
+                if inner:
+                    return json.loads(inner.group())
+            except Exception:
+                pass
+
+            raise json.JSONDecodeError("All parsing strategies failed", raw, 0)
         import base64
         from datetime import date
 
@@ -239,7 +277,7 @@ Return ONLY valid JSON:
                     )
                     json_match = re.search(r'\{[\s\S]*\}', result)
                     if json_match:
-                        extracted = json.loads(json_match.group())
+                        extracted = parse_llm_json(json_match.group())
                         extracted["source_report"] = report_key
                         extraction_ns.set(report_key, extracted)
                         print(f"{len(extracted.get('findings', []))} findings, status: {extracted.get('asvs_status', '?')}")
@@ -473,7 +511,7 @@ Return valid JSON:
                 msg_tokens = count_message_tokens(messages, FAST_PROVIDER, FAST_MODEL)
                 limit = int(FAST_CONTEXT_WINDOW * 0.80)
 
-                if msg_tokens > limit:
+                if msg_tokens > limit or len(rpts) > 25:
                     items = list(rpts.items())
                     mid = len(items) // 2
                     sub_results = []
@@ -486,11 +524,11 @@ Return valid JSON:
                             result, _ = await call_llm(
                                 provider=FAST_PROVIDER, model=FAST_MODEL,
                                 messages=sub_messages,
-                                parameters={**FAST_PARAMS, "max_tokens": 64000}, timeout=600,
+                                parameters={**FAST_PARAMS, "max_tokens": 64000}, timeout=900,
                             )
                             json_match = re.search(r'\{[\s\S]*\}', result)
                             if json_match:
-                                sub_results.append(json.loads(json_match.group()))
+                                sub_results.append(parse_llm_json(json_match.group()))
                         except Exception as e:
                             print(f"    ERROR in sub-group {si+1}: {e}")
                     if sub_results:
@@ -508,11 +546,11 @@ Return valid JSON:
                     result, _ = await call_llm(
                         provider=FAST_PROVIDER, model=FAST_MODEL,
                         messages=messages,
-                        parameters={**FAST_PARAMS, "max_tokens": 64000}, timeout=600,
+                        parameters={**FAST_PARAMS, "max_tokens": 64000}, timeout=900,
                     )
                     json_match = re.search(r'\{[\s\S]*\}', result)
                     if json_match:
-                        consolidated = json.loads(json_match.group())
+                        consolidated = parse_llm_json(json_match.group())
                         consolidation_ns.set(domain, consolidated)
                         print(f"    Result: {len(consolidated.get('consolidated_findings', []))} findings")
                         return domain, consolidated
@@ -655,7 +693,7 @@ If no duplicates: {"merges": []}"""
                     result, _ = await call_llm(provider=FAST_PROVIDER, model=FAST_MODEL, messages=messages, parameters=FAST_PARAMS, timeout=120)
                     json_match = re.search(r'\{[\s\S]*\}', result)
                     if json_match:
-                        dedup_result = json.loads(json_match.group())
+                        dedup_result = parse_llm_json(json_match.group())
                         lookup = {f"{f['_xd_domain']}:{f.get('temp_id','?')}": f for f in group}
                         for merge in dedup_result.get("merges", []):
                             keep = lookup.get(merge.get("keep",""))

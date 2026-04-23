@@ -1,55 +1,69 @@
 #!/bin/bash
-# rerun-sections.sh — Re-run failed/missing ASVS sections
+# rerun-sections.sh — Re-run failed/missing ASVS sections and/or consolidate
 #
 # Usage:
 #   ./rerun-sections.sh <namespace> <output_repo> <output_token> <output_dir> <section> [section...]
-#   ./rerun-sections.sh <namespace> <output_repo> <output_token> <output_dir> --consolidate <section> [section...]
+#   ./rerun-sections.sh --no-consolidate <namespace> <output_repo> <output_token> <output_dir> <section> [section...]
+#   ./rerun-sections.sh --consolidate-only <output_repo> <output_token> <output_dir>
 #
-# Example:
-#   ./rerun-sections.sh "files:apache/steve/v3" apache/tooling-agents ghp_xxx \
+# Examples:
+#   # Audit 5 sections then consolidate (default):
+#   ./rerun-sections.sh "files:apache/steve" apache/tooling-agents ghp_xxx \
 #     ASVS/reports/steve/v3/d0aa7e9 1.3.3 1.5.1 1.5.2 1.5.3 3.5.7
 #
-#   With re-consolidation (pass all domain directories):
-#   ./rerun-sections.sh "files:apache/steve/v3" apache/tooling-agents ghp_xxx \
-#     ASVS/reports/steve/v3/d0aa7e9 --consolidate 1.3.3 1.5.1 1.5.2 1.5.3 3.5.7
+#   # Audit only, skip consolidation:
+#   ./rerun-sections.sh --no-consolidate "files:apache/steve" apache/tooling-agents ghp_xxx \
+#     ASVS/reports/steve/v3/d0aa7e9 1.3.3 1.5.1 1.5.2 1.5.3 3.5.7
+#
+#   # Re-consolidate only (no auditing):
+#   ./rerun-sections.sh --consolidate-only apache/tooling-agents ghp_xxx \
+#     ASVS/reports/steve/v3/d0aa7e9
 
 set -euo pipefail
 
 API_BASE="${GOFANNON_API:-http://localhost:8000}"
 
-if [ $# -lt 5 ]; then
-    echo "Usage: $0 <namespace> <output_repo> <output_token> <output_dir> [--consolidate] <section> [section...]"
-    echo ""
-    echo "  namespace     Data store namespace (e.g., files:apache/steve/v3)"
-    echo "  output_repo   GitHub repo for reports (e.g., apache/tooling-agents)"
-    echo "  output_token  GitHub PAT with write access"
-    echo "  output_dir    Report directory (e.g., ASVS/reports/steve/v3/d0aa7e9)"
-    echo "  --consolidate Re-run consolidation after auditing (optional)"
-    echo "  section       ASVS section numbers (e.g., 1.3.3 1.5.1)"
-    exit 1
-fi
+# ---- Parse mode ----
+CONSOLIDATE=true
+CONSOLIDATE_ONLY=false
 
-NAMESPACE="$1"; shift
-OUTPUT_REPO="$1"; shift
-OUTPUT_TOKEN="$1"; shift
-OUTPUT_DIR="$1"; shift
-
-CONSOLIDATE=false
-if [ "${1:-}" = "--consolidate" ]; then
-    CONSOLIDATE=true
+if [ "${1:-}" = "--consolidate-only" ]; then
+    CONSOLIDATE_ONLY=true
+    shift
+elif [ "${1:-}" = "--no-consolidate" ]; then
+    CONSOLIDATE=false
     shift
 fi
 
-SECTIONS=("$@")
-RERUN_DIR="${OUTPUT_DIR}/rerun"
+if [ "$CONSOLIDATE_ONLY" = true ]; then
+    if [ $# -lt 3 ]; then
+        echo "Usage: $0 --consolidate-only <output_repo> <output_token> <output_dir>"
+        exit 1
+    fi
+    NAMESPACE=""
+    OUTPUT_REPO="$1"; shift
+    OUTPUT_TOKEN="$1"; shift
+    OUTPUT_DIR="$1"; shift
+    SECTIONS=()
+else
+    if [ $# -lt 5 ]; then
+        echo "Usage: $0 [--no-consolidate] <namespace> <output_repo> <output_token> <output_dir> <section> [section...]"
+        echo "       $0 --consolidate-only <output_repo> <output_token> <output_dir>"
+        exit 1
+    fi
+    NAMESPACE="$1"; shift
+    OUTPUT_REPO="$1"; shift
+    OUTPUT_TOKEN="$1"; shift
+    OUTPUT_DIR="$1"; shift
 
-echo "============================================================"
-echo "Re-running ${#SECTIONS[@]} sections"
-echo "  Namespace: ${NAMESPACE}"
-echo "  Output: ${OUTPUT_REPO}/${RERUN_DIR}"
-echo "  Consolidate: ${CONSOLIDATE}"
-echo "============================================================"
-echo ""
+    SECTIONS=("$@")
+    if [ ${#SECTIONS[@]} -eq 0 ]; then
+        echo "Error: No sections specified"
+        exit 1
+    fi
+fi
+
+RERUN_DIR="${OUTPUT_DIR}/rerun"
 
 call_agent() {
     local agent_name="$1"
@@ -61,14 +75,23 @@ call_agent() {
         -d "${input_json}"
 }
 
+# ---- Audit phase ----
 SUCCEEDED=0
 FAILED=0
 
-for section in "${SECTIONS[@]}"; do
-    echo "[${section}] Auditing..."
+if [ "$CONSOLIDATE_ONLY" = false ]; then
+    echo "============================================================"
+    echo "Auditing ${#SECTIONS[@]} sections"
+    echo "  Namespace: ${NAMESPACE}"
+    echo "  Output: ${OUTPUT_REPO}/${RERUN_DIR}"
+    echo "  Consolidate after: ${CONSOLIDATE}"
+    echo "============================================================"
+    echo ""
 
-    # Build audit input
-    AUDIT_INPUT=$(python3 -c "
+    for section in "${SECTIONS[@]}"; do
+        echo "[${section}] Auditing..."
+
+        AUDIT_INPUT=$(python3 -c "
 import json
 print(json.dumps({
     'inputText': json.dumps({
@@ -78,19 +101,18 @@ print(json.dumps({
 }))
 ")
 
-    AUDIT_RESULT=$(call_agent "run_asvs_security_audit" "${AUDIT_INPUT}")
-    AUDIT_TEXT=$(echo "${AUDIT_RESULT}" | python3 -c "import sys,json; print(json.load(sys.stdin).get('outputText',''))" 2>/dev/null || echo "")
+        AUDIT_RESULT=$(call_agent "run_asvs_security_audit" "${AUDIT_INPUT}")
+        AUDIT_TEXT=$(echo "${AUDIT_RESULT}" | python3 -c "import sys,json; print(json.load(sys.stdin).get('outputText',''))" 2>/dev/null || echo "")
 
-    if [ -z "${AUDIT_TEXT}" ] || echo "${AUDIT_TEXT}" | grep -q "^Error:"; then
-        echo "  AUDIT FAILED: ${AUDIT_TEXT:0:200}"
-        FAILED=$((FAILED + 1))
-        continue
-    fi
+        if [ -z "${AUDIT_TEXT}" ] || echo "${AUDIT_TEXT}" | grep -q "^Error:"; then
+            echo "  AUDIT FAILED: ${AUDIT_TEXT:0:200}"
+            FAILED=$((FAILED + 1))
+            continue
+        fi
 
-    echo "  Audit done: ${#AUDIT_TEXT} chars"
+        echo "  Audit done: ${#AUDIT_TEXT} chars"
 
-    # Push to GitHub
-    PUSH_INPUT=$(python3 -c "
+        PUSH_INPUT=$(python3 -c "
 import json
 print(json.dumps({
     'inputText': json.dumps({
@@ -104,29 +126,37 @@ print(json.dumps({
 }))
 ")
 
-    PUSH_RESULT=$(call_agent "add_markdown_file_to_github_directory" "${PUSH_INPUT}")
+        PUSH_RESULT=$(call_agent "add_markdown_file_to_github_directory" "${PUSH_INPUT}")
 
-    if echo "${PUSH_RESULT}" | python3 -c "import sys,json; d=json.load(sys.stdin).get('outputText',''); exit(0 if 'sha' in d.lower() or 'content' in d.lower() else 1)" 2>/dev/null; then
-        echo "  Push OK"
-        SUCCEEDED=$((SUCCEEDED + 1))
-    else
-        echo "  Push FAILED"
-        FAILED=$((FAILED + 1))
+        if echo "${PUSH_RESULT}" | python3 -c "import sys,json; d=json.load(sys.stdin).get('outputText',''); exit(0 if 'sha' in d.lower() or 'content' in d.lower() else 1)" 2>/dev/null; then
+            echo "  Push OK"
+            SUCCEEDED=$((SUCCEEDED + 1))
+        else
+            echo "  Push FAILED"
+            FAILED=$((FAILED + 1))
+        fi
+
+        echo ""
+    done
+
+    echo "============================================================"
+    echo "Audit complete: ${SUCCEEDED} succeeded, ${FAILED} failed"
+    echo "============================================================"
+fi
+
+# ---- Consolidation phase ----
+if [ "${CONSOLIDATE}" = true ]; then
+    if [ "$CONSOLIDATE_ONLY" = false ] && [ ${SUCCEEDED} -eq 0 ]; then
+        echo "Skipping consolidation (no successful audits)"
+        exit 1
     fi
 
     echo ""
-done
-
-echo "============================================================"
-echo "Complete: ${SUCCEEDED} succeeded, ${FAILED} failed"
-echo "============================================================"
-
-if [ "${CONSOLIDATE}" = true ] && [ ${SUCCEEDED} -gt 0 ]; then
-    echo ""
-    echo "Re-running consolidation..."
+    echo "============================================================"
+    echo "Consolidating reports"
     echo "  Reading from: ${OUTPUT_DIR}"
+    echo "============================================================"
 
-    # List all subdirectories in the output directory
     DIRS=$(curl -s -H "Authorization: token ${OUTPUT_TOKEN}" \
         "https://api.github.com/repos/${OUTPUT_REPO}/contents/${OUTPUT_DIR}" \
         | python3 -c "
