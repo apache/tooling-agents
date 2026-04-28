@@ -1,6 +1,6 @@
 # Rustopyian Constructinator
 
-A [Gofannon](https://github.com/apache/gofannon) agent that takes a Rust crate and produces a Python wrapper project using [PyO3](https://pyo3.rs) and [maturin](https://www.maturin.rs).
+A [Gofannon](https://github.com/The-AI-Alliance/gofannon) agent that takes a Rust crate and produces a Python wrapper project using [PyO3](https://pyo3.rs) and [maturin](https://www.maturin.rs).
 
 Rust crate goes in, Python package comes out.
 
