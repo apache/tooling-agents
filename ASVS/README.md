@@ -7,18 +7,18 @@ Built on [Gofannon](https://github.com/The-AI-Alliance/gofannon) — see [docs/g
 ## Pipeline Flow
 
 ```
-orchestrate_asvs_audit_to_github         (single entry point)
+asvs_orchestrate                       (single entry point)
   │
-  ├──▶ download_github_repo_to_datastore  (once — fetches source code)
+  ├──▶ asvs_download_repo              (once — fetches source code)
   │
-  ├──▶ discover_codebase_architecture     (once — generates audit plan)
+  ├──▶ asvs_discover                   (once — generates audit plan)
   │
-  ├──▶ run_asvs_security_audit            (× N sections)
-  │    └──▶ add_markdown_file_to_github_directory  (× N)
+  ├──▶ asvs_audit                      (× N sections)
+  │    └──▶ asvs_push_github           (× N)
   │
-  ├──▶ consolidate_asvs_security_audit_reports  (once — final report)
+  ├──▶ asvs_consolidate                (once — final report)
   │
-  └──▶ redact + publish                   (if privateRepo is set)
+  └──▶ redact + publish                (if privateRepo is set)
          ├──▶ read full reports from private repo
          ├──▶ strip Critical findings
          ├──▶ push redacted reports to public repo
@@ -31,7 +31,7 @@ Pre-requisites (one-time, outside the pipeline):
 
 ## Quick Start
 
-Run `orchestrate_asvs_audit_to_github` with:
+Run `asvs_orchestrate` with:
 
 | Input | Value |
 |---|---|
@@ -120,7 +120,7 @@ When `privateRepo` is absent, all reports go directly to `outputRepo` (current b
 
 All gofannon inputs are strings.
 
-### 1. orchestrate_asvs_audit_to_github
+### 1. asvs_orchestrate
 
 The main entry point. Calls all other agents.
 
@@ -133,7 +133,7 @@ The main entry point. Calls all other agents.
 | `outputToken` | yes | PAT with write access to output repo |
 | `outputDirectory` | yes | Base directory — repo name and commit hash are appended automatically |
 | `discover` | no | `"true"` or `"false"` (default `"true"`) |
-| `level` | no | `"L1"`, `"L2"`, or `"L3"` (default `"L3"` — use `"L1"` for a quick baseline audit) |
+| `level` | no | `"L1"`, `"L2"`, or `"L3"` (default empty, treated as L3 — use `"L1"` for a quick baseline audit) |
 | `severityThreshold` | no | `"CRITICAL"`, `"HIGH"`, `"MEDIUM"`, or empty |
 | `consolidate` | no | `"true"` or `"false"` (default `"true"`) |
 | `privateRepo` | no | Private repo for full unredacted reports (enables carve-out) |
@@ -145,15 +145,15 @@ The main entry point. Calls all other agents.
 **Namespace derivation:** The orchestrator parses `sourceRepo` to derive the code namespace automatically. `apache/airflow` → `files:apache/airflow`. If `supplementalData` is `audit_guidance`, the namespace list becomes `["files:apache/airflow", "audit_guidance"]`.
 
 **Agents called:**
-1. `download_github_repo_to_datastore` — downloads source code
-2. `discover_codebase_architecture` — generates audit plan (if `discover="true"`)
-3. `run_asvs_security_audit` — once per ASVS section
-4. `add_markdown_file_to_github_directory` — once per section, plus consolidated/issues
-5. `consolidate_asvs_security_audit_reports` — final report (if `consolidate="true"`)
+1. `asvs_download_repo` — downloads source code
+2. `asvs_discover` — generates audit plan (if `discover="true"`)
+3. `asvs_audit` — once per ASVS section
+4. `asvs_push_github` — once per section, plus consolidated/issues
+5. `asvs_consolidate` — final report (if `consolidate="true"`)
 
 ---
 
-### 2. download_github_repo_to_datastore
+### 2. asvs_download_repo
 
 Downloads a GitHub repo (or subdirectory) into the data store.
 
@@ -167,7 +167,7 @@ Stores files in namespace `files:{owner}/{repo}`. When a path prefix is included
 
 ---
 
-### 3. discover_codebase_architecture
+### 3. asvs_discover
 
 Scans codebase, generates domains + file lists + false positive guidance.
 
@@ -179,7 +179,7 @@ Scans codebase, generates domains + file lists + false positive guidance.
 
 ---
 
-### 4. run_asvs_security_audit
+### 4. asvs_audit
 
 Audits code against a single ASVS requirement.
 
@@ -191,18 +191,20 @@ JSON fields inside `inputText`:
 
 | Field | Required | Description |
 |---|---|---|
-| `namespaces` | yes | Array of data store namespaces |
-| `asvs` | yes | ASVS section (e.g., `"6.1.1"`) |
+| `namespaces` | yes | Array of data store namespaces (singular `namespace` also accepted) |
+| `asvs` | yes | ASVS section (e.g., `"6.1.1"`) — alias `asvs_section` also accepted |
 | `includeFiles` | no | Array of file glob patterns — skips relevance filtering |
 | `domainContext` | no | Architecture context for Opus prompt |
 | `severityThreshold` | no | Minimum severity to report |
 | `falsePositiveGuidance` | no | Array of patterns to suppress |
 
+If `inputText` isn't valid JSON, the agent falls back to regex-parsing `namespace:` and `asvs:` keys out of free-form text.
+
 **Output:** `outputText` — markdown audit report.
 
 ---
 
-### 5. consolidate_asvs_security_audit_reports
+### 5. asvs_consolidate
 
 Reads per-section reports from GitHub, deduplicates, produces consolidated report + issues.
 
@@ -217,13 +219,21 @@ Reads per-section reports from GitHub, deduplicates, produces consolidated repor
 
 ---
 
-### 6. add_markdown_file_to_github_directory
+### 6. asvs_push_github
 
 | Input | Required | Description |
 |---|---|---|
-| `inputText` | yes | JSON with `repo`, `token`, `directory`, `filename` |
-| `commitMessage` | yes | Git commit message |
+| `inputText` | yes | JSON with `repo`, `token`, `directory`, `filename` (see optional fields below) |
+| `commitMessage` | no | Git commit message (default: `"Add markdown file"`) |
 | `fileContents` | yes | Markdown content |
+
+Optional fields inside `inputText`:
+
+| Field | Description |
+|---|---|
+| `branch` | Target branch (defaults to the repo's default branch) |
+| `filePath` | Full repo-relative path as an alternative to `directory` + `filename` |
+| `apiBase` | GitHub API base URL (default `https://api.github.com`; set for GitHub Enterprise) |
 
 **Output:** `outputText` — GitHub API response.
 
