@@ -6,56 +6,47 @@
 **Description:**
 
 ### Summary
-User-supplied S3/GCS URL paths containing potentially sensitive bucket names and object keys may be exposed in application logs and error messages. While query strings are properly rejected, bucket names and object key paths can leak sensitive identifiers such as customer IDs, dataset names, or internal project names through error handling and logging mechanisms.
+User-supplied S3/GCS URL paths containing bucket names and object keys may be exposed in error messages and logs, potentially leaking sensitive information such as customer IDs, dataset names, or internal project identifiers.
 
 ### Details
-The `encode_from_parquet` function accepts remote URL strings that flow through the platform module and may be included in error messages via the `MahoutError::Io(String)` variant. Object keys in S3/GCS paths often contain sensitive business identifiers that should not appear in logs accessible to operators or monitoring systems.
+The `encode_from_parquet` function in `qdp/qdp-core/src/lib.rs` accepts remote URL paths as string arguments that flow through the platform module and may be included in error messages via the `MahoutError::Io(String)` variant. While query strings are explicitly rejected (a positive security pattern), the bucket names and object key paths themselves are not sanitized before being logged or included in error output.
 
-**Affected Files:**
-- `qdp/qdp-core/src/lib.rs` - `encode_from_parquet` function, lines referencing `path: &str`
+**Example sensitive paths:**
+- `s3://customer-12345-data/pii-exports/users.parquet`
+- `gs://internal-project-alpha/confidential/dataset.parquet`
+
+**Affected Components:**
+- `qdp/qdp-core/src/lib.rs` - `encode_from_parquet` function and path handling
 - `docs/qdp/getting-started.md` - remote URL examples
 
 **CWE:** N/A  
-**ASVS:** 14.2.1 (L1)  
-**Severity:** Low
+**ASVS:** 14.2.1 (Level L1)
 
 ### Remediation
-Implement path sanitization in error messages to redact sensitive bucket names and object keys before logging:
+1. Implement a `sanitize_remote_path()` function that redacts sensitive portions of S3/GCS URLs before including them in error messages or logs
+2. Use structured logging that separates path components for selective redaction
+3. Example sanitization pattern: `s3://bucket-name/path/to/file.parquet` → `s3://<redacted-bucket>/<redacted-path>/file.parquet`
+4. Apply sanitization consistently across all error handling paths that may expose user-supplied URLs
 
-1. Create a `sanitize_remote_path` function that:
-   - Detects S3/GCS URL patterns
-   - Redacts bucket and key portions (e.g., `s3://bucket/<redacted>` or `s3://<redacted>/<redacted>`)
-   - Preserves enough context for debugging (protocol, general error location)
-
-2. Apply sanitization to all error paths that include user-supplied URLs
-
-3. Consider structured logging that separates path components, allowing selective redaction of sensitive fields while preserving protocol/region information for operational debugging
-
-**Example Implementation:**
+**Suggested implementation:**
 ```rust
-fn sanitize_remote_path(path: &str) -> String {
-    // Redact bucket and key while preserving protocol
-    if path.starts_with("s3://") || path.starts_with("gs://") {
-        let protocol = path.split("://").next().unwrap();
-        format!("{}://<redacted>", protocol)
-    } else {
-        path.to_string()
-    }
+fn sanitize_remote_path(url: &str) -> String {
+    // Redact bucket and key portions while preserving protocol and filename
+    // e.g., "s3://bucket/key/file.parquet" -> "s3://<redacted>/<redacted>/file.parquet"
 }
 ```
 
 ### Acceptance Criteria
-- [ ] Fixed: Implement path sanitization function for S3/GCS URLs
-- [ ] Fixed: Apply sanitization to all error messages containing remote paths
-- [ ] Fixed: Update logging to use sanitized paths
-- [ ] Test added: Unit tests for sanitization function with various URL formats
-- [ ] Test added: Integration tests verifying no sensitive paths appear in logs
-- [ ] Documentation updated to reflect security logging practices
+- [ ] Fixed - Implement path sanitization function for S3/GCS URLs
+- [ ] Test added - Unit tests verify bucket names and keys are redacted in error messages
+- [ ] Test added - Verify sanitized paths still provide useful debugging context
+- [ ] Documentation updated to reflect secure logging practices
+- [ ] Code review confirms all error paths apply sanitization
 
 ### References
 - Source Report: `14.2.1.md`
-- ASVS 14.2.1: Documentation Components
-- Related Finding IDs: ASVS-1421-LOW-001
+- Related IDs: ASVS-1421-LOW-001
+- ASVS Section: 14.2.1 - Safe File Uploads
 
 ### Priority
-**Low** - Information disclosure risk through logs. While sensitive data may be exposed, exploitation requires log access and the impact is limited to metadata leakage rather than direct data compromise. Should be addressed in regular security maintenance cycle.
+**Low** - Information disclosure risk through logs/errors. Does not directly expose data contents but may reveal internal infrastructure details or customer identifiers to unauthorized parties with access to logs.
