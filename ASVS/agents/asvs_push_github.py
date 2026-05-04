@@ -1,4 +1,11 @@
-# add_markdown_file_to_github_directory
+# asvs_push_github
+#
+# Pushes a markdown file to a GitHub directory. Used by every other agent
+# in the pipeline that needs to write reports.
+#
+# This agent is on the hot path but trivial in cost (~1-3 seconds per call).
+# No optimizations needed; included verbatim from the original so the
+# improved bundle is self-contained.
 
 from agent_factory.remote_mcp_client import RemoteMCPClient
 import litellm

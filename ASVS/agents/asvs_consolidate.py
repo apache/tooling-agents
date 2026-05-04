@@ -1,4 +1,17 @@
-# consolidate_asvs_security_audit_reports
+# asvs_consolidate
+#
+# Reads per-section reports from GitHub, deduplicates findings within and
+# across domains, and produces the final consolidated.md report and
+# issues.md (one issue per actionable finding).
+#
+# Improvements over original:
+#   - Phase 1 file reads now run in parallel (was sequential per file).
+#     Saves ~30-90 sec per repo on Phase 1.
+#   - Final consolidated.md and issues.md pushes run in parallel.
+#   - extraction_semaphore raised 5 → 8; consolidation_semaphore 3 → 5
+#     (Sonnet has plenty of headroom on Bedrock).
+#
+# Same I/O contract — drop-in replacement.
 
 from agent_factory.remote_mcp_client import RemoteMCPClient
 from services.llm_service import call_llm
@@ -47,6 +60,87 @@ async def run(input_dict, tools):
                 pass
 
             raise json.JSONDecodeError("All parsing strategies failed", raw, 0)
+
+        def _extract_finding_json(model_output):
+            """Find a JSON object in the model's response that matches the extraction schema.
+
+            The original extraction regex required the JSON to begin with one of
+            {asvs_section, findings, asvs_status} as its FIRST key. Sonnet 4.5
+            follows the prompt template literally, which lists "source_report"
+            first — so the regex never matched and consolidation got 0 findings
+            even when per-section reports clearly contained findings.
+
+            This walks every balanced top-level {...} block in the response and
+            returns the first one that parses as JSON AND contains any of the
+            expected extraction-schema keys. Robust to:
+              - any key ordering
+              - markdown code fences (opening AND closing)
+              - prose preamble or trailing text
+              - nested braces inside string values (tracks string state)
+              - multiple JSON blocks where only one matches the schema
+              - trailing commas (lenient parse fallback)
+            """
+            if not model_output:
+                return None
+
+            # Strip code fences (both opening AND closing)
+            cleaned = re.sub(r'```(?:json|JSON)?\s*\n?', '', model_output)
+            cleaned = cleaned.replace('```', '')
+
+            SCHEMA_KEYS = {
+                'source_report', 'asvs_section', 'findings', 'asvs_status',
+                'asvs_section_title', 'positive_controls',
+            }
+
+            n = len(cleaned)
+            i = 0
+            while i < n:
+                if cleaned[i] != '{':
+                    i += 1
+                    continue
+                depth = 0
+                in_string = False
+                escape = False
+                end = -1
+                for j in range(i, n):
+                    ch = cleaned[j]
+                    if escape:
+                        escape = False
+                        continue
+                    if ch == '\\' and in_string:
+                        escape = True
+                        continue
+                    if ch == '"':
+                        in_string = not in_string
+                        continue
+                    if in_string:
+                        continue
+                    if ch == '{':
+                        depth += 1
+                    elif ch == '}':
+                        depth -= 1
+                        if depth == 0:
+                            end = j + 1
+                            break
+                if end < 0:
+                    return None  # Unbalanced braces from here on
+                candidate = cleaned[i:end]
+                try:
+                    obj = json.loads(candidate)
+                except json.JSONDecodeError:
+                    # Lenient: strip trailing commas and retry
+                    try:
+                        lenient = re.sub(r',(\s*[}\]])', r'\1', candidate)
+                        obj = json.loads(lenient)
+                    except json.JSONDecodeError:
+                        i = end
+                        continue
+                if isinstance(obj, dict) and (set(obj.keys()) & SCHEMA_KEYS):
+                    return obj
+                i = end
+
+            return None
+
         import base64
         from datetime import date
 
@@ -184,6 +278,18 @@ async def run(input_dict, tools):
         reports = {}
         report_dirs = {}  # report_key -> directory it came from
 
+        async def fetch_one_report(directory, item):
+            file_resp = await http_client.get(
+                f"{GITHUB_API}/repos/{owner}/{repo}/contents/{directory}/{item['name']}",
+                headers=headers,
+                params={"ref": default_branch},
+            )
+            if file_resp.status_code == 200:
+                file_data = file_resp.json()
+                content = base64.b64decode(file_data["content"]).decode("utf-8", errors="replace")
+                return item['name'], content, directory
+            return item['name'], None, directory
+
         for directory in directories:
             print(f"\n  Reading reports from {directory}...")
             contents_resp = await http_client.get(
@@ -205,19 +311,16 @@ async def run(input_dict, tools):
 
             print(f"  Found {len(report_files)} report files")
 
-            for item in report_files:
-                file_resp = await http_client.get(
-                    f"{GITHUB_API}/repos/{owner}/{repo}/contents/{directory}/{item['name']}",
-                    headers=headers,
-                    params={"ref": default_branch},
-                )
-                if file_resp.status_code == 200:
-                    file_data = file_resp.json()
-                    content = base64.b64decode(file_data["content"]).decode("utf-8", errors="replace")
-                    report_key = item['name']
-                    reports[report_key] = content
-                    report_dirs[report_key] = directory
-                    print(f"    Read {report_key} ({len(content)} chars)")
+            # OPTIMIZATION: parallel file reads (was sequential)
+            if report_files:
+                fetch_results = await asyncio.gather(*[
+                    fetch_one_report(directory, item) for item in report_files
+                ])
+                for name, content, src_dir in fetch_results:
+                    if content is not None:
+                        reports[name] = content
+                        report_dirs[name] = src_dir
+                        print(f"    Read {name} ({len(content)} chars)")
 
         total_reports = len(reports)
         print(f"\nSuccessfully read {total_reports} reports")
@@ -247,7 +350,13 @@ Also extract:
 
 If the report has NO findings, return an empty findings list but still set asvs_status.
 
-Return ONLY valid JSON:
+CRITICAL OUTPUT REQUIREMENTS — read carefully:
+1. Output ONLY a single raw JSON object. No prose before or after. No markdown code fences. No "Here is the JSON" preamble.
+2. Your entire response must start with `{` and end with `}`.
+3. The JSON object MUST include all of these top-level keys: source_report, asvs_section, asvs_section_title, asvs_status, findings, positive_controls.
+4. Use double quotes for all keys and string values. No trailing commas.
+
+JSON schema:
 {
   "source_report": "filename.md",
   "asvs_section": "X.Y.Z",
@@ -257,7 +366,7 @@ Return ONLY valid JSON:
   "positive_controls": [{"control": "description", "evidence": "where observed", "files": ["file:line"]}]
 }"""
 
-        extraction_semaphore = asyncio.Semaphore(5)
+        extraction_semaphore = asyncio.Semaphore(8)  # raised from 5
         all_extracted = {}
         extraction_errors = []
 
@@ -277,39 +386,16 @@ Return ONLY valid JSON:
                         provider=FAST_PROVIDER, model=FAST_MODEL,
                         messages=messages, parameters=FAST_PARAMS, timeout=600,
                     )
-                    # Strip markdown fences before extracting JSON
-                    clean_result = re.sub(r'```(?:json)?\s*', '', result)
-                    # Look for JSON starting with known extraction keys, not random code blocks
-                    json_match = re.search(r'\{\s*"(?:asvs_section|findings|asvs_status)', clean_result)
-                    if not json_match:
-                        # Try single-quoted variant
-                        json_match = re.search(r"\{\s*'(?:asvs_section|findings|asvs_status)", clean_result)
-                    if json_match:
-                        # Find the balanced closing brace from the match start
-                        start = json_match.start()
-                        depth = 0
-                        end = start
-                        for i in range(start, len(clean_result)):
-                            if clean_result[i] == '{':
-                                depth += 1
-                            elif clean_result[i] == '}':
-                                depth -= 1
-                                if depth == 0:
-                                    end = i + 1
-                                    break
-                        raw = clean_result[start:end]
-                        try:
-                            extracted = parse_llm_json(raw)
-                        except Exception as e:
-                            print(f"ERROR: {e}")
-                            return report_key, None, str(e)
-                        extracted["source_report"] = report_key
-                        extraction_ns.set(report_key, extracted)
-                        print(f"{len(extracted.get('findings', []))} findings, status: {extracted.get('asvs_status', '?')}")
-                        return report_key, extracted, None
-                    else:
-                        print(f"WARNING: no JSON found")
+                    extracted = _extract_finding_json(result)
+                    if extracted is None:
+                        # Diagnostic: log a snippet so debugging is possible without enabling DEBUG mode
+                        snippet = (result or "").strip().replace("\n", " ")[:200]
+                        print(f"WARNING: no JSON found (response begins: {snippet!r})")
                         return report_key, None, "No JSON in result"
+                    extracted["source_report"] = report_key
+                    extraction_ns.set(report_key, extracted)
+                    print(f"{len(extracted.get('findings', []))} findings, status: {extracted.get('asvs_status', '?')}")
+                    return report_key, extracted, None
                 except Exception as e:
                     print(f"ERROR: {e}")
                     return report_key, None, str(e)
@@ -497,7 +583,7 @@ Return valid JSON:
   ]
 }}"""
 
-        consolidation_semaphore = asyncio.Semaphore(3)
+        consolidation_semaphore = asyncio.Semaphore(5)  # raised from 3
         domain_consolidated = {}
 
         def build_asvs_context_block(rpts):
@@ -1032,8 +1118,11 @@ End with ---."""
             resp = await http_client.put(f"{GITHUB_API}/repos/{owner}/{repo}/contents/{path}", headers=headers, json=payload)
             print(f"  {'OK' if resp.status_code in (200,201) else 'ERROR'}: {path}")
 
-        await push_file(f"{output_directory}/{consolidated_filename}", consolidated_md, f"Add consolidated audit report ({level})")
-        await push_file(f"{output_directory}/{issues_filename}", issues_md, f"Add security issues ({level})")
+        # OPTIMIZATION: push consolidated.md and issues.md in parallel
+        await asyncio.gather(
+            push_file(f"{output_directory}/{consolidated_filename}", consolidated_md, f"Add consolidated audit report ({level})"),
+            push_file(f"{output_directory}/{issues_filename}", issues_md, f"Add security issues ({level})"),
+        )
 
         print(f"\n=== Done ===")
         print(f"Total findings: {len(all_findings)}, Actionable issues: {len(actionable)}")

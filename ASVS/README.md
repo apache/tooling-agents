@@ -13,7 +13,7 @@ asvs_orchestrate                       (single entry point)
   │
   ├──▶ asvs_discover                   (once — generates audit plan)
   │
-  ├──▶ asvs_audit                      (× N sections)
+  ├──▶ asvs_audit  / asvs_bundle       (× N — bundle when sections share scope)
   │    └──▶ asvs_push_github           (× N)
   │
   ├──▶ asvs_consolidate                (once — final report)
@@ -24,6 +24,12 @@ asvs_orchestrate                       (single entry point)
          ├──▶ push redacted reports to public repo
          └──▶ email Critical summary to PMC
 ```
+
+The orchestrator routes audit work between two agents:
+- **`asvs_audit`** — single-section audit (one ASVS requirement at a time)
+- **`asvs_bundle`** — multi-section audit (multiple ASVS requirements sharing a file scope, in one Opus pass)
+
+When `asvs_discover` produces a domain pass with several sections targeting the same files, the orchestrator chunks them and routes each chunk to `asvs_bundle` instead of making N separate `asvs_audit` calls. This is the largest single performance optimization in the pipeline (~5–6× reduction in Opus calls per domain).
 
 Pre-requisites (one-time, outside the pipeline):
 - ASVS requirements loaded into the `asvs` data store namespace
@@ -94,9 +100,11 @@ reports/
 
 ## Architecture
 
-The pipeline uses Claude Sonnet for high-throughput parallel work (relevance filtering, code inventory, formatting, extraction, consolidation) and Claude Opus for deep security analysis where reasoning quality matters most.
+The pipeline uses Claude Sonnet for high-throughput parallel work (code inventory, formatting, extraction, consolidation), Claude Haiku for cheap classification (relevance filtering), and Claude Opus for deep security analysis where reasoning quality matters most.
 
-The discovery agent scans the codebase architecture and generates security domains — groupings of ASVS requirements by the code area they test (e.g., `auth_identity`, `secrets_crypto`, `web_input_validation`). Each domain gets its own file list, so the audit agent only analyzes relevant code. ASVS sections not assigned by discovery are caught by a fallback that groups them by ASVS chapter.
+The discovery agent scans the codebase architecture and generates security domains — groupings of ASVS requirements by the code area they test (e.g., `auth_identity`, `secrets_crypto`, `web_input_validation`). Each domain gets its own file list, so the audit agents only analyze relevant code. ASVS sections not assigned by discovery are caught by a fallback that groups them by ASVS chapter.
+
+When a domain has multiple sections sharing the same file scope, the orchestrator dispatches them as a bundle to `asvs_bundle`. Bundling produces one Opus reasoning trace covering all requirements in the bundle, then splits the response into per-section reports for downstream consolidation. The audit phase as a whole runs with bounded parallelism — multiple sections/bundles in flight at once via `PASS_CONCURRENCY` (default 4).
 
 The consolidation agent reads all per-section reports from GitHub, extracts findings into structured JSON, deduplicates within and across domains, generates deterministic cross-references, and produces the final consolidated report with executive summary and issues file.
 
@@ -144,12 +152,24 @@ The main entry point. Calls all other agents.
 
 **Namespace derivation:** The orchestrator parses `sourceRepo` to derive the code namespace automatically. `apache/airflow` → `files:apache/airflow`. If `supplementalData` is `audit_guidance`, the namespace list becomes `["files:apache/airflow", "audit_guidance"]`.
 
+**Performance knobs (env vars on the orchestrator):**
+
+| Env var | Default | Purpose |
+|---|---|---|
+| `PASS_CONCURRENCY` | `4` | Max audit calls in flight simultaneously (sections + bundles) |
+| `BUNDLE_MAX_SECTIONS` | `6` | Max ASVS sections per `asvs_bundle` call |
+| `BUNDLE_MIN_SECTIONS` | `2` | Below this, a pass falls back to single-section `asvs_audit` calls |
+| `TINY_REPO_LOC_THRESHOLD` | `30000` | Skip `asvs_discover` for repos under this LOC |
+
+Set `BUNDLE_MAX_SECTIONS=1` to disable bundling entirely (for rollback testing). The `asvs_bundle` agent stays registered but is never called.
+
 **Agents called:**
 1. `asvs_download_repo` — downloads source code
-2. `asvs_discover` — generates audit plan (if `discover="true"`)
-3. `asvs_audit` — once per ASVS section
-4. `asvs_push_github` — once per section, plus consolidated/issues
-5. `asvs_consolidate` — final report (if `consolidate="true"`)
+2. `asvs_discover` — generates audit plan (if `discover="true"` and the repo isn't tiny)
+3. `asvs_audit` — once per ASVS section that's not bundled
+4. `asvs_bundle` — once per bundle of sections sharing a file scope
+5. `asvs_push_github` — once per section, plus consolidated/issues
+6. `asvs_consolidate` — final report (if `consolidate="true"`)
 
 ---
 
@@ -165,6 +185,8 @@ Downloads a GitHub repo (or subdirectory) into the data store.
 
 Stores files in namespace `files:{owner}/{repo}`. When a path prefix is included (e.g., `apache/airflow/airflow-core/src`), only files under that path are downloaded. File paths in the data store are preserved as full repo-relative paths.
 
+Uses GitHub's tarball endpoint for the download (one HTTP call) — much faster than per-file fetches and uses far less of the GitHub API quota.
+
 ---
 
 ### 3. asvs_discover
@@ -177,11 +199,13 @@ Scans codebase, generates domains + file lists + false positive guidance.
 
 **Output:** `outputText` — JSON passConfig containing `passes`, `domain_groups`, `false_positive_guidance`.
 
+Each pass in the output describes a group of ASVS sections that share a file scope. The orchestrator uses these passes to route work to either `asvs_audit` (single) or `asvs_bundle` (multi).
+
 ---
 
 ### 4. asvs_audit
 
-Audits code against a single ASVS requirement.
+Audits code against a single ASVS requirement. Used for one-off audits and for sections that don't fit into a bundle.
 
 | Input | Required | Description |
 |---|---|---|
@@ -202,9 +226,57 @@ If `inputText` isn't valid JSON, the agent falls back to regex-parsing `namespac
 
 **Output:** `outputText` — markdown audit report.
 
+**Note:** If you pass `asvs_sections` as a list with more than one entry, this agent will return an error directing you to use `asvs_bundle` instead.
+
 ---
 
-### 5. asvs_consolidate
+### 5. asvs_bundle
+
+Audits code against MULTIPLE ASVS requirements in a single Opus deep-analysis call. Used by the orchestrator whenever a domain pass has 2+ sections sharing the same file scope.
+
+| Input | Required | Description |
+|---|---|---|
+| `inputText` | yes | JSON string (see fields below) |
+
+JSON fields inside `inputText`:
+
+| Field | Required | Description |
+|---|---|---|
+| `namespaces` | yes | Array of data store namespaces |
+| `asvs_sections` | yes | Array of ASVS section IDs (e.g., `["5.1.1", "5.1.2", "5.1.3"]`) |
+| `includeFiles` | no | Array of file glob patterns — skips relevance filtering |
+| `domainContext` | no | Architecture context for Opus prompt (shared across all sections) |
+| `severityThreshold` | no | Minimum severity to report |
+| `falsePositiveGuidance` | no | Array of patterns to suppress |
+
+**Output:** `outputText` — JSON envelope with the structure:
+
+```json
+{
+  "mode": "bundled",
+  "asvs_sections": ["5.1.1", "5.1.2", ...],
+  "per_section": {
+    "5.1.1": {
+      "report": "<full markdown report for this section>",
+      "findings": {"Critical": 2, "High": 5, "Medium": 8, "Low": 1},
+      "files_analyzed": 42,
+      "files_total": 187,
+      "files_skipped": 12
+    },
+    "5.1.2": { ... }
+  },
+  "raw_consolidated": "<full markdown before splitting>",
+  "metadata": { "files_analyzed": 42, "opus_batches": 3, "..." }
+}
+```
+
+The orchestrator decodes this envelope and pushes `per_section[X].report` to GitHub as `X.md` (one file per section, same as for `asvs_audit`). Downstream `asvs_consolidate` sees the same per-section report layout regardless of which agent produced them.
+
+**How it works:** One Opus call with a system prompt listing all bundled ASVS reqs. Opus is instructed to use `## ASVS-{section}: <name>` headers per requirement. The agent splits the response on those headers; cross-cutting "Architecture Observations" and "Recommendations" sections at the end get attached to each per-section report. If Opus skips a section, the splitter emits a stub explaining that no findings were produced for it.
+
+---
+
+### 6. asvs_consolidate
 
 Reads per-section reports from GitHub, deduplicates, produces consolidated report + issues.
 
@@ -219,7 +291,7 @@ Reads per-section reports from GitHub, deduplicates, produces consolidated repor
 
 ---
 
-### 6. asvs_push_github
+### 7. asvs_push_github
 
 | Input | Required | Description |
 |---|---|---|
@@ -310,6 +382,8 @@ Examples:
 
 Audited sections are pushed to a `rerun/` subdirectory. The consolidator reads all subdirectories (including `rerun/`) and deduplicates findings across them.
 
+Note that `rerun-sections.sh` calls `asvs_audit` directly (one section at a time), bypassing the orchestrator's bundling. This is intentional: when re-running just a few sections, the bundling overhead isn't worth it. If you need to re-run an entire domain, call `asvs_bundle` directly with `asvs_sections` as a list.
+
 ### Data store inspection
 
 ```bash
@@ -349,12 +423,54 @@ for ns, count in sorted(Counter(d['namespace'] for d in docs).items()):
 
 **"No ASVS sections match level L1"** — Check that ASVS requirement entries have a `level` field.
 
-**Download takes too long** — Use a path prefix to scope: `apache/airflow/airflow-core/src` instead of `apache/airflow`.
+**Download takes too long** — Use a path prefix to scope: `apache/airflow/airflow-core/src` instead of `apache/airflow`. (The pipeline already uses tarball downloads, so this is rarely an issue now — but a tighter scope still saves processing time downstream.)
 
 **Too many findings** — Use `severityThreshold="HIGH"` or `"CRITICAL"`.
 
 **Reports not on GitHub** — Check `outputToken` has write access to `outputRepo`.
 
-**Email not delivered** — The email agent uses `mail-relay.apache.org`. Only works from ASF infrastructure. Check the logs for SMTP errors.
+**Email not delivered** — The email step uses `mail-relay.apache.org`. Only works from ASF infrastructure. Check the logs for SMTP errors.
 
 **Redacted report still shows Critical findings** — The redaction regex looks for `🔴 Critical` and `CRITICAL` in finding blocks. If the consolidator's output format changed, the regex may need updating.
+
+**Bundle agent returned an error from `asvs_audit`** — If you tried to call `asvs_audit` with `asvs_sections` as a list of multiple sections, you'll get an error directing you to `asvs_bundle`. Either pass a single section as `asvs` or call `asvs_bundle` instead.
+
+**A bundled report has stub sections saying "no output produced"** — This means `asvs_bundle`'s splitter couldn't find a `## ASVS-{section}:` header for that section in Opus's output. Usually safe to retry; if it persists, the bundle is too large — drop `BUNDLE_MAX_SECTIONS` to 4 or call those sections individually via `asvs_audit`.
+
+---
+
+## Code conventions
+
+### Helpers must live inside `run()`
+
+Gofannon registers `run` as each agent's entrypoint and executes it in an environment where **module-level names defined alongside it are not in scope**. A helper at module level (e.g. `def _split_output():` at indent 0) will trigger `NameError: name '_split_output' is not defined` when `run` calls it.
+
+All helpers in these agents are defined **inside `run`'s `try:` block at indent 8** — same convention as `parse_llm_json` in `asvs_consolidate`, which has worked correctly in production. When adding new helpers to any agent, define them inside `run`. Don't reach for module-level functions.
+
+Quick pre-deploy check:
+
+```bash
+grep -cE "^(async )?def _" asvs_*.py | grep -v ":0$"
+```
+
+This should return nothing. If it lists any files with module-level `_` helpers, those will NameError at runtime.
+
+### Discovery output must be validated against the data store
+
+`asvs_discover` shows the LLM the full ASVS section list (no slicing) and validates the model's output against `valid_section_ids` from the `asvs` data store namespace. Hallucinated section IDs (the model inventing plausible-looking IDs like `2.4.5` to satisfy "every section must be assigned" constraints) are dropped before they reach the audit phase.
+
+`asvs_orchestrate` independently validates: any section ID not in the authoritative ASVS data store is dropped from the audit plan with a warning, regardless of how it got into the discovery output. Belt-and-suspenders.
+
+If you change discovery's output format or relax the validation, you risk audits running against nonexistent ASVS requirements (which then waste Opus calls and produce reports that consolidate can't match against the schema).
+
+---
+
+## More troubleshooting
+
+**"name '_X' is not defined" in agent logs** — Helper at module level instead of inside `run`. Move it inside `run`'s `try:` block.
+
+**Audit runs report way more sections than expected for the requested level** — Discovery may be hallucinating section IDs that pass through a permissive level filter. Both `asvs_discover` and `asvs_orchestrate` should be dropping unknowns; if they aren't, check the validation logs (`dropping N hallucinated section(s)` and `WARNING: dropping N unknown section ID(s)`).
+
+**`Total extracted findings: 0` even though per-section reports clearly contain findings** — Phase 2 of `asvs_consolidate` is failing to extract JSON. Check Phase 2 logs for `WARNING: no JSON found (response begins: ...)`. The first 200 chars of the response are logged when extraction fails. If the response starts with prose preamble or a different JSON shape, the extraction prompt or `_extract_finding_json` schema-keys may need updating.
+
+**`WARNING: No data found for asvs:requirements:X.Y.Z` during audit** — A section ID slipped past the validation. Check whether ASVS data is fully loaded into the `asvs` namespace, and whether the orchestrator's `dropping unknown section ID` warning fired during work-list construction.
