@@ -113,12 +113,16 @@ async def run(input_dict, tools):
                     headers=headers,
                 )
                 if resp.status_code != 200:
+                    # Surface this — previously returned silently and we'd never
+                    # know the private-repo read failed. Common causes: wrong
+                    # private repo, wrong path, or insufficient token scope.
+                    print(f"  Read redacted {pass_output_dir}/{filename} from {private_repo} FAILED: HTTP {resp.status_code}", flush=True)
                     return
                 file_data = resp.json()
                 file_content = base64.b64decode(file_data["content"]).decode("utf-8", errors="replace")
                 redacted_section, _ = redact_fn(file_content)
                 try:
-                    await gofannon_client.call(
+                    push_result = await gofannon_client.call(
                         agent_name="asvs_push_github",
                         input_dict={
                             "inputText": json.dumps({
@@ -129,8 +133,27 @@ async def run(input_dict, tools):
                             "fileContents": redacted_section,
                         }
                     )
+                    # asvs_push_github doesn't raise on GitHub errors — it
+                    # returns the error body in outputText. Inspect for
+                    # success markers (content + commit) the same way push_one
+                    # does for the audit phase.
+                    output_text = ""
+                    if isinstance(push_result, dict):
+                        output_text = push_result.get("outputText", "") or ""
+                    if not output_text or "\"content\"" not in output_text or "\"commit\"" not in output_text:
+                        # Try to extract a clean error message
+                        err_msg = output_text[:300] if output_text else "(no outputText)"
+                        try:
+                            parsed = json.loads(output_text) if output_text else {}
+                            if isinstance(parsed, dict) and "message" in parsed:
+                                err_msg = parsed["message"]
+                        except Exception:
+                            pass
+                        print(f"  Push redacted {filename} to {output_repo} FAILED: {err_msg}", flush=True)
                 except Exception as e:
-                    print(f"  Push redacted {filename} FAILED: {e}", flush=True)
+                    typed = type(e).__name__
+                    detail = str(e) or f"{typed} (no detail)"
+                    print(f"  Push redacted {filename} to {output_repo} FAILED: {detail}", flush=True)
 
 
         import os
@@ -164,6 +187,7 @@ async def run(input_dict, tools):
         private_token = input_dict.get("privateToken", "")
         notify_email = input_dict.get("notifyEmail", "")
         clear_cache = input_dict.get("clearCache", "true")
+        clean_stale_reports = input_dict.get("cleanStaleReports", "false")
 
         if isinstance(discover, str):
             discover = discover.lower() in ("true", "1", "yes")
@@ -171,6 +195,8 @@ async def run(input_dict, tools):
             consolidate = consolidate.lower() in ("true", "1", "yes")
         if isinstance(clear_cache, str):
             clear_cache = clear_cache.lower() in ("true", "1", "yes")
+        if isinstance(clean_stale_reports, str):
+            clean_stale_reports = clean_stale_reports.lower() in ("true", "1", "yes")
 
         level = level.strip().upper()
         if level and not level.startswith("L"):
@@ -614,12 +640,24 @@ async def run(input_dict, tools):
 
         section_semaphore = asyncio.Semaphore(PASS_CONCURRENCY)
 
-        # Global GitHub push throttle, shared across ALL bundles. Default 6
-        # is comfortable now that asvs_push_github retries on 409 branch-head
-        # conflicts. Previously we had to keep this low to avoid silent
-        # failures from those races. Lower to 4 or 3 if you see push failures
-        # from genuine GitHub abuse-detection (403/422 responses, not 409).
-        GITHUB_PUSH_CONCURRENCY = int(os.environ.get("GITHUB_PUSH_CONCURRENCY", "6"))
+        # Global GitHub push throttle, shared across ALL bundles.
+        #
+        # IMPORTANT: GitHub's contents API serializes commits to a branch —
+        # each commit must reference the current branch HEAD as its parent.
+        # When N commits race against the same branch, only one wins; the
+        # rest get 409 Conflict. The push agent retries on 409, but with
+        # high concurrency the same races repeat across retries.
+        #
+        # Default 1 (fully serialized) eliminates the races entirely. The
+        # cost is wall-clock: each push is ~1-2s, so 70 pushes adds ~2 min
+        # to a run. Acceptable for the determinism it gives us.
+        #
+        # Higher values are technically possible — the push agent's
+        # retry-on-409 absorbs some collisions — but in practice anything
+        # above 2-3 starts losing pushes after retries. If you need
+        # maximum throughput, switch to a Git Trees API approach instead
+        # (one atomic commit for many files); that's a bigger rewrite.
+        GITHUB_PUSH_CONCURRENCY = int(os.environ.get("GITHUB_PUSH_CONCURRENCY", "1"))
         github_push_sem = asyncio.Semaphore(GITHUB_PUSH_CONCURRENCY)
         print(f"  GitHub push concurrency: {GITHUB_PUSH_CONCURRENCY}", flush=True)
 
@@ -785,6 +823,106 @@ async def run(input_dict, tools):
         print(f"\n  Audit phase complete: {len(successes)} succeeded, {len(failures)} failed", flush=True)
 
         # =============================================================
+        # Optional: clean up stale reports from previous runs
+        #
+        # When discovery (temperature 0.7) reassigns ASVS sections to
+        # different domains across runs, old per-section reports remain
+        # in their previous domain folders even though the current run
+        # produced fresh reports under different folders. These orphans
+        # accumulate in the repo and confuse downstream tooling
+        # (consolidate-only reruns, QA scripts, finding-count tools).
+        #
+        # Strict guarantees on what gets deleted:
+        #   - Only files matching `^\d+\.\d+\.\d+\.md$` (per-section reports)
+        #   - Only inside subdirectories of the commit-hash dir that are
+        #     NOT in this run's `report_directories`
+        #   - Never touches `consolidated*.md`, `issues*.md`, or any
+        #     `rerun/` subdirectory
+        #   - Never runs when there were audit failures (something may
+        #     have gone wrong; don't compound the problem by deleting)
+        # =============================================================
+        if clean_stale_reports and successes and not failures:
+            print(f"\n{'='*60}\nStep 3.5: Cleaning stale per-section reports\n{'='*60}", flush=True)
+            try:
+                # List the commit-hash directory on the push repo
+                gh_headers = {
+                    "Authorization": f"token {push_token}",
+                    "Accept": "application/vnd.github+json",
+                }
+                # push_directory is e.g. "ASVS/reports/mahout/245aad3"
+                list_url = f"https://api.github.com/repos/{push_repo}/contents/{push_directory}"
+                list_resp = await http_client.get(list_url, headers=gh_headers)
+                if list_resp.status_code != 200:
+                    print(f"  Couldn't list {push_directory}: HTTP {list_resp.status_code}; skipping cleanup", flush=True)
+                else:
+                    items = list_resp.json()
+                    # Identify current run's pass dirs (basename only)
+                    current_pass_basenames = set()
+                    for d in report_directories:
+                        # report_directories entries are e.g. "ASVS/reports/mahout/245aad3/all"
+                        bn = d.rstrip("/").split("/")[-1]
+                        current_pass_basenames.add(bn)
+
+                    orphan_dirs = []
+                    for item in items:
+                        if item.get("type") != "dir":
+                            continue
+                        name = item.get("name", "")
+                        # Always preserve rerun/ subdirectories
+                        if name == "rerun":
+                            continue
+                        if name in current_pass_basenames:
+                            continue
+                        orphan_dirs.append(name)
+
+                    if not orphan_dirs:
+                        print(f"  No orphan subdirectories to clean", flush=True)
+                    else:
+                        print(f"  Found {len(orphan_dirs)} orphan subdirectories: {orphan_dirs}", flush=True)
+                        section_re = re.compile(r"^\d+\.\d+\.\d+\.md$")
+                        deleted_count = 0
+                        skipped_count = 0
+                        for orphan in orphan_dirs:
+                            orphan_path = f"{push_directory}/{orphan}"
+                            orphan_list_url = f"https://api.github.com/repos/{push_repo}/contents/{orphan_path}"
+                            orphan_resp = await http_client.get(orphan_list_url, headers=gh_headers)
+                            if orphan_resp.status_code != 200:
+                                print(f"    {orphan}: couldn't list (HTTP {orphan_resp.status_code}); skipping", flush=True)
+                                continue
+                            orphan_items = orphan_resp.json()
+                            for oi in orphan_items:
+                                if oi.get("type") != "file":
+                                    continue
+                                fname = oi.get("name", "")
+                                if not section_re.match(fname):
+                                    skipped_count += 1
+                                    continue
+                                # Delete the file
+                                fpath = oi.get("path", "")
+                                fsha = oi.get("sha", "")
+                                del_payload = {
+                                    "message": f"Clean stale report: {fpath}",
+                                    "sha": fsha,
+                                }
+                                del_url = f"https://api.github.com/repos/{push_repo}/contents/{fpath}"
+                                del_resp = await http_client.request(
+                                    "DELETE", del_url, headers=gh_headers, json=del_payload,
+                                )
+                                if del_resp.status_code in (200, 204):
+                                    deleted_count += 1
+                                else:
+                                    print(f"    {fpath}: delete failed HTTP {del_resp.status_code}", flush=True)
+                        print(f"  Cleanup complete: deleted {deleted_count} stale section reports, "
+                              f"preserved {skipped_count} unrecognized files", flush=True)
+            except Exception as e:
+                # Cleanup failures shouldn't block consolidation
+                print(f"  Cleanup encountered an error (continuing): {type(e).__name__}: {e}", flush=True)
+        elif clean_stale_reports and failures:
+            print(f"\n  cleanStaleReports=true but {len(failures)} audit failures — "
+                  f"skipping cleanup to avoid deleting reports during a partial run", flush=True)
+        # If clean_stale_reports is False (default), nothing happens here.
+
+        # =============================================================
         # Step 4: Consolidate (unchanged from original)
         # =============================================================
         if consolidate and successes:
@@ -824,7 +962,7 @@ async def run(input_dict, tools):
                 redacted_consolidated, critical_findings = redact_consolidated(consolidated_content)
                 print(f"  Redacted {len(critical_findings)} critical findings", flush=True)
                 try:
-                    await gofannon_client.call(
+                    push_result = await gofannon_client.call(
                         agent_name="asvs_push_github",
                         input_dict={
                             "inputText": json.dumps({
@@ -835,14 +973,30 @@ async def run(input_dict, tools):
                             "fileContents": redacted_consolidated,
                         }
                     )
+                    output_text = push_result.get("outputText", "") if isinstance(push_result, dict) else ""
+                    if not output_text or "\"content\"" not in output_text or "\"commit\"" not in output_text:
+                        err_msg = output_text[:300] if output_text else "(no outputText)"
+                        try:
+                            parsed = json.loads(output_text) if output_text else {}
+                            if isinstance(parsed, dict) and "message" in parsed:
+                                err_msg = parsed["message"]
+                        except Exception:
+                            pass
+                        failures.append(f"redacted consolidated push to {output_repo}: {err_msg}")
+                        print(f"  Push redacted consolidated.md to {output_repo} FAILED: {err_msg}", flush=True)
+                    else:
+                        print(f"  Pushed redacted consolidated.md to {output_repo}", flush=True)
                 except Exception as e:
-                    failures.append(f"redacted consolidated push: {e}")
+                    typed = type(e).__name__
+                    detail = str(e) or f"{typed} (no detail)"
+                    failures.append(f"redacted consolidated push: {detail}")
+                    print(f"  Push redacted consolidated.md FAILED: {detail}", flush=True)
 
             if issues_content:
                 redacted_issues, removed_count = redact_issues(issues_content)
                 print(f"  Redacted {removed_count} critical issues", flush=True)
                 try:
-                    await gofannon_client.call(
+                    push_result = await gofannon_client.call(
                         agent_name="asvs_push_github",
                         input_dict={
                             "inputText": json.dumps({
@@ -853,8 +1007,24 @@ async def run(input_dict, tools):
                             "fileContents": redacted_issues,
                         }
                     )
+                    output_text = push_result.get("outputText", "") if isinstance(push_result, dict) else ""
+                    if not output_text or "\"content\"" not in output_text or "\"commit\"" not in output_text:
+                        err_msg = output_text[:300] if output_text else "(no outputText)"
+                        try:
+                            parsed = json.loads(output_text) if output_text else {}
+                            if isinstance(parsed, dict) and "message" in parsed:
+                                err_msg = parsed["message"]
+                        except Exception:
+                            pass
+                        failures.append(f"redacted issues push to {output_repo}: {err_msg}")
+                        print(f"  Push redacted issues.md to {output_repo} FAILED: {err_msg}", flush=True)
+                    else:
+                        print(f"  Pushed redacted issues.md to {output_repo}", flush=True)
                 except Exception as e:
-                    failures.append(f"redacted issues push: {e}")
+                    typed = type(e).__name__
+                    detail = str(e) or f"{typed} (no detail)"
+                    failures.append(f"redacted issues push: {detail}")
+                    print(f"  Push redacted issues.md FAILED: {detail}", flush=True)
 
             # Push redacted per-section reports
             for pass_output_dir in report_directories:

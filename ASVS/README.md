@@ -108,6 +108,35 @@ reports/
 
 The orchestrator sanity-checks the namespace is non-empty before proceeding; if empty it returns an error pointing at either flipping `clearCache=true` or running `asvs_download_repo` manually first.
 
+### Stale report cleanup
+
+`cleanStaleReports` (default `"false"`) is an opt-in destructive cleanup that runs after the audit phase succeeds. When `"true"`, the orchestrator lists the run's commit-hash directory on GitHub and deletes per-section report files (matching `^\d+\.\d+\.\d+\.md$`) found in any subdirectory NOT produced by the current run.
+
+Why it exists: discovery's domain naming is non-deterministic (Sonnet at temperature 0.7), so re-running against the same commit can produce different domain names (`auth_identity` vs. `session_management`, `aws_cloud_integration` vs. `cloud_integration_aws`). Reports from previous runs accumulate in their old domain folders even after consolidate has moved on. These orphans:
+
+- Inflate finding counts in QA tooling that recursively walks the tree
+- Show contradictory findings for the same ASVS section across folders
+- Pollute consolidate-only re-runs that auto-discover directories
+
+What's safe:
+
+- Only matches strict per-section filenames (`13.4.1.md`, not `consolidated.md` or `notes.md`)
+- Only deletes files inside subdirectories of the current commit-hash dir, never the commit-hash dir itself
+- Never touches `consolidated*.md`, `issues*.md`, or any `rerun/` subdirectory
+- Skipped entirely if there were any audit failures in the current run (don't compound a partial run by deleting things)
+- Cleanup failures are caught and logged but don't block consolidation
+
+When to use:
+
+- After tightening discovery and re-running on the same commit
+- When the QA `count_findings.py` script reports a number much higher than expected because of orphans
+- Periodic housekeeping on long-lived audit repos
+
+When NOT to use:
+
+- If you have hand-curated annotations or notes living alongside the auto-generated reports — those would survive (filename mismatch) but you should review the orphan list first before flipping this on
+- If you want to preserve audit history across re-runs at the same commit (the `rerun/` convention is the supported way to do this; cleanup respects it)
+
 ## Architecture
 
 The pipeline uses three Claude models, each chosen for what it's best at:
@@ -150,7 +179,7 @@ These are NOT gofannon framework features. They are `os.environ.get(VAR, default
 | `asvs_orchestrate` | `BUNDLE_MAX_SECTIONS` | `6` | Max sections per `asvs_bundle` call. Set to `1` to disable bundling entirely. |
 | `asvs_orchestrate` | `BUNDLE_MIN_SECTIONS` | `2` | Below this, a pass falls back to single-section `asvs_audit` calls. |
 | `asvs_orchestrate` | `TINY_REPO_LOC_THRESHOLD` | `30000` | Skip `asvs_discover` for repos under this LOC (small-repo single-pass mode). |
-| `asvs_orchestrate` | `GITHUB_PUSH_CONCURRENCY` | `6` | Max simultaneous PUTs to GitHub across the entire run. Lower to 3-4 if you see persistent push failures after retries. |
+| `asvs_orchestrate` | `GITHUB_PUSH_CONCURRENCY` | `1` | Max simultaneous PUTs to GitHub. Default `1` (serialized) avoids 409 conflicts on the branch HEAD — GitHub's contents API serializes commits, so concurrent pushes race even when targeting different files. Raising to `2-3` is possible (push agent retries on 409) but anything higher starts losing pushes after retries. |
 | `asvs_audit` | `OPUS_CONCURRENCY` | `4` | Max concurrent Opus deep-analysis calls within one audit. |
 | `asvs_audit` | `SONNET_CONCURRENCY` | `5` | Max concurrent Sonnet inventory and format calls. |
 | `asvs_bundle` | `OPUS_CONCURRENCY` | `4` | Same as audit's, scoped to a bundled-pass run. |
@@ -183,6 +212,7 @@ The main entry point. Calls all other agents.
 | `severityThreshold` | no | `"CRITICAL"`, `"HIGH"`, `"MEDIUM"`, or empty |
 | `consolidate` | no | `"true"` or `"false"` (default `"true"`) |
 | `clearCache` | no | `"true"` or `"false"` (default `"true"`). When `"false"`, skips download and uses cached data store contents. |
+| `cleanStaleReports` | no | `"true"` or `"false"` (default `"false"`). When `"true"`, deletes per-section reports (`X.Y.Z.md`) in subdirectories of the current commit-hash dir that aren't part of this run. Useful when re-running on the same commit produces different domain folders. Skipped automatically if any audit calls failed. See [Stale report cleanup](#stale-report-cleanup) above. |
 | `privateRepo` | no | Private repo for full unredacted reports (enables carve-out) |
 | `privateToken` | no | PAT with write access to private repo (required when `privateRepo` is set) |
 | `notifyEmail` | no | Email address for Critical findings (e.g., `private@steve.apache.org`) |
@@ -488,7 +518,7 @@ If you change discovery's output format or relax the validation, you risk audits
 
 **Many sections show `pushed` in the audit phase but consolidate finds far fewer files** — `asvs_push_github` doesn't raise on GitHub errors; it returns the error body in `outputText`. The orchestrator now inspects the response and reports actual push status. If you still see real failures (GitHub rate-limit or abuse-detection messages with status 403/422), drop `GITHUB_PUSH_CONCURRENCY` from 4 to 3 or 2.
 
-**`push failed: GitHub: is at <SHA1> but expected <SHA2>`** — GitHub's contents API returns 409 Conflict when the branch HEAD advances between when the push agent fetched it and when the PUT lands. This happens whenever multiple concurrent commits race against the same branch — even when they're touching different files. The push agent now retries up to 5 times with exponential backoff, refetching the new HEAD on each retry. If you see this error in the final logs, all 5 retries lost the race, which is rare; lower `GITHUB_PUSH_CONCURRENCY` if it persists.
+**`push failed: GitHub: is at <SHA1> but expected <SHA2>`** — GitHub's contents API serializes commits to a branch — every commit must reference the current branch HEAD. When two PUTs race, the loser gets 409 Conflict even when targeting different files. The push agent retries up to 5 times with exponential backoff, but at high concurrency the same races repeat across retries. Default `GITHUB_PUSH_CONCURRENCY=1` eliminates the race by serializing all pushes; this adds ~2 minutes of wall-clock to a 70-section run but is fully deterministic. If you raise this, expect occasional 409s after retries are exhausted.
 
 **`push failed: ConnectTimeout (no detail)`** — TCP connection to GitHub couldn't be established within httpx's connect timeout. The push agent uses 15-second connect timeout and 3 transport-level retries by default, which handles most transient flakiness. If you see persistent ConnectTimeouts, the gofannon worker's network path to api.github.com is the bottleneck — check container DNS, egress proxy, or VPN configuration. Lowering `GITHUB_PUSH_CONCURRENCY` reduces concurrent socket-establishment pressure and usually helps.
 

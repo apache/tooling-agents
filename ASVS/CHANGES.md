@@ -82,11 +82,26 @@ Both fixes are belt-and-suspenders — even if one fails open, the other catches
 
 **Symptom:** Re-auditing the same commit can leave orphan `.md` files in old domain folders when discovery (which has temperature 0.7) reassigns sections to different domains.
 
-**Status:** Documented in `ISSUE-stale-section-reports.md` as a follow-up issue with a proposed `cleanStaleReports` flag. Not fixed in this bundle — call `git rm` manually for now if it bothers you, or wait for the follow-up patch. Doesn't break consolidate (which only reads from current-run domain dirs), just leaves cruft in the repo.
+**Status:** Implemented in this bundle as the `cleanStaleReports` orchestrator input (default `"false"`, opt-in destructive operation). When `"true"`, the orchestrator deletes per-section report files (`X.Y.Z.md`) in subdirectories of the current commit-hash dir that aren't part of this run. Strict guarantees: never touches `consolidated*.md`, `issues*.md`, `rerun/`, or files that don't match the section-report regex. Skipped if any audit calls failed (don't compound a partial run).
 
 ### Fix 5: `consolidated.md` extraction-cache cleanliness
 
 Verified during debugging — failed extractions in Phase 2 don't write to the cache, so re-running consolidate after the JSON-extraction fix doesn't need cache cleanup. The cache only stores successful extractions; failed ones returned None and never called `extraction_ns.set()`. So consolidate-only reruns will correctly re-extract from scratch with the fixed parser.
+
+### Fix 6: Stale Phase 2 / Phase 3 cache returning old results after re-runs
+
+Both consolidate's Phase 2 (per-report extraction) and Phase 3 (per-domain consolidation) caches were keyed only on identifier (filename or domain name) — no content hash. When re-running with new audit content, stale cache hits silently dropped new findings: a per-section report with 6 findings would return its previously-cached 1-finding extraction, and the domain-level consolidation would do the same on top of that. Diagnosed by `count_findings.py` showing 81 findings in per-section reports but only 1 in the consolidated output.
+
+Fixed both with content-hashed cache keys: Phase 2 uses `f"{report_key}:{sha256(content)[:16]}"`, Phase 3 uses `f"{domain}:{sha256(json.dumps(rpts, sort_keys=True))[:16]}"`. Any change to inputs invalidates the cache automatically; no manual cleanup needed across runs.
+
+### Fix 7: GitHub branch HEAD races on contents API
+
+GitHub's `PUT /contents/{path}` API serializes commits to a branch — every push creates a real git commit, and concurrent pushes race against the same branch HEAD. Even when targeting different files, the loser gets `409 Conflict: is at <new_HEAD> but expected <old_HEAD>`. The optimized pipeline's parallelism made this fail at scale (9 of 70 pushes lost in a typical mahout run).
+
+Three layers of fix:
+- `asvs_push_github` retries up to 5 times with exponential backoff and jitter on 409, refetching the SHA each time. Also catches transport-level exceptions (`RemoteProtocolError`, `ReadError`, `ConnectTimeout`, etc.) for retry.
+- `asvs_consolidate.push_file` got the same retry-on-409 logic, plus the consolidated.md/issues.md pushes are serialized (was `asyncio.gather`).
+- `asvs_orchestrate` defaults `GITHUB_PUSH_CONCURRENCY=1` (fully serialized). The retries are defense-in-depth, but at high concurrency the same races repeat across retries. Serialized pushes add ~2 minutes wall-clock to a 70-section run, trivial next to the Opus calls.
 
 ## Quick start
 
@@ -109,7 +124,7 @@ A proposed gofannon feature ([`per-agent env vars`](#future-per-agent-env-vars-g
 | `asvs_orchestrate` | `BUNDLE_MAX_SECTIONS` | `6` | Max sections per `asvs_bundle` call. Set to `1` to disable bundling entirely. |
 | `asvs_orchestrate` | `BUNDLE_MIN_SECTIONS` | `2` | Below this, falls back to single-section `asvs_audit` calls. |
 | `asvs_orchestrate` | `TINY_REPO_LOC_THRESHOLD` | `30000` | Skip `asvs_discover` for repos under this LOC (T12 small-repo single-pass mode). |
-| `asvs_orchestrate` | `GITHUB_PUSH_CONCURRENCY` | `6` | Max simultaneous PUTs to GitHub across the entire run. Lower (3-4) if you see persistent push failures after the push agent's automatic retries. |
+| `asvs_orchestrate` | `GITHUB_PUSH_CONCURRENCY` | `1` | Max simultaneous PUTs to GitHub. Default `1` (fully serialized) avoids 409 conflicts on the branch HEAD. Raise cautiously — push agent retries on 409 but high concurrency exhausts the retry budget. |
 | `asvs_audit` | `OPUS_CONCURRENCY` | `4` | Max concurrent Opus deep-analysis calls within one audit. Was hardcoded `2` in the original. |
 | `asvs_audit` | `SONNET_CONCURRENCY` | `5` | Max concurrent Sonnet inventory and format calls. |
 | `asvs_bundle` | `OPUS_CONCURRENCY` | `4` | Same as audit's, scoped to a bundled-pass run. |

@@ -371,7 +371,16 @@ JSON schema:
         extraction_errors = []
 
         async def extract_report(report_key, content):
-            cached = extraction_ns.get(report_key)
+            # Cache key includes content hash so re-running against an updated
+            # report file produces fresh extraction. Without this, the same
+            # filename in the same directory always hits the cache regardless
+            # of whether the content changed (e.g., after a rerun-sections.sh
+            # cycle or a bundle-mode re-audit producing new findings).
+            import hashlib
+            content_hash = hashlib.sha256((content or "").encode()).hexdigest()[:16]
+            cache_key = f"{report_key}:{content_hash}"
+
+            cached = extraction_ns.get(cache_key)
             if cached:
                 print(f"  {report_key}: cached ({len(cached.get('findings', []))} findings)")
                 return report_key, cached, None
@@ -393,7 +402,7 @@ JSON schema:
                         print(f"WARNING: no JSON found (response begins: {snippet!r})")
                         return report_key, None, "No JSON in result"
                     extracted["source_report"] = report_key
-                    extraction_ns.set(report_key, extracted)
+                    extraction_ns.set(cache_key, extracted)
                     print(f"{len(extracted.get('findings', []))} findings, status: {extracted.get('asvs_status', '?')}")
                     return report_key, extracted, None
                 except Exception as e:
@@ -607,7 +616,21 @@ Return valid JSON:
             return "\n\n## ASVS Requirement Descriptions\n" + "\n".join(ctx_lines)
 
         async def consolidate_domain(domain, rpts):
-            cached = consolidation_ns.get(domain)
+            # Cache key must change when the input findings change. Previously
+            # the cache was keyed on just the domain name, which meant any
+            # earlier consolidation result was reused regardless of how the
+            # input had changed. After re-running audit with new findings,
+            # the cache returned the old (stale) consolidation, silently
+            # dropping all the new findings.
+            #
+            # Now the key incorporates a content hash of the input reports
+            # so any change in the inputs produces a fresh consolidation.
+            import hashlib
+            rpts_repr = json.dumps(rpts, sort_keys=True, default=str)
+            input_hash = hashlib.sha256(rpts_repr.encode()).hexdigest()[:16]
+            cache_key = f"{domain}:{input_hash}"
+
+            cached = consolidation_ns.get(cache_key)
             if cached:
                 print(f"  {domain}: cached ({len(cached.get('consolidated_findings', []))} findings)")
                 return domain, cached
@@ -649,7 +672,7 @@ Return valid JSON:
                             merged["positive_controls"].extend(sr.get("positive_controls", []))
                             merged["asvs_statuses"].update(sr.get("asvs_statuses", {}))
                             merged["dedup_log"].extend(sr.get("dedup_log", []))
-                        consolidation_ns.set(domain, merged)
+                        consolidation_ns.set(cache_key, merged)
                         return domain, merged
                     return domain, None
 
@@ -662,7 +685,7 @@ Return valid JSON:
                     json_match = re.search(r'\{[\s\S]*\}', result)
                     if json_match:
                         consolidated = parse_llm_json(json_match.group())
-                        consolidation_ns.set(domain, consolidated)
+                        consolidation_ns.set(cache_key, consolidated)
                         print(f"    Result: {len(consolidated.get('consolidated_findings', []))} findings")
                         return domain, consolidated
                     return domain, None
@@ -1108,19 +1131,40 @@ End with ---."""
         print("\n=== Pushing files ===")
 
         async def push_file(path, content_str, message):
-            existing_sha = None
-            check = await http_client.get(f"{GITHUB_API}/repos/{owner}/{repo}/contents/{path}", headers=headers, params={"ref": default_branch})
-            if check.status_code == 200:
-                existing_sha = check.json().get("sha")
-            payload = {"message": message, "content": base64.b64encode(content_str.encode("utf-8")).decode("ascii"), "branch": default_branch}
-            if existing_sha:
-                payload["sha"] = existing_sha
-            resp = await http_client.put(f"{GITHUB_API}/repos/{owner}/{repo}/contents/{path}", headers=headers, json=payload)
-            if resp.status_code in (200, 201):
-                print(f"  OK: {path}")
-                return True
-            # On failure, log enough to actually diagnose. GitHub's error body
-            # is always JSON with { "message": "...", ... } — surface it.
+            """Push a single file with retry-on-409 for branch HEAD races.
+
+            GitHub's contents API serializes commits to a branch. When two
+            commits race against the same HEAD, the loser gets 409 Conflict
+            with "is at X but expected Y". Refetching the SHA and retrying
+            handles this. We use exponential backoff with jitter to spread
+            out retry attempts.
+            """
+            import random
+            max_attempts = 5
+            last_resp = None
+            for attempt in range(max_attempts):
+                existing_sha = None
+                check = await http_client.get(f"{GITHUB_API}/repos/{owner}/{repo}/contents/{path}", headers=headers, params={"ref": default_branch})
+                if check.status_code == 200:
+                    existing_sha = check.json().get("sha")
+                payload = {"message": message, "content": base64.b64encode(content_str.encode("utf-8")).decode("ascii"), "branch": default_branch}
+                if existing_sha:
+                    payload["sha"] = existing_sha
+                resp = await http_client.put(f"{GITHUB_API}/repos/{owner}/{repo}/contents/{path}", headers=headers, json=payload)
+                last_resp = resp
+                if resp.status_code in (200, 201):
+                    print(f"  OK: {path}")
+                    return True
+                is_conflict = resp.status_code == 409 or (
+                    resp.status_code == 422 and "does not match" in (resp.text or "")
+                )
+                if not is_conflict:
+                    break
+                if attempt < max_attempts - 1:
+                    await asyncio.sleep(0.2 * (2 ** attempt) + random.uniform(0, 0.2))
+
+            # Fell through retries OR hit a non-retryable error.
+            resp = last_resp
             try:
                 body = resp.json()
                 err = body.get("message", "no message")
@@ -1131,11 +1175,13 @@ End with ---."""
             print(f"  ERROR: {path}  ({resp.status_code}): {err}")
             return False
 
-        # OPTIMIZATION: push consolidated.md and issues.md in parallel
-        await asyncio.gather(
-            push_file(f"{output_directory}/{consolidated_filename}", consolidated_md, f"Add consolidated audit report ({level})"),
-            push_file(f"{output_directory}/{issues_filename}", issues_md, f"Add security issues ({level})"),
-        )
+        # Serialize the two pushes — pushing them in parallel via asyncio.gather
+        # was causing one to lose to the other on the branch HEAD race. The
+        # inner retry handles this in most cases, but serializing them here
+        # eliminates the race for these two specifically (and barely costs
+        # anything since it's only two files).
+        await push_file(f"{output_directory}/{consolidated_filename}", consolidated_md, f"Add consolidated audit report ({level})")
+        await push_file(f"{output_directory}/{issues_filename}", issues_md, f"Add security issues ({level})")
 
         print(f"\n=== Done ===")
         print(f"Total findings: {len(all_findings)}, Actionable issues: {len(actionable)}")

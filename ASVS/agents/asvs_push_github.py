@@ -173,44 +173,68 @@ async def run(input_dict, tools):
         import random
         max_attempts = 5
         last_resp = None
+        last_exc = None
+
+        # Transport-level exceptions that are worth retrying. These occur
+        # when the connection drops mid-request (RemoteProtocolError),
+        # the server closes during read (ReadError), the connect attempt
+        # times out (ConnectTimeout), etc. All transient and typically
+        # succeed on retry.
+        retryable_exceptions = (
+            httpx.RemoteProtocolError,
+            httpx.ReadError,
+            httpx.WriteError,
+            httpx.ConnectError,
+            httpx.ConnectTimeout,
+            httpx.ReadTimeout,
+            httpx.WriteTimeout,
+            httpx.PoolTimeout,
+        )
+
         for attempt in range(max_attempts):
-            existing_sha = None
-            existing_resp = await http_client.get(get_url, headers=headers, params=params)
-            if existing_resp.status_code == 200:
-                try:
-                    existing_json = existing_resp.json()
-                    existing_sha = existing_json.get("sha")
-                except Exception:
-                    pass
+            try:
+                existing_sha = None
+                existing_resp = await http_client.get(get_url, headers=headers, params=params)
+                if existing_resp.status_code == 200:
+                    try:
+                        existing_json = existing_resp.json()
+                        existing_sha = existing_json.get("sha")
+                    except Exception:
+                        pass
 
-            payload = {
-                "message": commit_message,
-                "content": base64.b64encode(file_contents.encode("utf-8")).decode("utf-8"),
-            }
-            if existing_sha:
-                payload["sha"] = existing_sha
-            if branch:
-                payload["branch"] = branch
+                payload = {
+                    "message": commit_message,
+                    "content": base64.b64encode(file_contents.encode("utf-8")).decode("utf-8"),
+                }
+                if existing_sha:
+                    payload["sha"] = existing_sha
+                if branch:
+                    payload["branch"] = branch
 
-            resp = await http_client.put(put_url, headers=headers, json=payload)
-            last_resp = resp
+                resp = await http_client.put(put_url, headers=headers, json=payload)
+                last_resp = resp
+                last_exc = None
 
-            # Success: return on 200 (update) or 201 (create)
-            if resp.status_code in (200, 201):
-                try:
-                    return {"outputText": json.dumps(resp.json(), indent=2, sort_keys=True)}
-                except Exception:
-                    return {"outputText": resp.text}
+                # Success: return on 200 (update) or 201 (create)
+                if resp.status_code in (200, 201):
+                    try:
+                        return {"outputText": json.dumps(resp.json(), indent=2, sort_keys=True)}
+                    except Exception:
+                        return {"outputText": resp.text}
 
-            # 409 = branch HEAD advanced under us. Retry with fresh SHA.
-            # 422 with "does not match" can also occur for the same reason.
-            is_conflict = resp.status_code == 409 or (
-                resp.status_code == 422 and "does not match" in (resp.text or "")
-            )
-            if not is_conflict:
-                # Non-retryable error (auth, validation, rate limit, etc).
-                # Return the error body as before.
-                break
+                # 409 = branch HEAD advanced under us. Retry with fresh SHA.
+                # 422 with "does not match" can also occur for the same reason.
+                is_conflict = resp.status_code == 409 or (
+                    resp.status_code == 422 and "does not match" in (resp.text or "")
+                )
+                if not is_conflict:
+                    # Non-retryable error (auth, validation, rate limit, etc).
+                    break
+
+            except retryable_exceptions as e:
+                last_exc = e
+                last_resp = None
+                # Fall through to backoff + retry
 
             # Backoff: 0.2s, 0.4s, 0.8s, 1.6s + jitter
             if attempt < max_attempts - 1:
@@ -218,11 +242,14 @@ async def run(input_dict, tools):
                 await asyncio.sleep(backoff)
 
         # Fell through max retries OR hit a non-retryable error.
-        resp = last_resp
-        try:
-            return {"outputText": json.dumps(resp.json(), indent=2, sort_keys=True)}
-        except Exception:
-            return {"outputText": resp.text}
+        if last_resp is not None:
+            try:
+                return {"outputText": json.dumps(last_resp.json(), indent=2, sort_keys=True)}
+            except Exception:
+                return {"outputText": last_resp.text}
+        if last_exc is not None:
+            return {"outputText": f"Error: {type(last_exc).__name__}: {last_exc}"}
+        return {"outputText": "Error: push failed with no response or exception captured"}
 
     finally:
         await http_client.aclose()
