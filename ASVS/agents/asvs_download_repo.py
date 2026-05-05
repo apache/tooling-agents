@@ -67,7 +67,11 @@ async def run(input_dict, tools):
         # ----- Download tarball (single HTTP call) -----
         # GitHub redirects this to a CodeLoad URL — follow_redirects must be on.
         tarball_url = f"https://api.github.com/repos/{repo}/tarball/{default_branch}"
-        print(f"Downloading tarball from {tarball_url}", flush=True)
+        if path_prefix:
+            print(f"Downloading tarball: {tarball_url}", flush=True)
+            print(f"  (will filter to subdirectory: {path_prefix}/)", flush=True)
+        else:
+            print(f"Downloading tarball: {tarball_url}", flush=True)
         tar_resp = await http_client.get(tarball_url, headers=headers, follow_redirects=True)
         if tar_resp.status_code != 200:
             return {"outputText": f"Error fetching tarball: {tar_resp.status_code} - {tar_resp.text[:500]}"}
