@@ -360,6 +360,150 @@ async def run(input_dict, tools):
             )
 
             if critical_findings:
+                # Build a set of redacted Finding IDs for cross-reference scrubbing
+                redacted_ids = set()
+                for cf in critical_findings:
+                    fid = cf["id"]
+                    redacted_ids.add(fid)
+                    # Also add the FINDING-NNN form if it's an ASVS-style ID
+                    # (consolidated.md cross-refs always use the FINDING-NNN form
+                    # regardless of which form appears in the per-section reports)
+                    m = re.match(r'FINDING-(\d+)', fid)
+                    if m:
+                        redacted_ids.add(fid)
+
+                # 1. Recompute the Severity Distribution table.
+                # Pattern: a markdown table row with Critical count as first cell.
+                # Match both formats:
+                #   | 6 | 16 | 34 | 21 | 0 |
+                #   | 6 | 16 | 34 | 21 | 0 | **77** |
+                def _zero_critical_count(m):
+                    # Replace the Critical count (first numeric cell after `|`)
+                    # with 0, leaving the other counts and Total intact.
+                    row = m.group(0)
+                    # Subtract redacted count from total if present
+                    redacted_count = len(critical_findings)
+                    # Replace first numeric cell with 0
+                    new_row = re.sub(r'(\|\s*)\d+(\s*\|)', r'\g<1>0\g<2>', row, count=1)
+                    # Try to find a Total cell (bold-wrapped number) and decrement it
+                    total_m = re.search(r'\*\*(\d+)\*\*', new_row)
+                    if total_m:
+                        old_total = int(total_m.group(1))
+                        new_total = max(0, old_total - redacted_count)
+                        new_row = new_row.replace(f'**{old_total}**', f'**{new_total}**')
+                    return new_row
+                # Find Severity Distribution table rows. They follow a header
+                # like "| Critical | High | Medium | Low | Info |" and the
+                # numeric row immediately follows the alignment row.
+                sev_table_pattern = re.compile(
+                    r'(\|\s*Critical\s*\|\s*High\s*\|\s*Medium\s*\|\s*Low\s*\|\s*Info[^\n]*\|\n'
+                    r'\|[\s:|-]+\|\n)'
+                    r'(\|[^\n]+\|)',
+                    re.IGNORECASE,
+                )
+                def _sev_table_replace(m):
+                    return m.group(1) + _zero_critical_count(re.match(r'.*', m.group(2)))
+                redacted = sev_table_pattern.sub(_sev_table_replace, redacted)
+
+                # 2. Strip ASCII bar chart Critical line if present (e.g.
+                #    "Critical  ████░░  6  ( 7.8%)")
+                redacted = re.sub(
+                    r'^[ \t]*Critical[ \t]+[█░▓▒]+[^\n]*\n',
+                    '',
+                    redacted,
+                    flags=re.MULTILINE | re.IGNORECASE,
+                )
+
+                # 3. Scrub references to redacted Finding IDs in Top Risks /
+                #    Cross-Reference Matrix tables. These appear in cells like:
+                #    "FINDING-001 through FINDING-004, FINDING-010, ..."
+                #    Drop only the redacted IDs, preserving the rest.
+                #    Do not touch tables in code blocks or per-finding blocks
+                #    (those have already been removed).
+                if redacted_ids:
+                    sorted_ids = sorted(redacted_ids,
+                                         key=lambda s: int(re.search(r'(\d+)', s).group(1)) if re.search(r'(\d+)', s) else 0)
+
+                    # Drop "FINDING-A through FINDING-B" ranges. If the entire
+                    # range is redacted, drop the whole expression. Otherwise
+                    # rewrite to "FINDING-X, FINDING-Y, ..." with only the
+                    # surviving IDs, then let the per-ID stripping below clean
+                    # up redacted ones.
+                    def _strip_range(m):
+                        a = m.group(1)
+                        b = m.group(2)
+                        try:
+                            a_num = int(re.search(r'(\d+)', a).group(1))
+                            b_num = int(re.search(r'(\d+)', b).group(1))
+                        except Exception:
+                            return m.group(0)
+                        survivors = [
+                            f"FINDING-{n:03d}"
+                            for n in range(a_num, b_num + 1)
+                            if f"FINDING-{n:03d}" not in redacted_ids
+                        ]
+                        if not survivors:
+                            return ""
+                        return ", ".join(survivors)
+                    redacted = re.sub(
+                        r'(FINDING-\d+)\s+through\s+(FINDING-\d+)',
+                        _strip_range,
+                        redacted,
+                    )
+
+                    # Drop comma-separated occurrences of redacted IDs
+                    for fid in sorted_ids:
+                        redacted = re.sub(
+                            r',\s*' + re.escape(fid) + r'\b',
+                            '',
+                            redacted,
+                        )
+                        redacted = re.sub(
+                            r'\b' + re.escape(fid) + r'\s*,\s*',
+                            '',
+                            redacted,
+                        )
+                        # Bare leftover - could be in a table cell on its own
+                        redacted = re.sub(
+                            r'\b' + re.escape(fid) + r'\b',
+                            '',
+                            redacted,
+                        )
+
+                    # Scrub "Nx Critical" / "N× Critical" / "N Critical" phrases
+                    # in surviving table cells — the count is now wrong and
+                    # naming the redacted severity defeats the purpose of the
+                    # carve-out. Preserve other severity counts in the cell.
+                    def _strip_critical_phrases(m):
+                        cell = m.group(0)
+                        # Drop the "Nx Critical, " or "N× Critical, " segments
+                        cell = re.sub(
+                            r'\d+\s*[x×]\s*Critical\s*,?\s*',
+                            '',
+                            cell,
+                            flags=re.IGNORECASE,
+                        )
+                        # Tidy up trailing/leading commas
+                        cell = re.sub(r',\s*\|', ' |', cell)
+                        cell = re.sub(r'\|\s*,', '| ', cell)
+                        return cell
+                    # Apply to lines that look like table rows
+                    redacted = re.sub(
+                        r'\|[^\n]*Critical[^\n]*\|',
+                        _strip_critical_phrases,
+                        redacted,
+                    )
+
+                    # Clean up leftover artifacts: empty list items,
+                    # cells starting with stray ", ", double commas, leading
+                    # whitespace from removed ranges, and full Cross-Reference
+                    # Matrix rows whose Finding ID col is now empty.
+                    redacted = re.sub(r'\|\s*,\s*', '| ', redacted)
+                    redacted = re.sub(r',\s*,', ',', redacted)
+                    # Collapse multiple spaces inside cells (not at line start)
+                    redacted = re.sub(r'\|\s{2,}', '| ', redacted)
+                    redacted = re.sub(r'\|\s+\|\s+(Critical|High|Medium|Low)\b[^\n]*\n', '', redacted)
+
                 notice = (
                     f"\n\n> **Note:** {len(critical_findings)} Critical "
                     f"{'finding has' if len(critical_findings) == 1 else 'findings have'} "
