@@ -6,47 +6,60 @@
 **Description:**
 
 ### Summary
-User-supplied S3/GCS URL paths containing bucket names and object keys may be exposed in error messages and logs, potentially leaking sensitive information such as customer IDs, dataset names, or internal project identifiers.
+User-supplied S3/GCS URL paths containing potentially sensitive bucket names and object keys may be exposed in error messages and logs. While query strings are properly rejected, the bucket names and object key paths can propagate through the error handling chain and appear in logs, potentially leaking sensitive identifiers such as customer IDs, dataset names, or internal project names.
 
 ### Details
-The `encode_from_parquet` function in `qdp/qdp-core/src/lib.rs` accepts remote URL paths as string arguments that flow through the platform module and may be included in error messages via the `MahoutError::Io(String)` variant. While query strings are explicitly rejected (a positive security pattern), the bucket names and object key paths themselves are not sanitized before being logged or included in error output.
+- **Severity:** Low
+- **CWE:** Not specified
+- **ASVS:** 14.2.1 (Level L1)
+- **Affected Components:**
+  - `qdp/qdp-core/src/lib.rs` - `encode_from_parquet` function and path parameter references
+  - `docs/qdp/getting-started.md` - remote URL examples
+- **Data Flow:** User URL → `encode_from_parquet`/`encode` → platform module → `MahoutError::Io(String)` → logs/error messages
 
-**Example sensitive paths:**
-- `s3://customer-12345-data/pii-exports/users.parquet`
-- `gs://internal-project-alpha/confidential/dataset.parquet`
-
-**Affected Components:**
-- `qdp/qdp-core/src/lib.rs` - `encode_from_parquet` function and path handling
-- `docs/qdp/getting-started.md` - remote URL examples
-
-**CWE:** N/A  
-**ASVS:** 14.2.1 (Level L1)
+The `MahoutError::Io(String)` variant can propagate complete S3/GCS paths (e.g., `s3://sensitive-bucket-name/customer-123/dataset.parquet`) into error messages and logs, exposing:
+- Internal bucket naming conventions
+- Customer identifiers in object keys
+- Project or dataset names
+- Organizational structure information
 
 ### Remediation
-1. Implement a `sanitize_remote_path()` function that redacts sensitive portions of S3/GCS URLs before including them in error messages or logs
-2. Use structured logging that separates path components for selective redaction
-3. Example sanitization pattern: `s3://bucket-name/path/to/file.parquet` → `s3://<redacted-bucket>/<redacted-path>/file.parquet`
-4. Apply sanitization consistently across all error handling paths that may expose user-supplied URLs
+Implement path sanitization in error messages to redact sensitive components of remote URLs:
 
-**Suggested implementation:**
+1. Create a `sanitize_remote_path()` function that:
+   - Detects S3/GCS URL patterns
+   - Redacts bucket names (e.g., `s3://<redacted-bucket>/...`)
+   - Redacts or truncates object key paths (e.g., `.../customer-123/<redacted>`)
+   - Preserves enough context for debugging (protocol, file extension)
+
+2. Apply sanitization before constructing error messages in `MahoutError::Io`
+
+3. Implement structured logging that separates path components, allowing selective redaction of sensitive parts while preserving non-sensitive debugging information
+
+**Example implementation:**
 ```rust
-fn sanitize_remote_path(url: &str) -> String {
-    // Redact bucket and key portions while preserving protocol and filename
-    // e.g., "s3://bucket/key/file.parquet" -> "s3://<redacted>/<redacted>/file.parquet"
+fn sanitize_remote_path(path: &str) -> String {
+    // Redact bucket and key details while preserving protocol
+    if path.starts_with("s3://") || path.starts_with("gs://") {
+        format!("{}://<redacted>", &path[..path.find("://").unwrap()])
+    } else {
+        path.to_string()
+    }
 }
 ```
 
 ### Acceptance Criteria
-- [ ] Fixed - Implement path sanitization function for S3/GCS URLs
-- [ ] Test added - Unit tests verify bucket names and keys are redacted in error messages
-- [ ] Test added - Verify sanitized paths still provide useful debugging context
-- [ ] Documentation updated to reflect secure logging practices
-- [ ] Code review confirms all error paths apply sanitization
+- [ ] Path sanitization function implemented for S3/GCS URLs
+- [ ] Error messages in `MahoutError::Io` sanitize remote paths before logging
+- [ ] Structured logging implemented to separate sensitive path components
+- [ ] Unit tests added verifying path redaction in error scenarios
+- [ ] Integration tests confirm no sensitive paths appear in logs
+- [ ] Documentation updated with security considerations for remote URL handling
 
 ### References
 - Source Report: `14.2.1.md`
-- Related IDs: ASVS-1421-LOW-001
-- ASVS Section: 14.2.1 - Safe File Uploads
+- Related ASVS: 14.2.1 - Ensure the application server only accepts the HTTP methods in use by the application/API
+- Merged From: ASVS-1421-LOW-001
 
 ### Priority
-**Low** - Information disclosure risk through logs/errors. Does not directly expose data contents but may reveal internal infrastructure details or customer identifiers to unauthorized parties with access to logs.
+**Low** - While this could leak internal naming conventions and identifiers, it requires error conditions to trigger and does not directly expose credentials or allow unauthorized access. However, it should be addressed to follow defense-in-depth principles and prevent information disclosure.
