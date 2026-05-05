@@ -1091,7 +1091,7 @@ async def run(input_dict, tools):
             sections_arg = ", ".join(sorted(audited_sections))
 
             try:
-                await gofannon_client.call(
+                consolidate_result = await gofannon_client.call(
                     agent_name="asvs_consolidate",
                     input_dict={
                         "inputText": "\n".join([
@@ -1107,7 +1107,21 @@ async def run(input_dict, tools):
                         "severityThreshold": severity_threshold,
                     }
                 )
-                print(f"  Consolidation done", flush=True)
+                # asvs_consolidate's top-level except wrapper returns
+                # outputText starting with "Error:" when the body raised.
+                # Treat that as a failure even though the call itself
+                # didn't throw — otherwise we'd silently mark a broken
+                # consolidation as success and proceed to the redaction
+                # step, which would then 404 on the missing files.
+                consolidate_output = ""
+                if isinstance(consolidate_result, dict):
+                    consolidate_output = consolidate_result.get("outputText", "") or ""
+                if consolidate_output.startswith("Error:"):
+                    err_excerpt = consolidate_output[:300]
+                    failures.append(f"consolidation: {err_excerpt}")
+                    print(f"  Consolidation FAILED: {err_excerpt}", flush=True)
+                else:
+                    print(f"  Consolidation done", flush=True)
             except Exception as e:
                 # Some exception types stringify to empty (e.g. some httpx errors).
                 # Surface the type name and full traceback so the failure is

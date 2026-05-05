@@ -1302,30 +1302,27 @@ For multi-value table cells (Files, Source Reports, etc.): use ", " (comma-space
                           f"Findings: {len(all_findings)}\n"
                           f"Files: {output_directory}/{consolidated_filename}, {output_directory}/{issues_filename}"
         }
+    except Exception as e:
+        # Top-level catch: any unhandled exception in run() body. Without
+        # this, errors bubble up to gofannon which often stringifies httpx
+        # errors to empty strings, making diagnosis impossible. Log the
+        # type and full traceback so the orchestrator's log shows what
+        # happened, and return a structured Error: outputText so the
+        # orchestrator can distinguish failure from success. Defined
+        # INSIDE run() rather than as a module-level wrapper because
+        # gofannon's exec namespace doesn't reliably preserve module-
+        # level bindings at call time.
+        import traceback as _tb
+        err_type = type(e).__name__
+        err_msg = str(e) or "(no message)"
+        tb_str = _tb.format_exc()
+        print(f"\n!!! asvs_consolidate FATAL: {err_type}: {err_msg}", flush=True)
+        print(f"Traceback:\n{tb_str}", flush=True)
+        return {
+            "outputText": f"Error: asvs_consolidate raised {err_type}: {err_msg}\n\n{tb_str}"
+        }
     finally:
         try:
             await http_client.aclose()
         except Exception:
             pass
-
-# NOTE: The try/finally above doesn't have an `except` clause. Any error
-# bubbling out of run() will produce an exception that — for many httpx
-# error types — stringifies to an empty string in the orchestrator's logs,
-# making diagnosis impossible. We wrap run() with a defensive shim that
-# catches all exceptions, logs the type and full traceback to stdout, and
-# returns a structured outputText error so the orchestrator can see what
-# happened.
-_run_inner = run
-async def run(input_dict, tools):
-    import traceback
-    try:
-        return await _run_inner(input_dict, tools)
-    except Exception as e:
-        err_type = type(e).__name__
-        err_msg = str(e) or "(no message)"
-        tb = traceback.format_exc()
-        print(f"\n!!! asvs_consolidate FATAL: {err_type}: {err_msg}", flush=True)
-        print(f"Traceback:\n{tb}", flush=True)
-        return {
-            "outputText": f"Error: asvs_consolidate raised {err_type}: {err_msg}\n\n{tb}"
-        }
