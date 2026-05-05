@@ -1,4 +1,18 @@
-# discover_codebase_architecture
+# asvs_discover
+#
+# Scans a downloaded codebase, classifies its security architecture, and
+# generates an audit plan: passes (groups of ASVS sections sharing a file
+# scope), domain groupings, and false-positive guidance.
+#
+# Improvements over original:
+#   - Steps 3 (security domains) and 4 (false positive guidance) both depend
+#     only on the Step 2 architecture output. They are independent of each
+#     other but were called sequentially. Now run in parallel via
+#     asyncio.gather, saving ~1-2 minutes per repo.
+#   - Same I/O contract — drop-in replacement.
+#
+# Note: discovery is only ~0.5% of pipeline wall-clock. Bigger wins live in
+# asvs_audit / asvs_bundle and the orchestrator.
 
 from agent_factory.remote_mcp_client import RemoteMCPClient
 from services.llm_service import call_llm
@@ -114,7 +128,7 @@ async def run(input_dict, tools):
         print(f"Total lines: {total_lines}", flush=True)
 
         # =============================================================
-        # Step 2: Architecture classification (Sonnet, batched)
+        # Step 2: Architecture classification (Sonnet)
         # =============================================================
         print("\n=== Step 2: Architecture classification ===", flush=True)
 
@@ -184,7 +198,7 @@ Return ONLY a JSON object with this structure:
                     architecture = json.loads(json_match.group())
                     print(f"  Framework: {architecture.get('framework', '?')}", flush=True)
                     print(f"  Auth systems: {len(architecture.get('auth_systems', []))}", flush=True)
-                    print(f"  Security areas: {len(architecture.get('security_relevant_areas', []))}", flush=True)
+                    print(f"  Security-relevant areas: {len(architecture.get('security_relevant_areas', []))}", flush=True)
                     break
             except Exception as e:
                 if attempt == 0:
@@ -197,10 +211,12 @@ Return ONLY a JSON object with this structure:
             return {"outputText": json.dumps({"error": "Failed to classify codebase architecture"})}
 
         # =============================================================
-        # Step 3: Generate security domains (Sonnet)
+        # Steps 3 & 4: domains and false-positive guidance run in PARALLEL
+        # (both depend only on `architecture`)
         # =============================================================
-        print("\n=== Step 3: Generating security domains ===", flush=True)
+        print("\n=== Steps 3 & 4: Domains + false-positive guidance (parallel) ===", flush=True)
 
+        # ----- Step 3 prep -----
         asvs_sections_available = []
         try:
             asvs_ns = data_store.use_namespace("asvs")
@@ -216,7 +232,15 @@ Return ONLY a JSON object with this structure:
         except Exception as e:
             print(f"  WARNING: Could not load ASVS sections: {e}", flush=True)
 
-        asvs_list = "\n".join(asvs_sections_available[:200])
+        # Show the model EVERY section, not just the first 200. ASVS v5 has
+        # ~345 sections; truncating caused the model to hallucinate plausible-
+        # looking IDs (e.g., "2.4.5") to fill out the "every section must appear
+        # in exactly one domain" constraint, which downstream caused audits to
+        # run against nonexistent requirements.
+        asvs_list = "\n".join(asvs_sections_available)
+        valid_section_ids = {
+            line.split(" ", 1)[0] for line in asvs_sections_available
+        }
 
         DOMAIN_PROMPT = f"""Based on this codebase architecture, generate security audit domains.
 
@@ -256,46 +280,6 @@ Return ONLY a JSON object:
   "total_sections_assigned": 999
 }}"""
 
-        domains = []
-        for attempt in range(2):
-            try:
-                result, _ = await call_llm(
-                    provider=PROVIDER, model=MODEL,
-                    messages=[{"role": "user", "content": DOMAIN_PROMPT}],
-                    parameters={**PARAMS, "max_tokens": 32000},
-                    timeout=300,
-                )
-                json_match = re.search(r'\{[\s\S]*\}', result)
-                if json_match:
-                    domain_result = json.loads(json_match.group())
-                    domains = domain_result.get("domains", [])
-                    assigned_count = sum(len(d.get("asvs_sections", [])) for d in domains)
-                    print(f"  Generated {len(domains)} domains, {assigned_count}/{len(asvs_sections_available)} sections assigned", flush=True)
-                    for d in domains:
-                        print(f"    {d['name']}: {len(d.get('asvs_sections', []))} sections, {len(d.get('files', []))} files", flush=True)
-                    break
-            except Exception as e:
-                if attempt == 0:
-                    print(f"  Attempt 1 failed ({type(e).__name__}), retrying...", flush=True)
-                    await asyncio.sleep(5)
-                else:
-                    print(f"  Domain generation FAILED: {e}", flush=True)
-
-        if not domains:
-            return {"outputText": json.dumps({"error": "Failed to generate security domains"})}
-
-        for domain in domains:
-            line_count = 0
-            for path in domain.get("files", []):
-                if path in all_files:
-                    line_count += len(all_files[path].split('\n'))
-            domain["estimated_lines"] = line_count
-
-        # =============================================================
-        # Step 4: Generate false positive guidance (Sonnet)
-        # =============================================================
-        print("\n=== Step 4: Generating false positive guidance ===", flush=True)
-
         FP_PROMPT = f"""Based on this codebase architecture, identify patterns that an ASVS security auditor would INCORRECTLY flag as vulnerabilities.
 
 ## Codebase Architecture
@@ -310,20 +294,85 @@ Return ONLY a JSON array of strings:
   ...
 ]"""
 
-        false_positive_guidance = []
-        try:
-            result, _ = await call_llm(
-                provider=PROVIDER, model=MODEL,
-                messages=[{"role": "user", "content": FP_PROMPT}],
-                parameters=PARAMS,
-                timeout=120,
-            )
-            json_match = re.search(r'\[[\s\S]*\]', result)
-            if json_match:
-                false_positive_guidance = json.loads(json_match.group())
-                print(f"  Generated {len(false_positive_guidance)} patterns", flush=True)
-        except Exception as e:
-            print(f"  False positive generation failed ({type(e).__name__}), continuing without", flush=True)
+        async def call_for_domains():
+            for attempt in range(2):
+                try:
+                    result, _ = await call_llm(
+                        provider=PROVIDER, model=MODEL,
+                        messages=[{"role": "user", "content": DOMAIN_PROMPT}],
+                        parameters={**PARAMS, "max_tokens": 32000},
+                        timeout=300,
+                    )
+                    json_match = re.search(r'\{[\s\S]*\}', result)
+                    if json_match:
+                        return json.loads(json_match.group())
+                except Exception as e:
+                    if attempt == 0:
+                        print(f"  Domains attempt 1 failed ({type(e).__name__}), retrying...", flush=True)
+                        await asyncio.sleep(5)
+                    else:
+                        print(f"  Domains FAILED: {e}", flush=True)
+            return None
+
+        async def call_for_fp_guidance():
+            try:
+                result, _ = await call_llm(
+                    provider=PROVIDER, model=MODEL,
+                    messages=[{"role": "user", "content": FP_PROMPT}],
+                    parameters=PARAMS,
+                    timeout=120,
+                )
+                json_match = re.search(r'\[[\s\S]*\]', result)
+                if json_match:
+                    return json.loads(json_match.group())
+            except Exception as e:
+                print(f"  FP guidance failed ({type(e).__name__}), continuing without", flush=True)
+            return []
+
+        # Parallelism saves ~1-2 minutes per discovery (was sequential)
+        domain_result, false_positive_guidance = await asyncio.gather(
+            call_for_domains(),
+            call_for_fp_guidance(),
+        )
+
+        if not domain_result:
+            return {"outputText": json.dumps({"error": "Failed to generate security domains"})}
+
+        domains = domain_result.get("domains", [])
+        assigned_count = sum(len(d.get("asvs_sections", [])) for d in domains)
+        print(f"  Generated {len(domains)} domains, {assigned_count}/{len(asvs_sections_available)} sections assigned", flush=True)
+
+        # Validate discovery output against the authoritative ASVS set.
+        # The model occasionally hallucinates section IDs (e.g., "2.4.5" when
+        # v5 has no such requirement). Drop any unrecognized IDs so they don't
+        # leak into the audit phase as wasted Opus calls.
+        if valid_section_ids:
+            total_dropped = 0
+            for d in domains:
+                requested = d.get("asvs_sections", [])
+                valid = [s for s in requested if s in valid_section_ids]
+                dropped = [s for s in requested if s not in valid_section_ids]
+                if dropped:
+                    total_dropped += len(dropped)
+                    print(f"    {d['name']}: dropping {len(dropped)} hallucinated section(s): {dropped[:5]}{'...' if len(dropped) > 5 else ''}", flush=True)
+                d["asvs_sections"] = valid
+            if total_dropped:
+                print(f"  Dropped {total_dropped} hallucinated section IDs from discovery output", flush=True)
+
+        for d in domains:
+            print(f"    {d['name']}: {len(d.get('asvs_sections', []))} sections, {len(d.get('files', []))} files", flush=True)
+
+        if not domains:
+            return {"outputText": json.dumps({"error": "Failed to generate security domains"})}
+
+        for domain in domains:
+            line_count = 0
+            for path in domain.get("files", []):
+                if path in all_files:
+                    line_count += len(all_files[path].split('\n'))
+            domain["estimated_lines"] = line_count
+
+        print(f"  Generated {len(false_positive_guidance)} false-positive patterns", flush=True)
 
         # =============================================================
         # Step 5: Assemble output

@@ -1,4 +1,53 @@
 # asvs_load_data
+#
+# Pre-flight bootstrap: loads OWASP ASVS v5.x into the `asvs` data store
+# namespace so the rest of the pipeline has the authoritative requirement
+# catalogue to validate against. Run this once per ASVS version before the
+# first audit; safe to re-run when OWASP publishes a new patch.
+#
+# Source data: pulls the canonical CSV from the OWASP/ASVS GitHub repo at
+# 5.0/docs_en/OWASP_Application_Security_Verification_Standard_<ver>_en.csv,
+# which gives chapter / section / requirement structure plus the L1/L2/L3
+# level for each requirement. The CSV alone is enough for an audit run.
+#
+# Optional markdown enrichment: chapter "control objectives" and per-section
+# descriptive blurbs aren't in the CSV — they live in 5.0/en/0x*-V*-*.md
+# in the same repo. With `enrichMarkdown=true` (default) this agent fetches
+# those chapter files in parallel and parses out the prose paragraphs that
+# sit between the chapter heading and the first section, and between each
+# section heading and its requirement table. Worth doing because audit
+# prompts use these as context for Opus.
+#
+# Inputs (all optional, all read from named fields with inputText fallback):
+#   version          ASVS tag like "v5.0.0" or "5.0.0" (default: v5.0.0)
+#   clear            Drop existing asvs:* keys before write (default: false)
+#                    Default false is safe — same-id writes overwrite in
+#                    place. Use true if you're switching between ASVS
+#                    versions and want to purge orphan IDs from the prior
+#                    version.
+#   githubToken      Optional PAT to raise GitHub's rate limit during the
+#                    markdown enrichment pass (~16 file fetches). Without
+#                    a token the unauthenticated 60 req/hr limit is usually
+#                    enough but you'll see WARNING: ...rate-limited if not.
+#   enrichMarkdown   Toggle the markdown fetch+parse phase (default: true).
+#                    Set false for a faster reload when only requirement
+#                    text matters and chapter/section context isn't needed.
+#
+# Output: writes three key families into the `asvs` namespace:
+#   asvs:chapters:<N>           {chapter_id, chapter_name, control_objective}
+#   asvs:sections:<N.M>         {section_id, section_name, chapter_id, description}
+#   asvs:requirements:<N.M.K>   {req_id, req_description, level, section_id, chapter_id}
+#
+# These keys are what asvs_discover and asvs_audit/asvs_bundle read at
+# Step 0 ("Loading ASVS requirement context"). If you see the audit agents
+# logging "WARNING: No data found for asvs:requirements:X.Y.Z" — either
+# this loader hasn't run, the version mismatches, or a downstream caller
+# is asking for an ID that doesn't exist in the loaded version (see the
+# discovery hallucination protection in asvs_discover and asvs_orchestrate).
+#
+# Restrictions: v5.x only. ASVS v4 has a different file layout and column
+# schema and is rejected with an error rather than silently producing
+# wrong data.
 
 from agent_factory.remote_mcp_client import RemoteMCPClient
 import httpx
