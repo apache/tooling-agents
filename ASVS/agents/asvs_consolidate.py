@@ -237,6 +237,7 @@ async def run(input_dict, tools):
         directories_raw = ""
         output_directory = ""
         sections_raw = ""
+        source_id = ""
         for line in lines:
             line = line.strip()
             if not line:
@@ -255,6 +256,8 @@ async def run(input_dict, tools):
                     output_directory = value
                 elif key in ("sections", "section_ids", "asvs_sections"):
                     sections_raw = value
+                elif key in ("source", "source_id", "source_repo"):
+                    source_id = value
 
         directories = [d.strip().strip("/") for d in directories_raw.split(",") if d.strip()]
         # Optional: list of section IDs (e.g. "1.2.1, 1.2.2, 2.1.1") that
@@ -1283,8 +1286,11 @@ For multi-value table cells (Files, Source Reports, etc.): use ", " (comma-space
         # inner retry handles this in most cases, but serializing them here
         # eliminates the race for these two specifically (and barely costs
         # anything since it's only two files).
-        await push_file(f"{output_directory}/{consolidated_filename}", consolidated_md, f"Add consolidated audit report ({level})")
-        await push_file(f"{output_directory}/{issues_filename}", issues_md, f"Add security issues ({level})")
+        # Append source identifier to commit messages so each commit is
+        # traceable back to the audited repo + path + commit hash.
+        _src_suffix = f" [source: {source_id}]" if source_id else ""
+        await push_file(f"{output_directory}/{consolidated_filename}", consolidated_md, f"Add consolidated audit report ({level}){_src_suffix}")
+        await push_file(f"{output_directory}/{issues_filename}", issues_md, f"Add security issues ({level}){_src_suffix}")
 
         print(f"\n=== Done ===")
         print(f"Total findings: {len(all_findings)}, Actionable issues: {len(actionable)}")

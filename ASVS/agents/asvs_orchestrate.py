@@ -100,7 +100,7 @@ async def run(input_dict, tools):
 
         async def _redact_and_push(gofannon_client, http_client, private_repo, private_token,
                                     output_repo, output_token, pass_output_dir, filename,
-                                    redact_fn):
+                                    redact_fn, source_id):
             import json
             import base64
             # Throttle through the shared github_push_sem so the redaction
@@ -129,7 +129,7 @@ async def run(input_dict, tools):
                                 "repo": output_repo, "token": output_token,
                                 "directory": pass_output_dir, "filename": filename,
                             }),
-                            "commitMessage": f"ASVS audit: {filename} (redacted)",
+                            "commitMessage": f"ASVS audit: {filename} (redacted) [source: {source_id}]",
                             "fileContents": redacted_section,
                         }
                     )
@@ -265,6 +265,16 @@ async def run(input_dict, tools):
             repo_path_segment += f"/{source_path_prefix}"
         output_directory = f"{output_directory.strip('/')}/{repo_path_segment}/{commit_hash}"
         push_directory = output_directory
+
+        # Source identifier appended to every report commit message so each
+        # commit reads as "<commit subject> [source: owner/repo[/path] @ sha]"
+        # and you can grep history by source repo or by commit hash. Format
+        # is stable across all per-section, consolidated, issues, and
+        # redacted pushes.
+        source_id_path = repo_owner_name
+        if source_path_prefix:
+            source_id_path += f"/{source_path_prefix}"
+        source_id = f"{source_id_path} @ {commit_hash}"
 
         print(f"  Output directory: {output_directory}", flush=True)
         print(f"  Pass concurrency: {PASS_CONCURRENCY}", flush=True)
@@ -882,7 +892,7 @@ async def run(input_dict, tools):
                                         "directory": pass_output_dir,
                                         "filename": f"{section_id}.md",
                                     }),
-                                    "commitMessage": f"ASVS {level or 'full'} audit: {section_id} ({pass_name})",
+                                    "commitMessage": f"ASVS {level or 'full'} audit: {section_id} ({pass_name}) [source: {source_id}]",
                                     "fileContents": report_text,
                                 }
                             )
@@ -1090,6 +1100,7 @@ async def run(input_dict, tools):
                             f"directories: {', '.join(report_directories)}",
                             f"output: {push_directory}",
                             f"sections: {sections_arg}",
+                            f"source: {source_id}",
                         ]),
                         "domainGroups": json.dumps(domain_groups),
                         "level": level or "L3",
@@ -1131,7 +1142,7 @@ async def run(input_dict, tools):
                                 "repo": output_repo, "token": output_token,
                                 "directory": output_directory, "filename": "consolidated.md",
                             }),
-                            "commitMessage": f"ASVS {level or 'full'} audit: consolidated report (redacted)",
+                            "commitMessage": f"ASVS {level or 'full'} audit: consolidated report (redacted) [source: {source_id}]",
                             "fileContents": redacted_consolidated,
                         }
                     )
@@ -1165,7 +1176,7 @@ async def run(input_dict, tools):
                                 "repo": output_repo, "token": output_token,
                                 "directory": output_directory, "filename": "issues.md",
                             }),
-                            "commitMessage": f"ASVS {level or 'full'} audit: issues (redacted)",
+                            "commitMessage": f"ASVS {level or 'full'} audit: issues (redacted) [source: {source_id}]",
                             "fileContents": redacted_issues,
                         }
                     )
@@ -1205,7 +1216,7 @@ async def run(input_dict, tools):
                     redaction_tasks.append(_redact_and_push(
                         gofannon_client, http_client, private_repo, private_token,
                         output_repo, output_token, pass_output_dir, item["name"],
-                        redact_consolidated,
+                        redact_consolidated, source_id,
                     ))
                 await asyncio.gather(*redaction_tasks, return_exceptions=True)
 
