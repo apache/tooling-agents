@@ -103,30 +103,34 @@ async def run(input_dict, tools):
                                     redact_fn):
             import json
             import base64
-            headers = {"Authorization": f"token {private_token}", "Accept": "application/vnd.github.v3+json"}
-            resp = await http_client.get(
-                f"https://api.github.com/repos/{private_repo}/contents/{pass_output_dir}/{filename}",
-                headers=headers,
-            )
-            if resp.status_code != 200:
-                return
-            file_data = resp.json()
-            file_content = base64.b64decode(file_data["content"]).decode("utf-8", errors="replace")
-            redacted_section, _ = redact_fn(file_content)
-            try:
-                await gofannon_client.call(
-                    agent_name="asvs_push_github",
-                    input_dict={
-                        "inputText": json.dumps({
-                            "repo": output_repo, "token": output_token,
-                            "directory": pass_output_dir, "filename": filename,
-                        }),
-                        "commitMessage": f"ASVS audit: {filename} (redacted)",
-                        "fileContents": redacted_section,
-                    }
+            # Throttle through the shared github_push_sem so the redaction
+            # phase doesn't bypass the global concurrency budget. Note: this
+            # closure captures github_push_sem from the outer run() scope.
+            async with github_push_sem:
+                headers = {"Authorization": f"token {private_token}", "Accept": "application/vnd.github.v3+json"}
+                resp = await http_client.get(
+                    f"https://api.github.com/repos/{private_repo}/contents/{pass_output_dir}/{filename}",
+                    headers=headers,
                 )
-            except Exception as e:
-                print(f"  Push redacted {filename} FAILED: {e}", flush=True)
+                if resp.status_code != 200:
+                    return
+                file_data = resp.json()
+                file_content = base64.b64decode(file_data["content"]).decode("utf-8", errors="replace")
+                redacted_section, _ = redact_fn(file_content)
+                try:
+                    await gofannon_client.call(
+                        agent_name="asvs_push_github",
+                        input_dict={
+                            "inputText": json.dumps({
+                                "repo": output_repo, "token": output_token,
+                                "directory": pass_output_dir, "filename": filename,
+                            }),
+                            "commitMessage": f"ASVS audit: {filename} (redacted)",
+                            "fileContents": redacted_section,
+                        }
+                    )
+                except Exception as e:
+                    print(f"  Push redacted {filename} FAILED: {e}", flush=True)
 
 
         import os
@@ -610,6 +614,15 @@ async def run(input_dict, tools):
 
         section_semaphore = asyncio.Semaphore(PASS_CONCURRENCY)
 
+        # Global GitHub push throttle, shared across ALL bundles. Default 6
+        # is comfortable now that asvs_push_github retries on 409 branch-head
+        # conflicts. Previously we had to keep this low to avoid silent
+        # failures from those races. Lower to 4 or 3 if you see push failures
+        # from genuine GitHub abuse-detection (403/422 responses, not 409).
+        GITHUB_PUSH_CONCURRENCY = int(os.environ.get("GITHUB_PUSH_CONCURRENCY", "6"))
+        github_push_sem = asyncio.Semaphore(GITHUB_PUSH_CONCURRENCY)
+        print(f"  GitHub push concurrency: {GITHUB_PUSH_CONCURRENCY}", flush=True)
+
         async def run_bundle(pass_def, section_chunk):
             """Run a chunk of sections from one pass.
 
@@ -670,25 +683,49 @@ async def run(input_dict, tools):
                 # ----- Parse output: bundled JSON envelope or single-section markdown -----
                 per_section_reports = _parse_audit_output(audit_output_text, section_chunk)
 
-                # ----- Push per-section reports in parallel -----
+                # ----- Push per-section reports in parallel (throttled) -----
+                # Uses the SHARED github_push_sem from outer scope so all
+                # bundles across all passes contend for the same global
+                # concurrency budget — not per-bundle as before.
+
                 async def push_one(section_id, report_text):
-                    try:
-                        await gofannon_client.call(
-                            agent_name="asvs_push_github",
-                            input_dict={
-                                "inputText": json.dumps({
-                                    "repo": push_repo,
-                                    "token": push_token,
-                                    "directory": pass_output_dir,
-                                    "filename": f"{section_id}.md",
-                                }),
-                                "commitMessage": f"ASVS {level or 'full'} audit: {section_id} ({pass_name})",
-                                "fileContents": report_text,
-                            }
-                        )
-                        return section_id, None
-                    except Exception as e:
-                        return section_id, str(e)
+                    async with github_push_sem:
+                        try:
+                            push_result = await gofannon_client.call(
+                                agent_name="asvs_push_github",
+                                input_dict={
+                                    "inputText": json.dumps({
+                                        "repo": push_repo,
+                                        "token": push_token,
+                                        "directory": pass_output_dir,
+                                        "filename": f"{section_id}.md",
+                                    }),
+                                    "commitMessage": f"ASVS {level or 'full'} audit: {section_id} ({pass_name})",
+                                    "fileContents": report_text,
+                                }
+                            )
+                            # asvs_push_github doesn't raise on GitHub errors —
+                            # it returns the error body in outputText. Inspect
+                            # to detect false-positive successes (rate limit,
+                            # 422 abuse detection, 404 missing repo, etc).
+                            output_text = (push_result or {}).get("outputText", "")
+                            # Success indicators: GitHub's PUT response includes
+                            # "content" and "commit" objects on success.
+                            if '"content"' in output_text and '"commit"' in output_text:
+                                return section_id, None
+                            # Otherwise extract a short error message.
+                            err_msg = output_text[:200] if output_text else "empty response"
+                            if output_text.startswith("Error: "):
+                                err_msg = output_text.split("\n", 1)[0][:200]
+                            else:
+                                # Try to pull GitHub's "message" field
+                                m = re.search(r'"message"\s*:\s*"([^"]+)"', output_text)
+                                if m:
+                                    err_msg = f"GitHub: {m.group(1)}"
+                            return section_id, err_msg
+                        except Exception as e:
+                            err_str = str(e) or f"{type(e).__name__} (no detail)"
+                            return section_id, err_str
 
                 push_results = await asyncio.gather(*[
                     push_one(sid, txt) for sid, txt in per_section_reports.items()

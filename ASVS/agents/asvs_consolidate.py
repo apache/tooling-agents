@@ -1116,7 +1116,20 @@ End with ---."""
             if existing_sha:
                 payload["sha"] = existing_sha
             resp = await http_client.put(f"{GITHUB_API}/repos/{owner}/{repo}/contents/{path}", headers=headers, json=payload)
-            print(f"  {'OK' if resp.status_code in (200,201) else 'ERROR'}: {path}")
+            if resp.status_code in (200, 201):
+                print(f"  OK: {path}")
+                return True
+            # On failure, log enough to actually diagnose. GitHub's error body
+            # is always JSON with { "message": "...", ... } — surface it.
+            try:
+                body = resp.json()
+                err = body.get("message", "no message")
+                if "errors" in body:
+                    err += f" — {body['errors']}"
+            except Exception:
+                err = resp.text[:200]
+            print(f"  ERROR: {path}  ({resp.status_code}): {err}")
+            return False
 
         # OPTIMIZATION: push consolidated.md and issues.md in parallel
         await asyncio.gather(

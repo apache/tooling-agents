@@ -91,13 +91,44 @@ Verified during debugging — failed extractions in Phase 2 don't write to the c
 ## Quick start
 
 1. **Deploy all 7 agent files**, replacing the originals (and adding `asvs_bundle` as a new gofannon agent).
-2. **No env vars required** for default behavior. To tune:
-   - `PASS_CONCURRENCY` (default 4) — orchestrator parallelism
-   - `BUNDLE_MAX_SECTIONS` (default 6) — max sections per Opus call
-   - `OPUS_CONCURRENCY` (default 4) — set on audit/bundle agents
-   - `TINY_REPO_LOC_THRESHOLD` (default 30000) — skip discovery under this
+2. **No env vars required** for default behavior. All defaults are calibrated to work safely against typical hosted Bedrock + GitHub account quotas. To tune, see the full table in **Environment configuration** below.
 3. **Calibrate**: re-run trusted-releases. Findings count should be within ±10% of the prior baseline. Wall-clock should be ~10–15 h instead of 48 h.
 4. **Roll out** to the rest of your audit fleet in tiers (see `optimization-plan.md`).
+
+## Environment configuration
+
+All tunables are read by the agents themselves via `os.environ.get(VAR, default)`. They are not gofannon-framework features — they are environment variables that the agent's Python code reads at runtime, so they need to be set wherever the gofannon worker process runs (e.g. for Docker deployments, the `api` container's environment).
+
+A proposed gofannon feature ([`per-agent env vars`](#future-per-agent-env-vars-gofannon-rfc)) would let agent authors declare these in the agent definition itself, surface them in the editor UI, and inject them at run time without host-level access. Until that ships, set these on the worker.
+
+### Active env vars (with sane defaults baked into the code)
+
+| Agent | Env var | Default | What it controls |
+|---|---|---|---|
+| `asvs_orchestrate` | `PASS_CONCURRENCY` | `4` | Max audit calls in flight (sections + bundles). Top-level orchestrator parallelism. |
+| `asvs_orchestrate` | `BUNDLE_MAX_SECTIONS` | `6` | Max sections per `asvs_bundle` call. Set to `1` to disable bundling entirely. |
+| `asvs_orchestrate` | `BUNDLE_MIN_SECTIONS` | `2` | Below this, falls back to single-section `asvs_audit` calls. |
+| `asvs_orchestrate` | `TINY_REPO_LOC_THRESHOLD` | `30000` | Skip `asvs_discover` for repos under this LOC (T12 small-repo single-pass mode). |
+| `asvs_orchestrate` | `GITHUB_PUSH_CONCURRENCY` | `6` | Max simultaneous PUTs to GitHub across the entire run. Lower (3-4) if you see persistent push failures after the push agent's automatic retries. |
+| `asvs_audit` | `OPUS_CONCURRENCY` | `4` | Max concurrent Opus deep-analysis calls within one audit. Was hardcoded `2` in the original. |
+| `asvs_audit` | `SONNET_CONCURRENCY` | `5` | Max concurrent Sonnet inventory and format calls. |
+| `asvs_bundle` | `OPUS_CONCURRENCY` | `4` | Same as audit's, scoped to a bundled-pass run. |
+| `asvs_bundle` | `SONNET_CONCURRENCY` | `5` | Same as audit's, scoped to a bundled-pass run. |
+
+Defaults are conservative — they were calibrated against typical hosted Bedrock account quotas and GitHub's secondary rate limits. Teams with elevated quotas can bump `OPUS_CONCURRENCY` and `PASS_CONCURRENCY` higher. Lower `GITHUB_PUSH_CONCURRENCY` if you see push failures with empty error messages or 403/422 responses (those are abuse-detection drops).
+
+### Hardcoded knobs that should also be env vars (future cleanup)
+
+| Agent | Constant | Value | Why not env yet |
+|---|---|---|---|
+| `asvs_consolidate` | `extraction_semaphore` | `8` | Production-calibrated; left as constant to avoid scope creep. Should be `EXTRACTION_CONCURRENCY` once gofannon supports per-agent env vars. |
+| `asvs_consolidate` | `consolidation_semaphore` | `5` | Same as above. Should be `CONSOLIDATION_CONCURRENCY`. |
+
+### Future: per-agent env vars (gofannon RFC)
+
+The current pattern requires host-level access to set env vars, which agent authors using the gofannon UI generally don't have. A proposed gofannon feature would add `env_vars: List[AgentEnvVar]` to the Agent model, with each entry having `key`, `default`, `description`, and `secret` fields. The runtime would inject these into a contextvar-scoped `os.environ` overlay before invoking the agent, so concurrent agent runs see different overlays without process-global mutation.
+
+Motivating examples from this changeset: 9 env vars across 3 agents (table above), all with sane defaults, all currently invisible unless you read the code. The composer LLM that generated these agents could have declared them upfront if there'd been a place to do so.
 
 ## Pre-deploy verification
 

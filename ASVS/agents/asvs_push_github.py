@@ -13,11 +13,29 @@ import httpx
 
 async def run(input_dict, tools):
     mcpc = { url : RemoteMCPClient(remote_url = url) for url in tools.keys() }
-    http_client = httpx.AsyncClient()
+    # Configure httpx for resilience under concurrent load:
+    # - Generous connect timeout (default 5s is too tight for flaky paths to
+    #   GitHub from inside Docker, especially when the host is contending
+    #   with Bedrock traffic at the same time).
+    # - Connection pool sized to comfortably exceed GITHUB_PUSH_CONCURRENCY
+    #   so push tasks never block waiting for a pool slot.
+    # - HTTPTransport with retries=3 for connect-level failures
+    #   (ConnectTimeout, ConnectError) — these are typically transient and
+    #   retrying once usually succeeds. Does NOT retry on 4xx/5xx responses
+    #   (those need application-level handling, not transport-level).
+    transport = httpx.AsyncHTTPTransport(retries=3)
+    timeout = httpx.Timeout(connect=15.0, read=30.0, write=30.0, pool=30.0)
+    limits = httpx.Limits(max_connections=20, max_keepalive_connections=10)
+    http_client = httpx.AsyncClient(
+        transport=transport,
+        timeout=timeout,
+        limits=limits,
+    )
     try:
         import json
         import re
         import base64
+        import asyncio
         from datetime import datetime, timezone
 
         input_text = (input_dict.get("inputText") or "").strip()
@@ -136,38 +154,71 @@ async def run(input_dict, tools):
         }
 
         get_url = f"{api_base}/repos/{owner}/{repo_name}/contents/{final_path}"
+        put_url = f"{api_base}/repos/{owner}/{repo_name}/contents/{final_path}"
         params = {}
         if branch:
             params["ref"] = branch
 
-        existing_sha = None
-        existing_resp = await http_client.get(get_url, headers=headers, params=params)
-        if existing_resp.status_code == 200:
-            try:
-                existing_json = existing_resp.json()
-                existing_sha = existing_json.get("sha")
-            except Exception:
-                pass
+        # GitHub's contents API returns 409 with a message like
+        # "is at <new_sha> but expected <old_sha>" when multiple commits
+        # race against the same branch HEAD. This is NOT a per-file
+        # conflict — it's the branch HEAD advancing while we were composing
+        # our PUT. The fix is to refetch the file's current SHA, rebase,
+        # and retry. Concurrent pushes to DIFFERENT files in the same repo
+        # will collide on this when they overlap, so retry-on-409 is
+        # mandatory whenever GITHUB_PUSH_CONCURRENCY > 1.
+        #
+        # Exponential backoff with jitter to avoid all retries colliding
+        # again on the same retry attempt.
+        import random
+        max_attempts = 5
+        last_resp = None
+        for attempt in range(max_attempts):
+            existing_sha = None
+            existing_resp = await http_client.get(get_url, headers=headers, params=params)
+            if existing_resp.status_code == 200:
+                try:
+                    existing_json = existing_resp.json()
+                    existing_sha = existing_json.get("sha")
+                except Exception:
+                    pass
 
-        put_url = f"{api_base}/repos/{owner}/{repo_name}/contents/{final_path}"
-        payload = {
-            "message": commit_message,
-            "content": base64.b64encode(file_contents.encode("utf-8")).decode("utf-8"),
-        }
-        if existing_sha:
-            payload["sha"] = existing_sha
-        if branch:
-            payload["branch"] = branch
+            payload = {
+                "message": commit_message,
+                "content": base64.b64encode(file_contents.encode("utf-8")).decode("utf-8"),
+            }
+            if existing_sha:
+                payload["sha"] = existing_sha
+            if branch:
+                payload["branch"] = branch
 
-        resp = await http_client.put(put_url, headers=headers, json=payload)
-        try:
-            resp.raise_for_status()
-        except Exception:
-            try:
-                return {"outputText": json.dumps(resp.json(), indent=2, sort_keys=True)}
-            except Exception:
-                return {"outputText": resp.text}
+            resp = await http_client.put(put_url, headers=headers, json=payload)
+            last_resp = resp
 
+            # Success: return on 200 (update) or 201 (create)
+            if resp.status_code in (200, 201):
+                try:
+                    return {"outputText": json.dumps(resp.json(), indent=2, sort_keys=True)}
+                except Exception:
+                    return {"outputText": resp.text}
+
+            # 409 = branch HEAD advanced under us. Retry with fresh SHA.
+            # 422 with "does not match" can also occur for the same reason.
+            is_conflict = resp.status_code == 409 or (
+                resp.status_code == 422 and "does not match" in (resp.text or "")
+            )
+            if not is_conflict:
+                # Non-retryable error (auth, validation, rate limit, etc).
+                # Return the error body as before.
+                break
+
+            # Backoff: 0.2s, 0.4s, 0.8s, 1.6s + jitter
+            if attempt < max_attempts - 1:
+                backoff = 0.2 * (2 ** attempt) + random.uniform(0, 0.2)
+                await asyncio.sleep(backoff)
+
+        # Fell through max retries OR hit a non-retryable error.
+        resp = last_resp
         try:
             return {"outputText": json.dumps(resp.json(), indent=2, sort_keys=True)}
         except Exception:
