@@ -1071,6 +1071,15 @@ async def run(input_dict, tools):
         # =============================================================
         if consolidate and successes:
             print(f"\n{'='*60}\nStep 4: Consolidating reports\n  Pushing to: {push_repo}\n{'='*60}", flush=True)
+            # Build a flat list of every section ID audited in this run, so
+            # consolidate can filter out stale reports from prior runs that
+            # share the output directories.
+            audited_sections = set()
+            for sections_in_domain in domain_groups.values():
+                for s in sections_in_domain:
+                    audited_sections.add(s)
+            sections_arg = ", ".join(sorted(audited_sections))
+
             try:
                 await gofannon_client.call(
                     agent_name="asvs_consolidate",
@@ -1080,6 +1089,7 @@ async def run(input_dict, tools):
                             f"pat: {push_token}",
                             f"directories: {', '.join(report_directories)}",
                             f"output: {push_directory}",
+                            f"sections: {sections_arg}",
                         ]),
                         "domainGroups": json.dumps(domain_groups),
                         "level": level or "L3",
@@ -1088,8 +1098,16 @@ async def run(input_dict, tools):
                 )
                 print(f"  Consolidation done", flush=True)
             except Exception as e:
-                print(f"  Consolidation FAILED: {e}", flush=True)
-                failures.append(f"consolidation: {e}")
+                # Some exception types stringify to empty (e.g. some httpx errors).
+                # Surface the type name and full traceback so the failure is
+                # diagnosable from logs alone.
+                import traceback
+                err_type = type(e).__name__
+                err_msg = str(e) or "(no message)"
+                tb = traceback.format_exc()
+                print(f"  Consolidation FAILED: {err_type}: {err_msg}", flush=True)
+                print(f"  Traceback:\n{tb}", flush=True)
+                failures.append(f"consolidation: {err_type}: {err_msg}")
 
         # =============================================================
         # Step 5: Carve-out — redact and publish (unchanged)

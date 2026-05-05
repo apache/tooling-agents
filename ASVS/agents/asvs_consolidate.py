@@ -18,7 +18,16 @@ from services.llm_service import call_llm
 import httpx
 async def run(input_dict, tools):
     mcpc = { url : RemoteMCPClient(remote_url = url) for url in tools.keys() }
-    http_client = httpx.AsyncClient()
+    # Configure httpx with explicit timeouts, connection limits, and transport
+    # retries. With 345 reports being fetched in Phase 1, the default httpx
+    # client (5s read timeout, no connection pool limit, no retries) can
+    # produce mid-request errors that stringify to empty and obscure the
+    # actual failure cause. Match the asvs_push_github agent's posture.
+    http_client = httpx.AsyncClient(
+        timeout=httpx.Timeout(connect=15.0, read=60.0, write=60.0, pool=60.0),
+        limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+        transport=httpx.AsyncHTTPTransport(retries=3),
+    )
     try:
         import json
         import re
@@ -163,6 +172,13 @@ async def run(input_dict, tools):
                     stash.append(m.group(0))
                     return f'\x00IC{len(stash)-1}\x00'
                 s = re.sub(r'`[^`\n]+`', _stash, part)
+                # Convert <br> tags to comma-space before generic HTML escape.
+                # Sonnet sometimes emits <br> inside table cells to vertically
+                # stack multiple values (file lists, etc.). The generic escape
+                # below would render them as literal "<br>" text in the output,
+                # which is ugly; replacing with ", " produces a readable
+                # single-line list. Both <br> and <br /> variants are handled.
+                s = re.sub(r'<\s*br\s*/?\s*>', ', ', s, flags=re.IGNORECASE)
                 s = re.sub(r'<(/?\w[^>]*)>', r'&lt;\1&gt;', s)
                 for j, code in enumerate(stash):
                     s = s.replace(f'\x00IC{j}\x00', code)
@@ -184,12 +200,43 @@ async def run(input_dict, tools):
         LEVEL_ORDER = {"L1": 1, "L2": 2, "L3": 3}
         max_level_num = LEVEL_ORDER.get(level, 3)
 
-        print(f"DEBUG raw input: {repr(input_text[:500])}", flush=True)
+        # Redact tokens before any logging. GitHub PATs come in several
+        # prefixes (github_pat_*, ghp_*, ghs_*, ghu_*, gho_*, ghr_*) and
+        # may be tens of chars long. Replace with a fixed marker that
+        # preserves visibility of the surrounding structure but never the
+        # secret itself.
+        def _redact_secrets(s):
+            if not s:
+                return s
+            # GitHub tokens — redact value while keeping the prefix visible
+            # so debug output is still useful.
+            s = re.sub(r'\bgithub_pat_[A-Za-z0-9_]+', 'github_pat_<REDACTED>', s)
+            s = re.sub(r'\bgh[psour]_[A-Za-z0-9_]+', lambda m: m.group(0)[:4] + '<REDACTED>', s)
+            # Also handle our agents' "pat: <value>" / "token: <value>" /
+            # "Authorization: Bearer <value>" line forms in case future
+            # callers use a token format we don't recognize.
+            s = re.sub(
+                r'(?im)^(\s*(?:pat|token|authorization)\s*:\s*)\S+',
+                r'\1<REDACTED>',
+                s,
+            )
+            s = re.sub(
+                r'(?i)(Bearer\s+)[A-Za-z0-9_\-\.]+',
+                r'\1<REDACTED>',
+                s,
+            )
+            return s
+
+        # Useful for verifying input structure without leaking secrets.
+        # Preview is bounded AND redacted; never log raw input.
+        _preview = _redact_secrets(input_text[:500])
+        print(f"DEBUG raw input (redacted): {repr(_preview)}", flush=True)
         lines = input_text.strip().split("\n")
         owner_repo = ""
         pat = ""
         directories_raw = ""
         output_directory = ""
+        sections_raw = ""
         for line in lines:
             line = line.strip()
             if not line:
@@ -206,8 +253,21 @@ async def run(input_dict, tools):
                     directories_raw = value
                 elif key in ("output", "output_directory", "output_dir"):
                     output_directory = value
+                elif key in ("sections", "section_ids", "asvs_sections"):
+                    sections_raw = value
 
         directories = [d.strip().strip("/") for d in directories_raw.split(",") if d.strip()]
+        # Optional: list of section IDs (e.g. "1.2.1, 1.2.2, 2.1.1") that
+        # constrain which per-section reports we'll read. When provided,
+        # any file whose name doesn't match one of these section IDs is
+        # skipped. This prevents stale reports from prior runs (left in
+        # the same directory) from polluting consolidation.
+        section_filter = set()
+        if sections_raw:
+            for s in sections_raw.split(","):
+                s = s.strip()
+                if s:
+                    section_filter.add(s)
 
         if not owner_repo or not pat or not directories:
             parts = input_text.strip().split()
@@ -278,17 +338,32 @@ async def run(input_dict, tools):
         reports = {}
         report_dirs = {}  # report_key -> directory it came from
 
+        # Bounded concurrency — GitHub REST API has burst limits that 345
+        # parallel reads will hit hard. Even with auth, secondary rate limits
+        # kick in around 80-100 concurrent. 10 is comfortably below that and
+        # still ~30x faster than serial.
+        phase1_fetch_sem = asyncio.Semaphore(10)
+
         async def fetch_one_report(directory, item):
-            file_resp = await http_client.get(
-                f"{GITHUB_API}/repos/{owner}/{repo}/contents/{directory}/{item['name']}",
-                headers=headers,
-                params={"ref": default_branch},
-            )
-            if file_resp.status_code == 200:
-                file_data = file_resp.json()
-                content = base64.b64decode(file_data["content"]).decode("utf-8", errors="replace")
-                return item['name'], content, directory
-            return item['name'], None, directory
+            try:
+                async with phase1_fetch_sem:
+                    file_resp = await http_client.get(
+                        f"{GITHUB_API}/repos/{owner}/{repo}/contents/{directory}/{item['name']}",
+                        headers=headers,
+                        params={"ref": default_branch},
+                    )
+                if file_resp.status_code == 200:
+                    file_data = file_resp.json()
+                    content = base64.b64decode(file_data["content"]).decode("utf-8", errors="replace")
+                    return item['name'], content, directory
+                # Non-200 — log and continue
+                print(f"    WARNING: {item['name']} returned {file_resp.status_code}", flush=True)
+                return item['name'], None, directory
+            except Exception as e:
+                # Network errors, JSON decode errors, etc. — log and continue.
+                # We do NOT want one bad fetch out of N to kill all of Phase 1.
+                print(f"    WARNING: {item['name']} fetch failed: {type(e).__name__}: {e}", flush=True)
+                return item['name'], None, directory
 
         for directory in directories:
             print(f"\n  Reading reports from {directory}...")
@@ -303,24 +378,50 @@ async def run(input_dict, tools):
 
             dir_contents = contents_resp.json()
             report_files = []
+            stale_count = 0
             for item in dir_contents:
                 if item["type"] == "file" and item["name"].endswith(".md"):
-                    if not item["name"].startswith("consolidated") and \
-                       not item["name"].startswith("issues"):
-                        report_files.append(item)
+                    # Filter to per-section reports only (matches NN.NN.NN.md form).
+                    # This excludes consolidated.md, issues.md, AND any orphan
+                    # files left in the directory (e.g. README.md, notes.md, or
+                    # files from an old layout). Per-section files have the
+                    # form "X.Y.Z.md" where X, Y, Z are integers.
+                    name = item["name"]
+                    if not re.match(r'^\d+(?:\.\d+){2,}\.md$', name):
+                        continue
+                    # If a section filter was provided, only keep files whose
+                    # section ID is in the filter. This skips stale section
+                    # reports from prior runs that happen to share the
+                    # directory. Without this, ~5 prior runs of the same repo
+                    # leave 5x the expected report count, blowing up Phase 2's
+                    # LLM cost and producing duplicate findings during merge.
+                    if section_filter:
+                        section_id = name[:-3]  # strip ".md"
+                        if section_id not in section_filter:
+                            stale_count += 1
+                            continue
+                    report_files.append(item)
 
+            if stale_count:
+                print(f"  Skipped {stale_count} stale report(s) not in current run")
             print(f"  Found {len(report_files)} report files")
 
-            # OPTIMIZATION: parallel file reads (was sequential)
+            # OPTIMIZATION: parallel file reads (was sequential).
+            # Use return_exceptions=True so one bad fetch doesn't kill the
+            # whole phase. Combined with per-fetch try/except, this is
+            # belt-and-suspenders against transient GitHub errors.
             if report_files:
                 fetch_results = await asyncio.gather(*[
                     fetch_one_report(directory, item) for item in report_files
-                ])
-                for name, content, src_dir in fetch_results:
+                ], return_exceptions=True)
+                for result in fetch_results:
+                    if isinstance(result, Exception):
+                        print(f"    WARNING: unhandled fetch exception: {type(result).__name__}: {result}", flush=True)
+                        continue
+                    name, content, src_dir = result
                     if content is not None:
                         reports[name] = content
                         report_dirs[name] = src_dir
-                        print(f"    Read {name} ({len(content)} chars)")
 
         total_reports = len(reports)
         print(f"\nSuccessfully read {total_reports} reports")
@@ -1009,7 +1110,9 @@ End with ---."""
         exec_result = sanitize_md_html(exec_result)
 
         # Findings (Sonnet, batched)
-        FINDING_FORMAT = """For each finding: #### FINDING-NNN: Title, attribute table (Severity, ASVS Level(s), CWE, ASVS sections, Files, Source Reports, Related), Description, Remediation. Use emojis: 🔴 Critical, 🟠 High, 🟡 Medium, 🔵 Low, ⚪ Info. Separate with ---."""
+        FINDING_FORMAT = """For each finding: #### FINDING-NNN: Title, attribute table (Severity, ASVS Level(s), CWE, ASVS sections, Files, Source Reports, Related), Description, Remediation. Use emojis: 🔴 Critical, 🟠 High, 🟡 Medium, 🔵 Low, ⚪ Info. Separate with ---.
+
+For multi-value table cells (Files, Source Reports, etc.): use ", " (comma-space) to separate values within a single cell. NEVER use HTML <br> tags inside table cells. NEVER use newlines inside table cells. If the list is long, separate with ", " on a single line — markdown tables don't render multi-line cells reliably across viewers (especially GitHub)."""
 
         findings_md_parts = []
         MAX_PER_BATCH = 30
@@ -1194,4 +1297,29 @@ End with ---."""
                           f"Files: {output_directory}/{consolidated_filename}, {output_directory}/{issues_filename}"
         }
     finally:
-        await http_client.aclose()
+        try:
+            await http_client.aclose()
+        except Exception:
+            pass
+
+# NOTE: The try/finally above doesn't have an `except` clause. Any error
+# bubbling out of run() will produce an exception that — for many httpx
+# error types — stringifies to an empty string in the orchestrator's logs,
+# making diagnosis impossible. We wrap run() with a defensive shim that
+# catches all exceptions, logs the type and full traceback to stdout, and
+# returns a structured outputText error so the orchestrator can see what
+# happened.
+_run_inner = run
+async def run(input_dict, tools):
+    import traceback
+    try:
+        return await _run_inner(input_dict, tools)
+    except Exception as e:
+        err_type = type(e).__name__
+        err_msg = str(e) or "(no message)"
+        tb = traceback.format_exc()
+        print(f"\n!!! asvs_consolidate FATAL: {err_type}: {err_msg}", flush=True)
+        print(f"Traceback:\n{tb}", flush=True)
+        return {
+            "outputText": f"Error: asvs_consolidate raised {err_type}: {err_msg}\n\n{tb}"
+        }
