@@ -98,6 +98,12 @@ async def run(input_dict, tools):
                 )
             return out
 
+        # DEPRECATED: this helper is no longer called. Per-section reports
+        # used to be pushed to GitHub (private repo) and then redacted-and-
+        # re-pushed (public repo) per file. They now live in CouchDB only,
+        # so neither push happens. The function is kept here intentionally
+        # in case per-section public reports are ever revived. If you're
+        # certain they won't be, this whole def can be deleted.
         async def _redact_and_push(gofannon_client, http_client, private_repo, private_token,
                                     output_repo, output_token, pass_output_dir, filename,
                                     redact_fn, source_id):
@@ -276,7 +282,18 @@ async def run(input_dict, tools):
             source_id_path += f"/{source_path_prefix}"
         source_id = f"{source_id_path} @ {commit_hash}"
 
+        # Per-section reports go into CouchDB instead of GitHub. The
+        # previous approach committed each per-section report to the
+        # private repo, which surfaced one entry on the public
+        # commits@tooling.apache.org mailing list per section (often
+        # with finding titles in the diff). Now they're stored in a
+        # CouchDB namespace keyed by output_directory; consolidate reads
+        # from the same namespace. Only consolidated.md, issues.md, and
+        # their redacted variants still go to GitHub.
+        reports_namespace = f"audit-reports:{output_directory}"
+
         print(f"  Output directory: {output_directory}", flush=True)
+        print(f"  Reports namespace: {reports_namespace}", flush=True)
         print(f"  Pass concurrency: {PASS_CONCURRENCY}", flush=True)
         print(f"  Bundling: max={BUNDLE_MAX_SECTIONS} sections/call, min={BUNDLE_MIN_SECTIONS}", flush=True)
         if carve_out:
@@ -880,55 +897,37 @@ async def run(input_dict, tools):
                 # bundles across all passes contend for the same global
                 # concurrency budget — not per-bundle as before.
 
-                async def push_one(section_id, report_text):
-                    async with github_push_sem:
-                        try:
-                            push_result = await gofannon_client.call(
-                                agent_name="asvs_push_github",
-                                input_dict={
-                                    "inputText": json.dumps({
-                                        "repo": push_repo,
-                                        "token": push_token,
-                                        "directory": pass_output_dir,
-                                        "filename": f"{section_id}.md",
-                                    }),
-                                    "commitMessage": f"ASVS {level or 'full'} audit: {section_id} ({pass_name}) [source: {source_id}]",
-                                    "fileContents": report_text,
-                                }
-                            )
-                            # asvs_push_github doesn't raise on GitHub errors —
-                            # it returns the error body in outputText. Inspect
-                            # to detect false-positive successes (rate limit,
-                            # 422 abuse detection, 404 missing repo, etc).
-                            output_text = (push_result or {}).get("outputText", "")
-                            # Success indicators: GitHub's PUT response includes
-                            # "content" and "commit" objects on success.
-                            if '"content"' in output_text and '"commit"' in output_text:
-                                return section_id, None
-                            # Otherwise extract a short error message.
-                            err_msg = output_text[:200] if output_text else "empty response"
-                            if output_text.startswith("Error: "):
-                                err_msg = output_text.split("\n", 1)[0][:200]
-                            else:
-                                # Try to pull GitHub's "message" field
-                                m = re.search(r'"message"\s*:\s*"([^"]+)"', output_text)
-                                if m:
-                                    err_msg = f"GitHub: {m.group(1)}"
-                            return section_id, err_msg
-                        except Exception as e:
-                            err_str = str(e) or f"{type(e).__name__} (no detail)"
-                            return section_id, err_str
+                # Per-section reports go to CouchDB only — never to GitHub.
+                # Storing them as commits in the private repo would surface
+                # finding titles on the public commits@tooling.apache.org
+                # mailing list. Consolidate reads from this same namespace
+                # in Phase 1 instead of fetching from GitHub.
+                #
+                # Key format: "{pass_name}/{section_id}.md" — preserves the
+                # pass-grouping that the GitHub layout used so consolidate
+                # can list by pass and the same logical structure is
+                # available for any future tooling.
+                reports_ns = data_store.use_namespace(reports_namespace)
+
+                async def store_one(section_id, report_text):
+                    try:
+                        key = f"{pass_name}/{section_id}.md"
+                        reports_ns.set(key, report_text)
+                        return section_id, None
+                    except Exception as e:
+                        err_str = str(e) or f"{type(e).__name__} (no detail)"
+                        return section_id, err_str
 
                 push_results = await asyncio.gather(*[
-                    push_one(sid, txt) for sid, txt in per_section_reports.items()
+                    store_one(sid, txt) for sid, txt in per_section_reports.items()
                 ])
                 for sid, err in push_results:
                     if err is None:
                         local_successes.append(sid)
-                        print(f"    [{pass_name}] {sid}: pushed", flush=True)
+                        print(f"    [{pass_name}] {sid}: stored", flush=True)
                     else:
-                        local_failures.append(f"{sid} (push): {err}")
-                        print(f"    [{pass_name}] {sid}: push failed: {err}", flush=True)
+                        local_failures.append(f"{sid} (store): {err}")
+                        print(f"    [{pass_name}] {sid}: store failed: {err}", flush=True)
                 local_outputs.extend(per_section_reports.values())
 
                 return local_successes, local_failures, local_outputs, pass_output_dir
@@ -998,76 +997,40 @@ async def run(input_dict, tools):
         if clean_stale_reports and successes and not failures:
             print(f"\n{'='*60}\nStep 3.5: Cleaning stale per-section reports\n{'='*60}", flush=True)
             try:
-                # List the commit-hash directory on the push repo
-                gh_headers = {
-                    "Authorization": f"token {push_token}",
-                    "Accept": "application/vnd.github+json",
-                }
-                # push_directory is e.g. "ASVS/reports/mahout/245aad3"
-                list_url = f"https://api.github.com/repos/{push_repo}/contents/{push_directory}"
-                list_resp = await http_client.get(list_url, headers=gh_headers)
-                if list_resp.status_code != 200:
-                    print(f"  Couldn't list {push_directory}: HTTP {list_resp.status_code}; skipping cleanup", flush=True)
+                # Per-section reports now live in CouchDB under
+                # reports_namespace, keyed as "{pass_name}/{section_id}.md".
+                # On re-runs at the same commit but with different pass
+                # groupings (e.g. different domain discovery output), keys
+                # from prior runs accumulate. Remove any keys whose
+                # pass-prefix isn't in current_pass_basenames.
+                current_pass_basenames = set()
+                for d in report_directories:
+                    bn = d.rstrip("/").split("/")[-1]
+                    current_pass_basenames.add(bn)
+
+                reports_ns = data_store.use_namespace(reports_namespace)
+                all_keys = reports_ns.list_keys() or []
+                orphan_keys = []
+                for k in all_keys:
+                    # key is "{pass_name}/{section_id}.md"
+                    pass_part = k.split("/", 1)[0] if "/" in k else ""
+                    if pass_part and pass_part not in current_pass_basenames:
+                        orphan_keys.append(k)
+
+                if not orphan_keys:
+                    print(f"  No orphan keys to clean", flush=True)
                 else:
-                    items = list_resp.json()
-                    # Identify current run's pass dirs (basename only)
-                    current_pass_basenames = set()
-                    for d in report_directories:
-                        # report_directories entries are e.g. "ASVS/reports/mahout/245aad3/all"
-                        bn = d.rstrip("/").split("/")[-1]
-                        current_pass_basenames.add(bn)
-
-                    orphan_dirs = []
-                    for item in items:
-                        if item.get("type") != "dir":
-                            continue
-                        name = item.get("name", "")
-                        # Always preserve rerun/ subdirectories
-                        if name == "rerun":
-                            continue
-                        if name in current_pass_basenames:
-                            continue
-                        orphan_dirs.append(name)
-
-                    if not orphan_dirs:
-                        print(f"  No orphan subdirectories to clean", flush=True)
-                    else:
-                        print(f"  Found {len(orphan_dirs)} orphan subdirectories: {orphan_dirs}", flush=True)
-                        section_re = re.compile(r"^\d+\.\d+\.\d+\.md$")
-                        deleted_count = 0
-                        skipped_count = 0
-                        for orphan in orphan_dirs:
-                            orphan_path = f"{push_directory}/{orphan}"
-                            orphan_list_url = f"https://api.github.com/repos/{push_repo}/contents/{orphan_path}"
-                            orphan_resp = await http_client.get(orphan_list_url, headers=gh_headers)
-                            if orphan_resp.status_code != 200:
-                                print(f"    {orphan}: couldn't list (HTTP {orphan_resp.status_code}); skipping", flush=True)
-                                continue
-                            orphan_items = orphan_resp.json()
-                            for oi in orphan_items:
-                                if oi.get("type") != "file":
-                                    continue
-                                fname = oi.get("name", "")
-                                if not section_re.match(fname):
-                                    skipped_count += 1
-                                    continue
-                                # Delete the file
-                                fpath = oi.get("path", "")
-                                fsha = oi.get("sha", "")
-                                del_payload = {
-                                    "message": f"Clean stale report: {fpath}",
-                                    "sha": fsha,
-                                }
-                                del_url = f"https://api.github.com/repos/{push_repo}/contents/{fpath}"
-                                del_resp = await http_client.request(
-                                    "DELETE", del_url, headers=gh_headers, json=del_payload,
-                                )
-                                if del_resp.status_code in (200, 204):
-                                    deleted_count += 1
-                                else:
-                                    print(f"    {fpath}: delete failed HTTP {del_resp.status_code}", flush=True)
-                        print(f"  Cleanup complete: deleted {deleted_count} stale section reports, "
-                              f"preserved {skipped_count} unrecognized files", flush=True)
+                    print(f"  Found {len(orphan_keys)} orphan keys "
+                          f"(passes not in current run: "
+                          f"{sorted(set(k.split('/', 1)[0] for k in orphan_keys))})", flush=True)
+                    deleted = 0
+                    for k in orphan_keys:
+                        try:
+                            reports_ns.delete(k)
+                            deleted += 1
+                        except Exception as de:
+                            print(f"    {k}: delete failed: {de}", flush=True)
+                    print(f"  Deleted {deleted} stale keys from {reports_namespace}", flush=True)
             except Exception as e:
                 # Cleanup failures shouldn't block consolidation
                 print(f"  Cleanup encountered an error (continuing): {type(e).__name__}: {e}", flush=True)
@@ -1090,6 +1053,17 @@ async def run(input_dict, tools):
                     audited_sections.add(s)
             sections_arg = ", ".join(sorted(audited_sections))
 
+            # `directories` was historically a list of GitHub paths like
+            # "ASVS/reports/steve/v3/d0aa7e9/all". Now per-section reports
+            # live in CouchDB under the reports_namespace; the dir suffix
+            # (the pass name, e.g. "all" or "l1") becomes a key prefix
+            # within that namespace. Pass both to consolidate so it knows
+            # where to read.
+            pass_prefixes = []
+            for d in report_directories:
+                # Extract the trailing pass name from each historical dir path
+                pass_prefixes.append(d.rsplit("/", 1)[-1])
+
             try:
                 consolidate_result = await gofannon_client.call(
                     agent_name="asvs_consolidate",
@@ -1097,10 +1071,11 @@ async def run(input_dict, tools):
                         "inputText": "\n".join([
                             f"repo: {push_repo}",
                             f"pat: {push_token}",
-                            f"directories: {', '.join(report_directories)}",
+                            f"directories: {', '.join(pass_prefixes)}",
                             f"output: {push_directory}",
                             f"sections: {sections_arg}",
                             f"source: {source_id}",
+                            f"reports_namespace: {reports_namespace}",
                         ]),
                         "domainGroups": json.dumps(domain_groups),
                         "level": level or "L3",
@@ -1213,28 +1188,15 @@ async def run(input_dict, tools):
                     failures.append(f"redacted issues push: {detail}")
                     print(f"  Push redacted issues.md FAILED: {detail}", flush=True)
 
-            # Push redacted per-section reports
-            for pass_output_dir in report_directories:
-                list_headers = {"Authorization": f"token {private_token}", "Accept": "application/vnd.github.v3+json"}
-                list_resp = await http_client.get(
-                    f"https://api.github.com/repos/{private_repo}/contents/{pass_output_dir}",
-                    headers=list_headers,
-                )
-                if list_resp.status_code != 200:
-                    continue
-                dir_contents = list_resp.json()
-                redaction_tasks = []
-                for item in dir_contents:
-                    if item["type"] != "file" or not item["name"].endswith(".md"):
-                        continue
-                    redaction_tasks.append(_redact_and_push(
-                        gofannon_client, http_client, private_repo, private_token,
-                        output_repo, output_token, pass_output_dir, item["name"],
-                        redact_consolidated, source_id,
-                    ))
-                await asyncio.gather(*redaction_tasks, return_exceptions=True)
+            # Per-section reports are no longer pushed to GitHub (see
+            # reports_namespace above), so there's nothing per-section to
+            # redact-and-push here. Public consumers of apache/tooling-agents
+            # see only the redacted consolidated.md and issues.md, which
+            # contain redaction notices ("N Critical findings have been
+            # redacted...") so the existence of redacted findings is still
+            # disclosed without their content.
 
-            print(f"  Redacted reports pushed to {output_repo}", flush=True)
+            print(f"  Redacted consolidated and issues pushed to {output_repo}", flush=True)
 
             if notify_email and critical_findings:
                 print(f"  Emailing {len(critical_findings)} critical findings to {notify_email}", flush=True)

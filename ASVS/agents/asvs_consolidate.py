@@ -238,6 +238,7 @@ async def run(input_dict, tools):
         output_directory = ""
         sections_raw = ""
         source_id = ""
+        reports_namespace_arg = ""
         for line in lines:
             line = line.strip()
             if not line:
@@ -258,6 +259,8 @@ async def run(input_dict, tools):
                     sections_raw = value
                 elif key in ("source", "source_id", "source_repo"):
                     source_id = value
+                elif key in ("reports_namespace", "reportsnamespace", "report_namespace"):
+                    reports_namespace_arg = value
 
         directories = [d.strip().strip("/") for d in directories_raw.split(",") if d.strip()]
         # Optional: list of section IDs (e.g. "1.2.1, 1.2.2, 2.1.1") that
@@ -334,97 +337,73 @@ async def run(input_dict, tools):
         default_branch = repo_data.get("default_branch", "main")
 
         # ============================================================
-        # PHASE 1: Read All Reports from All Directories
+        # PHASE 1: Read All Reports from CouchDB
         # ============================================================
+        # Per-section reports were previously fetched from GitHub via
+        # repos/{owner}/{repo}/contents/{dir}/{name}.md, requiring 345+
+        # parallel HTTP calls under L3 load. Now they live in CouchDB
+        # under reports_namespace_arg, keyed as "{pass_name}/{N.N.N.md}".
+        # CouchDB reads are local, fast, and rate-limit-free.
         print("\n=== PHASE 1: Reading all reports ===")
 
+        if not reports_namespace_arg:
+            return {
+                "outputText": "Error: reports_namespace not provided in input. "
+                              "Caller (orchestrator) must pass `reports_namespace: ...` "
+                              "so consolidate knows where to read per-section reports.",
+            }
+
         reports = {}
-        report_dirs = {}  # report_key -> directory it came from
+        report_dirs = {}  # report_key -> pass-name it came from
 
-        # Bounded concurrency — GitHub REST API has burst limits that 345
-        # parallel reads will hit hard. Even with auth, secondary rate limits
-        # kick in around 80-100 concurrent. 10 is comfortably below that and
-        # still ~30x faster than serial.
-        phase1_fetch_sem = asyncio.Semaphore(10)
-
-        async def fetch_one_report(directory, item):
-            try:
-                async with phase1_fetch_sem:
-                    file_resp = await http_client.get(
-                        f"{GITHUB_API}/repos/{owner}/{repo}/contents/{directory}/{item['name']}",
-                        headers=headers,
-                        params={"ref": default_branch},
-                    )
-                if file_resp.status_code == 200:
-                    file_data = file_resp.json()
-                    content = base64.b64decode(file_data["content"]).decode("utf-8", errors="replace")
-                    return item['name'], content, directory
-                # Non-200 — log and continue
-                print(f"    WARNING: {item['name']} returned {file_resp.status_code}", flush=True)
-                return item['name'], None, directory
-            except Exception as e:
-                # Network errors, JSON decode errors, etc. — log and continue.
-                # We do NOT want one bad fetch out of N to kill all of Phase 1.
-                print(f"    WARNING: {item['name']} fetch failed: {type(e).__name__}: {e}", flush=True)
-                return item['name'], None, directory
+        try:
+            ns = data_store.use_namespace(reports_namespace_arg)
+            all_keys = ns.list_keys() or []
+            print(f"  Namespace {reports_namespace_arg}: {len(all_keys)} keys total", flush=True)
+        except Exception as e:
+            return {
+                "outputText": f"Error: failed to read reports namespace "
+                              f"{reports_namespace_arg}: {type(e).__name__}: {e}"
+            }
 
         for directory in directories:
-            print(f"\n  Reading reports from {directory}...")
-            contents_resp = await http_client.get(
-                f"{GITHUB_API}/repos/{owner}/{repo}/contents/{directory}",
-                headers=headers,
-                params={"ref": default_branch},
-            )
-            if contents_resp.status_code != 200:
-                print(f"  WARNING: Failed to list {directory}: {contents_resp.status_code}")
-                continue
-
-            dir_contents = contents_resp.json()
-            report_files = []
-            stale_count = 0
-            for item in dir_contents:
-                if item["type"] == "file" and item["name"].endswith(".md"):
-                    # Filter to per-section reports only (matches NN.NN.NN.md form).
-                    # This excludes consolidated.md, issues.md, AND any orphan
-                    # files left in the directory (e.g. README.md, notes.md, or
-                    # files from an old layout). Per-section files have the
-                    # form "X.Y.Z.md" where X, Y, Z are integers.
-                    name = item["name"]
-                    if not re.match(r'^\d+(?:\.\d+){2,}\.md$', name):
+            # Each `directory` is now a pass-name prefix within the
+            # reports namespace (e.g. "all" or "l1"), not a GitHub path.
+            print(f"\n  Reading reports for pass '{directory}'...")
+            pass_keys = [k for k in all_keys if k.startswith(directory + "/")]
+            # Filter to per-section reports only (matches NN.NN.NN.md form).
+            # Excludes any non-conforming filename that may have been written
+            # under the same prefix.
+            report_keys = []
+            for k in pass_keys:
+                fname = k.rsplit("/", 1)[-1]
+                if not re.match(r'^\d+(?:\.\d+){2,}\.md$', fname):
+                    continue
+                # If a section filter was provided, only keep files whose
+                # section ID is in the audited set.
+                if section_filter:
+                    sec_id = fname[:-3]  # strip ".md"
+                    if sec_id not in section_filter:
                         continue
-                    # If a section filter was provided, only keep files whose
-                    # section ID is in the filter. This skips stale section
-                    # reports from prior runs that happen to share the
-                    # directory. Without this, ~5 prior runs of the same repo
-                    # leave 5x the expected report count, blowing up Phase 2's
-                    # LLM cost and producing duplicate findings during merge.
-                    if section_filter:
-                        section_id = name[:-3]  # strip ".md"
-                        if section_id not in section_filter:
-                            stale_count += 1
-                            continue
-                    report_files.append(item)
+                report_keys.append(k)
 
-            if stale_count:
-                print(f"  Skipped {stale_count} stale report(s) not in current run")
-            print(f"  Found {len(report_files)} report files")
+            print(f"  Found {len(report_keys)} report keys")
 
-            # OPTIMIZATION: parallel file reads (was sequential).
-            # Use return_exceptions=True so one bad fetch doesn't kill the
-            # whole phase. Combined with per-fetch try/except, this is
-            # belt-and-suspenders against transient GitHub errors.
-            if report_files:
-                fetch_results = await asyncio.gather(*[
-                    fetch_one_report(directory, item) for item in report_files
-                ], return_exceptions=True)
-                for result in fetch_results:
-                    if isinstance(result, Exception):
-                        print(f"    WARNING: unhandled fetch exception: {type(result).__name__}: {result}", flush=True)
+            for k in report_keys:
+                try:
+                    content = ns.get(k)
+                    if content is None:
+                        print(f"    WARNING: {k} returned None", flush=True)
                         continue
-                    name, content, src_dir = result
-                    if content is not None:
-                        reports[name] = content
-                        report_dirs[name] = src_dir
+                    # Stored value is a markdown string. Tolerate dict-wrapped
+                    # values for forward compatibility.
+                    if isinstance(content, dict):
+                        content = content.get("report") or content.get("content") or json.dumps(content)
+                    fname = k.rsplit("/", 1)[-1]
+                    reports[fname] = content
+                    report_dirs[fname] = directory
+                except Exception as e:
+                    print(f"    WARNING: {k} read failed: {type(e).__name__}: {e}", flush=True)
 
         total_reports = len(reports)
         print(f"\nSuccessfully read {total_reports} reports")
