@@ -400,29 +400,39 @@ async def run(input_dict, tools):
                         redacted_ids.add(fid)
 
                 # 1. Recompute the Severity Distribution table.
-                # Pattern: a markdown table row with Critical count as first cell.
-                # Match both formats:
-                #   | 6 | 16 | 34 | 21 | 0 |
-                #   | 6 | 16 | 34 | 21 | 0 | **77** |
+                # Two formats observed in practice:
+                #
+                #   Horizontal (one row, columns by severity):
+                #     | Critical | High | Medium | Low | Info | Total |
+                #     |----------|------|--------|-----|------|-------|
+                #     | 6        | 16   | 34     | 21  | 0    | **77**|
+                #
+                #   Vertical (one row per severity):
+                #     | Severity     | Count | Percentage |
+                #     |--------------|------:|-----------:|
+                #     | **Critical** |     6 |       7.8% |
+                #     | **High**     |    16 |      20.8% |
+                #     ...
+                #     | **Total**    | **77**| **100%**   |
+                #
+                # Both need to zero the Critical count and decrement Total.
+                redacted_count = len(critical_findings)
+
                 def _zero_critical_count(m):
-                    # Replace the Critical count (first numeric cell after `|`)
-                    # with 0, leaving the other counts and Total intact.
+                    # Horizontal-format helper. Replace the Critical count
+                    # (first numeric cell after `|`) with 0, leaving the
+                    # other counts and Total intact.
                     row = m.group(0)
-                    # Subtract redacted count from total if present
-                    redacted_count = len(critical_findings)
-                    # Replace first numeric cell with 0
                     new_row = re.sub(r'(\|\s*)\d+(\s*\|)', r'\g<1>0\g<2>', row, count=1)
-                    # Try to find a Total cell (bold-wrapped number) and decrement it
                     total_m = re.search(r'\*\*(\d+)\*\*', new_row)
                     if total_m:
                         old_total = int(total_m.group(1))
                         new_total = max(0, old_total - redacted_count)
                         new_row = new_row.replace(f'**{old_total}**', f'**{new_total}**')
                     return new_row
-                # Find Severity Distribution table rows. They follow a header
-                # like "| Critical | High | Medium | Low | Info |" and the
-                # numeric row immediately follows the alignment row.
-                sev_table_pattern = re.compile(
+
+                # Horizontal format: header row + alignment row + data row.
+                sev_table_pattern_horizontal = re.compile(
                     r'(\|\s*Critical\s*\|\s*High\s*\|\s*Medium\s*\|\s*Low\s*\|\s*Info[^\n]*\|\n'
                     r'\|[\s:|-]+\|\n)'
                     r'(\|[^\n]+\|)',
@@ -430,7 +440,52 @@ async def run(input_dict, tools):
                 )
                 def _sev_table_replace(m):
                     return m.group(1) + _zero_critical_count(re.match(r'.*', m.group(2)))
-                redacted = sev_table_pattern.sub(_sev_table_replace, redacted)
+                redacted = sev_table_pattern_horizontal.sub(_sev_table_replace, redacted)
+
+                # Vertical format: zero the Critical row's count cell, and
+                # decrement the Total row. Match the row pattern:
+                #   | (optional formatting) Critical (optional formatting) | <count> | ... |
+                # Critical cell may be wrapped in **...** or contain emoji.
+                def _zero_vertical_critical_row(m):
+                    row = m.group(0)
+                    # Replace first numeric or **N** cell after the
+                    # Critical label with 0.
+                    new_row = re.sub(
+                        r'(\|\s*\**\s*(?:🔴\s*)?Critical\s*\**\s*\|\s*)'
+                        r'(?:\*\*)?\d+(?:\*\*)?(\s*\|)',
+                        r'\g<1>0\g<2>',
+                        row,
+                        count=1,
+                        flags=re.IGNORECASE,
+                    )
+                    return new_row
+                redacted = re.sub(
+                    r'\|\s*\**\s*(?:🔴\s*)?Critical\s*\**\s*\|[^\n]+\|',
+                    _zero_vertical_critical_row,
+                    redacted,
+                    flags=re.IGNORECASE,
+                )
+
+                # Vertical format: decrement Total row.
+                def _decrement_vertical_total_row(m):
+                    row = m.group(0)
+                    # Find first numeric cell (possibly **N**) after Total
+                    num_m = re.search(
+                        r'(\|\s*\**\s*Total\s*\**\s*\|\s*\**)(\d+)(\**\s*\|)',
+                        row,
+                        flags=re.IGNORECASE,
+                    )
+                    if num_m:
+                        old = int(num_m.group(2))
+                        new = max(0, old - redacted_count)
+                        row = row[:num_m.start(2)] + str(new) + row[num_m.end(2):]
+                    return row
+                redacted = re.sub(
+                    r'\|\s*\**\s*Total\s*\**\s*\|[^\n]+\|',
+                    _decrement_vertical_total_row,
+                    redacted,
+                    flags=re.IGNORECASE,
+                )
 
                 # 2. Strip ASCII bar chart Critical line if present (e.g.
                 #    "Critical  ████░░  6  ( 7.8%)")
@@ -448,6 +503,56 @@ async def run(input_dict, tools):
                 #    Do not touch tables in code blocks or per-finding blocks
                 #    (those have already been removed).
                 if redacted_ids:
+                    # Drop entire table rows whose severity column says
+                    # Critical. This catches Top 5 Risks rows (which have
+                    # full risk descriptions and titles in adjacent cells —
+                    # leaving only the IDs to strip but keeping the rest
+                    # leaks the redacted finding's content via title and
+                    # description), Cross-Reference Matrix rows, and any
+                    # other table that includes severity per row.
+                    #
+                    # The match is intentionally broad: any line that
+                    # starts with `|`, contains `Critical` in any cell
+                    # (with or without ** wrapping or 🔴 emoji), and ends
+                    # with `|`. False positives are theoretically possible
+                    # if a non-redacted finding's title contains the word
+                    # "Critical", but in practice severity columns are
+                    # the dominant source of the word in tables and we
+                    # accept this risk as the cost of full redaction.
+                    #
+                    # Safety: don't touch lines inside code fences. Code
+                    # fences are rendered as-is, so lines starting with
+                    # `|` inside ```...``` blocks aren't tables.
+                    def _strip_critical_table_rows(text):
+                        out = []
+                        in_fence = False
+                        for line in text.split('\n'):
+                            stripped = line.lstrip()
+                            if stripped.startswith('```'):
+                                in_fence = not in_fence
+                                out.append(line)
+                                continue
+                            if in_fence:
+                                out.append(line)
+                                continue
+                            # Detect table row with Critical in a cell.
+                            # Pattern: starts with |, ends with |, contains
+                            # Critical (with optional ** or 🔴 wrapping).
+                            if (
+                                stripped.startswith('|')
+                                and stripped.rstrip().endswith('|')
+                                and re.search(
+                                    r'\|\s*\**\s*(?:🔴\s*)?Critical\s*\**\s*\|',
+                                    line,
+                                    re.IGNORECASE,
+                                )
+                            ):
+                                # Skip the row (don't append to output)
+                                continue
+                            out.append(line)
+                        return '\n'.join(out)
+                    redacted = _strip_critical_table_rows(redacted)
+
                     sorted_ids = sorted(redacted_ids,
                                          key=lambda s: int(re.search(r'(\d+)', s).group(1)) if re.search(r'(\d+)', s) else 0)
 
@@ -527,9 +632,108 @@ async def run(input_dict, tools):
                     # Matrix rows whose Finding ID col is now empty.
                     redacted = re.sub(r'\|\s*,\s*', '| ', redacted)
                     redacted = re.sub(r',\s*,', ',', redacted)
-                    # Collapse multiple spaces inside cells (not at line start)
-                    redacted = re.sub(r'\|\s{2,}', '| ', redacted)
+                    # Collapse multiple spaces inside cells (not at line start).
+                    # Use [ \t] not \s to avoid eating newlines, which would
+                    # weld the end of a table to the start of the next section.
+                    redacted = re.sub(r'\|[ \t]{2,}', '| ', redacted)
                     redacted = re.sub(r'\|\s+\|\s+(Critical|High|Medium|Low)\b[^\n]*\n', '', redacted)
+
+                # Polish: tables left empty by Critical-row removal get
+                # replaced with an explanatory notice. This catches things
+                # like a Top 5 Risks table where every row was Critical
+                # and got stripped — we don't want to leave a bare header
+                # + alignment row with no data, which renders awkwardly
+                # on GitHub. Detect by walking line-by-line: a header
+                # row followed by an alignment row followed by anything
+                # other than another `|` row means the table is empty.
+                #
+                # Note: we do this even when no critical_findings were
+                # present in the report, to handle other paths that may
+                # produce empty tables. The cost is negligible.
+                def _replace_empty_tables(text, redacted_count):
+                    out_lines = []
+                    lines = text.split('\n')
+                    i = 0
+                    in_fence = False
+                    while i < len(lines):
+                        line = lines[i]
+                        stripped = line.lstrip()
+                        if stripped.startswith('```'):
+                            in_fence = not in_fence
+                            out_lines.append(line)
+                            i += 1
+                            continue
+                        if in_fence:
+                            out_lines.append(line)
+                            i += 1
+                            continue
+                        # Look for header + alignment + (no data rows) pattern.
+                        # Header: line starts and ends with `|` and isn't an
+                        # alignment row.
+                        # Alignment: line is `|` separators with `:` and `-`.
+                        # No data: walking forward from after the alignment
+                        # row, the next non-blank line isn't a `|`-form data
+                        # row (or is a `|`-form alignment row, weird but
+                        # possible).
+                        is_header = (
+                            stripped.startswith('|')
+                            and stripped.rstrip().endswith('|')
+                            and not re.match(r'^\s*\|[\s:|-]+\|\s*$', line)
+                            and i + 1 < len(lines)
+                        )
+                        if is_header:
+                            next_line = lines[i + 1]
+                            is_alignment = (
+                                next_line.lstrip().startswith('|')
+                                and next_line.rstrip().endswith('|')
+                                and re.match(r'^\s*\|[\s:|-]+\|\s*$', next_line)
+                            )
+                            if is_alignment:
+                                # Look at the line immediately after alignment.
+                                # Skip up to a small number of blank lines that
+                                # might be cosmetic padding.
+                                j = i + 2
+                                blanks_skipped = 0
+                                while (
+                                    j < len(lines)
+                                    and not lines[j].strip()
+                                    and blanks_skipped < 2
+                                ):
+                                    j += 1
+                                    blanks_skipped += 1
+                                # A data row is a `|`-prefixed line that is
+                                # NOT an alignment row.
+                                has_data = False
+                                if j < len(lines):
+                                    nxt = lines[j]
+                                    nxt_strip = nxt.lstrip()
+                                    if (
+                                        nxt_strip.startswith('|')
+                                        and nxt.rstrip().endswith('|')
+                                        and not re.match(r'^\s*\|[\s:|-]+\|\s*$', nxt)
+                                    ):
+                                        has_data = True
+                                if not has_data:
+                                    # Empty table — replace with notice.
+                                    notice_text = (
+                                        f"> _All entries in this section were Critical findings "
+                                        f"and have been redacted. {redacted_count} Critical "
+                                        f"{'finding has' if redacted_count == 1 else 'findings have'} "
+                                        f"been forwarded to the proper channels for triage._"
+                                    )
+                                    out_lines.append(notice_text)
+                                    # Advance past header + alignment, but
+                                    # do NOT consume the blank lines or
+                                    # following content — leave them as
+                                    # natural section separators.
+                                    i += 2
+                                    continue
+                        out_lines.append(line)
+                        i += 1
+                    return '\n'.join(out_lines)
+
+                if critical_findings:
+                    redacted = _replace_empty_tables(redacted, len(critical_findings))
 
                 notice = (
                     f"\n\n> **Note:** {len(critical_findings)} Critical "
@@ -710,11 +914,59 @@ async def run(input_dict, tools):
                     f"Either set clearCache=true to download fresh, or check the namespace name."
                 )}
 
-        # T12: estimate LOC from download output to decide whether to skip discovery
+        # T12: estimate LOC from download output to decide whether to skip discovery.
+        #
+        # T12 originated as an L1 optimization: small repos with ~70
+        # sections gain little from discovery and the discovery LLM call
+        # adds 30-60s of latency for marginal benefit. But at L3 with
+        # ~345 sections, discovery's output isn't optional — it's the
+        # *only* thing producing domain groupings small enough for the
+        # consolidate phase to fit in Sonnet's context window. Without
+        # discovery at L3 the orchestrator falls back to a single "all"
+        # bucket of 345 sections → ContextWindowExceededError.
+        #
+        # So T12 only fires when:
+        #   1. The user did not explicitly request discovery (or did but
+        #      the section count is low enough to safely skip), AND
+        #   2. The repo is below the LOC threshold, AND
+        #   3. Section count is below the chapter-grouping threshold
+        #
+        # If discover=true was passed, we respect that intent regardless
+        # of repo size. The user knows they need the grouping output.
         estimated_loc = _estimate_loc_from_namespace(code_namespace)
-        skip_discovery = estimated_loc < TINY_REPO_LOC_THRESHOLD
+        # Compute expected section count up front so we can use it in T12
+        try:
+            asvs_ns_check = data_store.use_namespace("asvs")
+            _all_keys = asvs_ns_check.list_keys() or []
+            _req_keys = [k for k in _all_keys if k.startswith("asvs:requirements:")]
+            _all_sections_for_check = [rk.replace("asvs:requirements:", "") for rk in _req_keys]
+            # Apply level filter to estimate the post-filter count
+            load_asvs_levels()
+            expected_section_count = sum(
+                1 for s in _all_sections_for_check
+                if asvs_level_cache.get(s, 99) <= max_level_num
+            )
+        except Exception:
+            expected_section_count = 999  # err on the side of NOT skipping
+
+        DISCOVERY_REQUIRED_SECTION_THRESHOLD = 100
+        # Skip discovery only if all three conditions hold
+        skip_discovery = (
+            estimated_loc < TINY_REPO_LOC_THRESHOLD
+            and expected_section_count < DISCOVERY_REQUIRED_SECTION_THRESHOLD
+        )
         if skip_discovery and discover:
-            print(f"  Repo is small ({estimated_loc} LOC < {TINY_REPO_LOC_THRESHOLD}); skipping discovery (T12)", flush=True)
+            print(f"  Repo is small ({estimated_loc} LOC < {TINY_REPO_LOC_THRESHOLD}) "
+                  f"and section count is low ({expected_section_count} < "
+                  f"{DISCOVERY_REQUIRED_SECTION_THRESHOLD}); skipping discovery (T12)", flush=True)
+        elif (
+            estimated_loc < TINY_REPO_LOC_THRESHOLD
+            and expected_section_count >= DISCOVERY_REQUIRED_SECTION_THRESHOLD
+            and discover
+        ):
+            print(f"  Repo is small ({estimated_loc} LOC) but section count is high "
+                  f"({expected_section_count} sections at level {level or 'all'}); "
+                  f"running discovery to produce domain groups for consolidation", flush=True)
 
         # =============================================================
         # Step 2: Discovery (or fast-path for tiny repos)
@@ -756,7 +1008,29 @@ async def run(input_dict, tools):
                 "domain_context": "",
                 "estimated_lines": estimated_loc,
             }]
-            domain_groups = {"all": all_sections}
+            # Domain grouping for the consolidate phase. With a single
+            # "all" bucket, consolidate sends every per-section report to
+            # one Sonnet call — fine for L1 (~70 sections) but blows past
+            # the 200k context window at L3 (~345 sections, ~400 findings).
+            #
+            # When discovery is skipped, fall back to ASVS chapter-based
+            # grouping (1.x, 2.x, ..., 16.x). This produces ~16 buckets
+            # of ~22 sections each at L3, well within Sonnet's context,
+            # without needing discovery to run. The audit phase still
+            # uses the single "all" pass for batching efficiency; only
+            # consolidate sees the chapter split.
+            CHAPTER_GROUP_THRESHOLD = 100  # sections
+            if len(all_sections) >= CHAPTER_GROUP_THRESHOLD:
+                domain_groups = {}
+                for section in all_sections:
+                    ch_num = section.split(".")[0]
+                    ch_name = f"ch{ch_num.zfill(2)}"
+                    domain_groups.setdefault(ch_name, []).append(section)
+                print(f"  Many sections ({len(all_sections)}); using chapter-based "
+                      f"domain grouping for consolidation: {len(domain_groups)} chapters",
+                      flush=True)
+            else:
+                domain_groups = {"all": all_sections}
 
         # Filter passes by level
         for pass_def in passes:
