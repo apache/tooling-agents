@@ -553,6 +553,67 @@ async def run(input_dict, tools):
                         return '\n'.join(out)
                     redacted = _strip_critical_table_rows(redacted)
 
+                    # 3b. Drop heading-based Critical risk blocks. The
+                    # consolidate Sonnet sometimes produces Top 5 Risks as
+                    # `#### N. 🔴 Title (Critical)` headings followed by
+                    # paragraph content rather than as table rows. The
+                    # table-row stripper above doesn't see these. Walk the
+                    # document and drop any `#### ...` heading that
+                    # contains 🔴 or "(Critical)" along with everything
+                    # under it until the next heading at depth ≤ 4 (next
+                    # risk or end of section).
+                    #
+                    # Detection is intentionally narrow — we require
+                    # either the 🔴 emoji or the literal token `(Critical)`
+                    # in parens. We do NOT match a bare word "Critical"
+                    # in the heading because legitimate non-Critical
+                    # headings could mention the word in their title
+                    # ("Critical Path Analysis", etc.).
+                    #
+                    # Safety: code fences are skipped exactly as in the
+                    # table-row pass.
+                    def _strip_critical_heading_blocks(text):
+                        lines = text.split('\n')
+                        out = []
+                        in_fence = False
+                        i = 0
+                        crit_heading_re = re.compile(
+                            r'^####\s.*(?:🔴|\(\s*Critical\s*\))',
+                            re.IGNORECASE,
+                        )
+                        boundary_re = re.compile(r'^#{1,4}(\s|$)')
+                        while i < len(lines):
+                            line = lines[i]
+                            stripped = line.lstrip()
+                            if stripped.startswith('```'):
+                                in_fence = not in_fence
+                                out.append(line)
+                                i += 1
+                                continue
+                            if in_fence:
+                                out.append(line)
+                                i += 1
+                                continue
+                            if crit_heading_re.match(line):
+                                # Skip this heading + all content under it
+                                # until the next heading at depth ≤ 4.
+                                i += 1
+                                while i < len(lines):
+                                    nxt = lines[i]
+                                    nxt_stripped = nxt.lstrip()
+                                    if nxt_stripped.startswith('```'):
+                                        in_fence = not in_fence
+                                        i += 1
+                                        continue
+                                    if (not in_fence) and boundary_re.match(nxt_stripped):
+                                        break  # don't consume the boundary line
+                                    i += 1
+                                continue
+                            out.append(line)
+                            i += 1
+                        return '\n'.join(out)
+                    redacted = _strip_critical_heading_blocks(redacted)
+
                     sorted_ids = sorted(redacted_ids,
                                          key=lambda s: int(re.search(r'(\d+)', s).group(1)) if re.search(r'(\d+)', s) else 0)
 
@@ -719,7 +780,8 @@ async def run(input_dict, tools):
                                         f"> _All entries in this section were Critical findings "
                                         f"and have been redacted. {redacted_count} Critical "
                                         f"{'finding has' if redacted_count == 1 else 'findings have'} "
-                                        f"been forwarded to the proper channels for triage._"
+                                        f"been forwarded to the project's PMC private mailing list "
+                                        f"for triage through proper channels._"
                                     )
                                     out_lines.append(notice_text)
                                     # Advance past header + alignment, but
