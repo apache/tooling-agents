@@ -56,13 +56,13 @@ async def run(input_dict, tools):
         # Posted in every triage comment. Used to detect prior runs of this agent
         # so we don't re-comment on the same issue. Bump only when the comment
         # format changes.
-        SENTINEL_TRIAGE = "<!-- gofannon-issue-triage-bot v1 -->"
+        SENTINEL_TRIAGE = "<!-- gofannon-issue-triage-bot v2 -->"
         # Posted in standalone "see also" comments on issues that are part of a
         # duplicate/related cluster but for which we are NOT posting a fresh
         # triage comment (because they were already triaged or have an open PR).
         # Separate sentinel so the two comment types are independently
         # idempotent.
-        SENTINEL_RELATED = "<!-- gofannon-issue-triage-bot v1 related -->"
+        SENTINEL_RELATED = "<!-- gofannon-issue-triage-bot v2 related -->"
 
 
         # ---------- module-level helpers ----------
@@ -365,6 +365,627 @@ async def run(input_dict, tools):
             return None
 
 
+        # ---------- structural discovery (one per SHA, cached) ----------
+        # These three passes build the agent's mental model of the repo.
+        # They run ONCE per HEAD SHA and are cached. Every per-issue
+        # analysis downstream gets all three as context — that's where
+        # the depth comes from vs. the v1 "score previews + analyze"
+        # approach. Same shape as asvs_discover + asvs_audit Step 3.
+
+        _ARCHITECTURE_PROMPT = """You are a senior engineer mapping the structure of an unfamiliar codebase. Given the file paths and previews below, identify what this software is and how it's organized.
+
+Return ONLY a JSON object (no surrounding prose, no markdown fences) with this structure:
+{
+  "framework": "e.g., FastAPI, Quart, Django, Express, Spring",
+  "language": "e.g., Python, TypeScript, Go",
+  "purpose": "one paragraph describing what this software does end-to-end",
+  "auth_systems": [{"name": "short description", "files": ["path1", "path2"]}],
+  "api_layers": [{"name": "short description", "files": ["path1", "path2"]}],
+  "data_layer": {
+    "database": "e.g., SQLAlchemy, plain SQL, no DB",
+    "storage": "e.g., S3, local filesystem, blob store",
+    "files": ["path1", "path2"]
+  },
+  "execution_model": {
+    "description": "e.g., async web server, Celery workers, scheduled tasks",
+    "files": ["path1", "path2"]
+  },
+  "key_subsystems": [
+    {"name": "short name", "description": "what it does", "files": ["path1", "path2"]}
+  ],
+  "trust_model": "one paragraph describing who is trusted and what boundaries exist"
+}
+
+Use the actual file paths from the input. Be specific — name the framework, name the database, name the subsystems.
+
+FILES:
+"""
+
+        async def _discover_architecture(*, repo, head_sha, all_files,
+                                          provider, model):
+            """Architecture classification, single LLM call, cached per SHA.
+
+            Returns the JSON object above as a Python dict. {} on failure.
+            """
+            cache_ns = data_store.use_namespace(
+                f"discovery:{repo}@{head_sha[:7]}"
+            )
+            cached = cache_ns.get("architecture")
+            if cached:
+                print(f"  Architecture: cache hit", flush=True)
+                return cached
+
+            previews = {}
+            for path, content in sorted(all_files.items()):
+                if not content:
+                    continue
+                lines = content.split('\n')
+                previews[path] = '\n'.join(lines[:200])
+
+            if not previews:
+                return {}
+
+            try:
+                ctx = get_context_window(provider, model)
+            except Exception:
+                ctx = 200_000
+            safe_limit = int(ctx * 0.40)
+            try:
+                template_tokens = count_tokens(
+                    _ARCHITECTURE_PROMPT, provider, model
+                )
+            except Exception:
+                template_tokens = len(_ARCHITECTURE_PROMPT) // 3
+            budget = safe_limit - template_tokens
+
+            entries = []
+            used = 0
+            included = 0
+            for path in sorted(previews.keys()):
+                entry = f"\n--- {path} ---\n{previews[path]}\n"
+                try:
+                    t = count_tokens(entry, provider, model)
+                except Exception:
+                    t = len(entry) // 3
+                if used + t > budget:
+                    # Out of budget; fall back to path-only entries for
+                    # the rest so the model knows they exist
+                    remaining = sorted(previews.keys())[included:]
+                    short = "\nADDITIONAL FILES (no preview, exists):\n"
+                    short += "\n".join(f"- {p}" for p in remaining)
+                    short_tokens = (count_tokens(short, provider, model)
+                                    if True else len(short) // 3)
+                    try:
+                        short_tokens = count_tokens(short, provider, model)
+                    except Exception:
+                        short_tokens = len(short) // 3
+                    if used + short_tokens <= budget:
+                        entries.append(short)
+                    break
+                entries.append(entry)
+                used += t
+                included += 1
+
+            print(
+                f"  Architecture discovery: 1 LLM call over {included}/"
+                f"{len(previews)} files (with previews)",
+                flush=True,
+            )
+
+            prompt = _ARCHITECTURE_PROMPT + "".join(entries)
+            try:
+                text, _ = await call_llm(
+                    provider=provider, model=model,
+                    messages=[{"role": "user", "content": prompt}],
+                    parameters={"temperature": 0.2, "max_tokens": 4096},
+                    user_service=None, user_id=None,
+                )
+            except Exception as exc:
+                print(f"  Architecture discovery failed: {exc}", flush=True)
+                return {}
+
+            parsed = _parse_relevance_json(text)
+            if not isinstance(parsed, dict):
+                print(f"  Architecture parse failed; got: {text[:200]}",
+                      flush=True)
+                return {}
+            cache_ns.set("architecture", parsed)
+            return parsed
+
+
+        _DOMAINS_PROMPT_TEMPLATE = """You are partitioning a codebase into application domains so issues can be routed to the right area for triage.
+
+Given the architecture summary and the file list below, group the files into 4-12 application DOMAINS. A domain is a coherent area of functionality (e.g., "vote_management", "release_lifecycle", "key_signing") — distinct from a low-level concern like "database access" or "logging".
+
+ARCHITECTURE SUMMARY:
+{architecture_json}
+
+Return ONLY a JSON object (no markdown fences, no surrounding prose):
+{{
+  "domains": [
+    {{
+      "name": "snake_case_short_name",
+      "description": "one or two sentences about what this domain does",
+      "files": ["path1", "path2"],
+      "concerns": ["short list", "of issue topics", "that land here"]
+    }}
+  ]
+}}
+
+Rules:
+- Each file should appear in EXACTLY ONE domain.
+- Configs, migrations, shared utilities go in an "infrastructure" or "shared" domain.
+- Use snake_case names. Be specific to this codebase (not generic categories).
+
+FILE LIST:
+"""
+
+        async def _partition_domains(*, repo, head_sha, all_files,
+                                      architecture, provider, model):
+            """Single LLM call to group files into application domains.
+            Cached per SHA. Returns {"domains": [...]}.
+            """
+            cache_ns = data_store.use_namespace(
+                f"discovery:{repo}@{head_sha[:7]}"
+            )
+            cached = cache_ns.get("domains")
+            if cached:
+                print(f"  Domains: cache hit", flush=True)
+                return cached
+
+            if not all_files:
+                return {"domains": []}
+
+            file_list_text = "\n".join(f"- {p}" for p in sorted(all_files.keys()))
+            arch_json = (json.dumps(architecture, indent=2)
+                          if architecture else "{}")
+            prompt = (_DOMAINS_PROMPT_TEMPLATE.format(
+                architecture_json=arch_json
+            ) + file_list_text)
+
+            print(
+                f"  Domain partitioning: 1 LLM call over {len(all_files)} files",
+                flush=True,
+            )
+
+            try:
+                text, _ = await call_llm(
+                    provider=provider, model=model,
+                    messages=[{"role": "user", "content": prompt}],
+                    parameters={"temperature": 0.2, "max_tokens": 8192},
+                    user_service=None, user_id=None,
+                )
+            except Exception as exc:
+                print(f"  Domain partitioning failed: {exc}", flush=True)
+                return {"domains": []}
+
+            parsed = _parse_relevance_json(text)
+            if not isinstance(parsed, dict) or "domains" not in parsed:
+                return {"domains": []}
+
+            valid = set(all_files.keys())
+            cleaned_domains = []
+            for d in parsed.get("domains", []) or []:
+                if not isinstance(d, dict):
+                    continue
+                files = [f for f in (d.get("files") or []) if f in valid]
+                if not files:
+                    continue
+                cleaned_domains.append({
+                    "name": str(d.get("name", "unnamed")).strip(),
+                    "description": str(d.get("description", "")).strip(),
+                    "files": files,
+                    "concerns": [str(c).strip() for c in (d.get("concerns") or [])],
+                })
+            result = {"domains": cleaned_domains}
+            cache_ns.set("domains", result)
+            print(f"  Domains: {len(cleaned_domains)} partitions", flush=True)
+            return result
+
+
+        _INVENTORY_PROMPT = """You are cataloging code files for use by another engineer who will read your output instead of the source. For each file below, produce a structured summary that captures what's there — be CONCRETE and use the file's ACTUAL identifiers (function names, class names, line ranges).
+
+For each file, output exactly this format:
+
+### path/to/file.py
+**Purpose:** one sentence — what this file does
+**Public API:**
+- `function_name(args)` (lines X-Y) — what it does
+- `ClassName` (lines X-Y) — what it represents
+**Concerns:** brief comma-separated list of issue topics this file might be relevant to
+
+Be concise but specific. Don't paraphrase function names — use them verbatim. If line numbers are uncertain, give your best estimate.
+
+FILES:
+"""
+
+        async def _build_inventory(*, repo, head_sha, all_files,
+                                    provider, model):
+            """Per-file structured catalog. Cached by file-set hash so
+            it's compatible with what asvs_audit would produce.
+            Returns {path: markdown_summary_block}.
+            """
+            import hashlib
+            file_set_hash = hashlib.sha256(
+                "\n".join(sorted(all_files.keys())).encode("utf-8")
+            ).hexdigest()[:16]
+
+            cache_ns = data_store.use_namespace(
+                f"audit-cache:inventory:{file_set_hash}"
+            )
+            cached = cache_ns.get("triage_inventory")
+            if cached:
+                print(
+                    f"  Inventory: cache hit (file-set {file_set_hash}, "
+                    f"{len(cached)} files)",
+                    flush=True,
+                )
+                return cached
+
+            previews = {}
+            for path, content in all_files.items():
+                if not content:
+                    continue
+                lines = content.split('\n')
+                previews[path] = '\n'.join(lines[:200])
+            if not previews:
+                return {}
+
+            try:
+                ctx = get_context_window(provider, model)
+            except Exception:
+                ctx = 200_000
+            safe_limit = int(ctx * 0.40)
+            try:
+                template_tokens = count_tokens(_INVENTORY_PROMPT, provider, model)
+            except Exception:
+                template_tokens = len(_INVENTORY_PROMPT) // 3
+            budget = safe_limit - template_tokens
+
+            batches = []
+            current = {}
+            current_tokens = 0
+            for path in sorted(previews.keys()):
+                preview = previews[path]
+                entry = f"\n--- {path} ---\n{preview}\n"
+                try:
+                    t = count_tokens(entry, provider, model)
+                except Exception:
+                    t = len(entry) // 3
+                if t > budget:
+                    short = '\n'.join(preview.split('\n')[:50])
+                    placeholder = f"\n--- {path} ---\n{short}\n[truncated]\n"
+                    if current:
+                        batches.append(current)
+                        current = {}; current_tokens = 0
+                    batches.append({path: placeholder})
+                    continue
+                if current_tokens + t > budget and current:
+                    batches.append(current)
+                    current = {}; current_tokens = 0
+                current[path] = entry
+                current_tokens += t
+            if current:
+                batches.append(current)
+
+            print(
+                f"  Inventory: building over {len(previews)} files in "
+                f"{len(batches)} batch(es)",
+                flush=True,
+            )
+
+            sem = asyncio.Semaphore(5)
+            async def _one_batch(idx, batch):
+                async with sem:
+                    entries_text = "".join(batch.values())
+                    prompt = _INVENTORY_PROMPT + entries_text
+                    for attempt in range(2):
+                        try:
+                            text, _ = await call_llm(
+                                provider=provider, model=model,
+                                messages=[{"role": "user", "content": prompt}],
+                                parameters={
+                                    "temperature": 0.1,
+                                    "max_tokens": 8192,
+                                },
+                                user_service=None, user_id=None,
+                            )
+                            return text or ""
+                        except Exception as e:
+                            if attempt == 0:
+                                print(
+                                    f"    Inventory batch {idx+1} attempt 1 "
+                                    f"failed ({type(e).__name__}); retrying",
+                                    flush=True,
+                                )
+                                await asyncio.sleep(2)
+                            else:
+                                print(
+                                    f"    Inventory batch {idx+1} failed: {e}",
+                                    flush=True,
+                                )
+                                return ""
+
+            results = await asyncio.gather(
+                *[_one_batch(i, b) for i, b in enumerate(batches)]
+            )
+
+            # Parse: each file's block starts with "### path/to/file.py"
+            inventory = {}
+            current_path = None
+            current_block = []
+            for chunk in results:
+                for line in chunk.split('\n'):
+                    m = re.match(r'^###\s+(.+?)\s*$', line)
+                    if m:
+                        if current_path and current_path in all_files:
+                            inventory[current_path] = '\n'.join(current_block).strip()
+                        candidate = m.group(1).strip()
+                        current_path = candidate if candidate in all_files else None
+                        current_block = []
+                    else:
+                        if current_path:
+                            current_block.append(line)
+            if current_path and current_path in all_files:
+                inventory[current_path] = '\n'.join(current_block).strip()
+
+            cache_ns.set("triage_inventory", inventory)
+            print(f"  Inventory: cataloged {len(inventory)} files",
+                  flush=True)
+            return inventory
+
+
+        # ---------- per-issue: domain classification + grounded analysis ----------
+
+        _DOMAIN_CLASSIFY_PROMPT_TEMPLATE = """You are routing a GitHub issue to the right area of a codebase for triage.
+
+Given the issue and the list of application domains, identify which domain(s) the issue touches. An issue may touch 1-3 domains; pick the smallest set that captures it.
+
+ISSUE #{number}: {title}
+
+ISSUE BODY:
+{body}
+
+DOMAINS:
+{domains_text}
+
+Return ONLY a JSON object (no surrounding prose, no markdown fences):
+{{
+  "domains": [
+    {{"name": "domain_name", "rationale": "one sentence why"}}
+  ]
+}}
+
+Use the exact domain names from the list above. If genuinely no domain fits (issue is unrelated to this codebase), return {{"domains": []}}.
+"""
+
+        async def _classify_issue_domains(
+            *, repo, head_sha, issue_number, issue_title, issue_body,
+            domains, provider, model,
+        ):
+            """Returns list of {"name": str, "rationale": str} for the
+            domains this issue touches. Cached per issue per SHA.
+            """
+            cache_ns = data_store.use_namespace(
+                f"triage-cache:domain:{repo}@{head_sha[:7]}"
+            )
+            cache_key = f"issue-{issue_number}"
+            cached = cache_ns.get(cache_key)
+            if cached:
+                return cached
+
+            if not domains.get("domains"):
+                return []
+
+            domains_text = "\n".join(
+                f"- {d['name']}: {d['description']}"
+                + (f" (concerns: {', '.join(d.get('concerns', []))})"
+                    if d.get("concerns") else "")
+                for d in domains["domains"]
+            )
+
+            prompt = _DOMAIN_CLASSIFY_PROMPT_TEMPLATE.format(
+                number=issue_number,
+                title=issue_title,
+                body=(issue_body or "(no body)")[:6000],
+                domains_text=domains_text,
+            )
+
+            try:
+                text, _ = await call_llm(
+                    provider=provider, model=model,
+                    messages=[{"role": "user", "content": prompt}],
+                    parameters={"temperature": 0.2, "max_tokens": 1024},
+                    user_service=None, user_id=None,
+                )
+            except Exception as exc:
+                print(
+                    f"  Issue #{issue_number}: domain classify failed: {exc}",
+                    flush=True,
+                )
+                return []
+
+            parsed = _parse_relevance_json(text)
+            if not isinstance(parsed, dict):
+                cache_ns.set(cache_key, [])
+                return []
+
+            valid_names = {d["name"] for d in domains["domains"]}
+            chosen = []
+            for entry in parsed.get("domains", []) or []:
+                if not isinstance(entry, dict):
+                    continue
+                name = str(entry.get("name", "")).strip()
+                if name in valid_names:
+                    chosen.append({
+                        "name": name,
+                        "rationale": str(entry.get("rationale", "")).strip(),
+                    })
+            cache_ns.set(cache_key, chosen)
+            return chosen
+
+
+        _RELEVANCE_INVENTORY_TEMPLATE = """You are choosing which files in a codebase are most relevant to a specific GitHub issue.
+
+ISSUE #{number}: {title}
+
+ISSUE BODY:
+{body}
+
+Below are file inventories — concise structured summaries of what each file contains. Rate each file 0-10 for how likely a fix or response to this issue would touch it:
+- 10: Almost certainly contains the code the issue is about
+- 7-9: Highly likely to be involved in any fix
+- 4-6: Plausibly relevant; worth inspecting
+- 1-3: Unlikely
+- 0: Not relevant
+
+Return ONLY a JSON object mapping file paths to integer scores. Example: {{"src/auth.py": 9, "src/utils.py": 3}}
+
+FILE INVENTORIES:
+"""
+
+        async def _score_relevance_v2(
+            *, repo, head_sha, issue_number, issue_title, issue_body,
+            inventory, candidate_paths, all_files,
+            provider, model,
+        ):
+            """Score files using inventory entries (not raw previews).
+            `candidate_paths` is a list — usually the union of files
+            from the issue's classified domains, or all files if no
+            domain classification produced results.
+
+            Cached per issue per SHA. Falls back to whole-corpus scoring
+            if the candidate set is empty.
+            """
+            cache_ns = data_store.use_namespace(
+                f"triage-cache:relevance:{repo}@{head_sha[:7]}"
+            )
+            cache_key = f"issue-{issue_number}"
+            cached = cache_ns.get(cache_key)
+            if cached:
+                print(
+                    f"  Issue #{issue_number}: relevance cache hit",
+                    flush=True,
+                )
+                return cached
+
+            # Build entries — use inventory if available, fall back to
+            # previews for files we don't have an inventory entry for.
+            entries = {}
+            for path in candidate_paths:
+                if path not in all_files:
+                    continue
+                inv = inventory.get(path)
+                if inv:
+                    entries[path] = (
+                        f"\n=== {path} ===\n{inv}\n"
+                    )
+                else:
+                    content = all_files.get(path) or ""
+                    preview = '\n'.join(content.split('\n')[:80])
+                    entries[path] = (
+                        f"\n=== {path} ===\n[no inventory; preview]\n{preview}\n"
+                    )
+
+            if not entries:
+                cache_ns.set(cache_key, {})
+                return {}
+
+            try:
+                ctx = get_context_window(provider, model)
+            except Exception:
+                ctx = 200_000
+            safe_limit = int(ctx * 0.40)
+            template = _RELEVANCE_INVENTORY_TEMPLATE.format(
+                number=issue_number,
+                title=issue_title,
+                body=(issue_body or "(no body)")[:6000],
+            )
+            try:
+                template_tokens = count_tokens(template, provider, model)
+            except Exception:
+                template_tokens = len(template) // 3
+            budget = max(1024, safe_limit - template_tokens)
+
+            batches = []
+            current = {}
+            current_tokens = 0
+            for path in sorted(entries.keys()):
+                entry = entries[path]
+                try:
+                    t = count_tokens(entry, provider, model)
+                except Exception:
+                    t = len(entry) // 3
+                if t > budget:
+                    placeholder = f"\n=== {path} ===\n[entry too large]\n"
+                    if current:
+                        batches.append(current)
+                        current = {}; current_tokens = 0
+                    batches.append({path: placeholder})
+                    continue
+                if current_tokens + t > budget and current:
+                    batches.append(current)
+                    current = {}; current_tokens = 0
+                current[path] = entry
+                current_tokens += t
+            if current:
+                batches.append(current)
+
+            print(
+                f"  Issue #{issue_number}: relevance scoring "
+                f"{len(entries)} files (inventory) in "
+                f"{len(batches)} batch(es)",
+                flush=True,
+            )
+
+            sem = asyncio.Semaphore(5)
+            async def _one_batch(idx, batch):
+                async with sem:
+                    body_text = "".join(batch.values())
+                    prompt = template + body_text
+                    for attempt in range(2):
+                        try:
+                            text, _ = await call_llm(
+                                provider=provider, model=model,
+                                messages=[{"role": "user", "content": prompt}],
+                                parameters={
+                                    "temperature": 0.3,
+                                    "max_tokens": 4096,
+                                },
+                                user_service=None, user_id=None,
+                            )
+                            parsed = _parse_relevance_json(text)
+                            if parsed is not None:
+                                return parsed
+                        except Exception as e:
+                            if attempt == 0:
+                                await asyncio.sleep(2)
+                            else:
+                                print(
+                                    f"    relevance batch {idx+1} failed: {e}",
+                                    flush=True,
+                                )
+                    return {p: 5 for p in batch}
+
+            results = await asyncio.gather(
+                *[_one_batch(i, b) for i, b in enumerate(batches)]
+            )
+
+            scores = {}
+            for partial in results:
+                for p, s in partial.items():
+                    if p not in all_files:
+                        continue
+                    try:
+                        v = int(round(float(s)))
+                    except (ValueError, TypeError):
+                        continue
+                    scores[p] = max(0, min(10, v))
+
+            cache_ns.set(cache_key, scores)
+            return scores
+
+
         # ---------- cross-issue context: open PRs + duplicate clusters ----------
 
         # GitHub's close-keyword convention: "fixes #123", "closes: #123",
@@ -622,19 +1243,108 @@ async def run(input_dict, tools):
             return "\n".join(lines)
 
 
-        # ---------- analysis (unchanged from v1) ----------
+        # ---------- analysis v2 (grounded in architecture + inventory) ----------
 
-        _ANALYSIS_SYSTEM = (
-            "You are a senior engineer doing GitHub issue triage. You will be given "
-            "an issue and the contents of files from the repository at HEAD. Decide "
-            "whether you understand the problem and whether it relates to this "
-            "repository, write a concise summary, and — only if you can — propose a "
-            "concrete change as unified diffs. Be honest about what you do not "
-            "understand; do not invent details that aren't in the issue or the code."
-        )
+        _ANALYSIS_SYSTEM = """You are a senior engineer triaging a GitHub issue against a codebase you have a structured understanding of.
+
+## Core Principle: Ground every claim in the actual code.
+For every finding, you must point to WHERE in the code it lives — exact file path, function or class name, and approximate line range. If you can't cite specific code, the issue may be new functionality (in which case explain WHERE such code would belong) or it may not relate to this codebase at all.
+
+## Triage Type Classification
+Pick the most accurate category:
+
+| Type | When to use | Action |
+|------|-------------|--------|
+| `bug_fix` | Existing code has wrong behavior; you can identify the responsible code | Cite existing code; propose patch |
+| `new_feature` | Functionality doesn't exist; you can identify where it would go | Cite extension points; propose patch |
+| `refactor` | Code works but the issue is about quality/structure | Cite the code in question; propose patch |
+| `documentation` | Code is fine but docs are wrong/missing | Cite docs (or note where docs are needed); propose patch |
+| `question` | Issue asks for clarification, not a code change | No patch; explain |
+| `discussion` | Open-ended RFC; no clear answer | No patch; summarize positions |
+| `unrelated` | Issue is not about this repository | No patch; explain why |
+| `unclear` | You don't have enough context to triage | No patch; list what you'd need |
+
+## Citation Discipline
+For every existing-code citation:
+- Use REAL function/class names from the inventory you were given. If you cannot find the symbol in the inventory or the source, do NOT cite it — say "I don't see this in the inventory" instead.
+- Quote the actual snippet (5-30 lines, exact verbatim from the source).
+- State the role: `implements_current_behavior`, `needs_modification`, or `extension_point`.
+
+## Patch Discipline
+For each diff you propose:
+- Anchor it to a real file. If the file doesn't exist in the repo, mark it as a new file.
+- Make diffs surgical — show ONLY the changed regions, not the whole file.
+- Keep diffs minimal and clearly motivated. They are starting points for human review.
+
+## What NOT to do
+- Don't invent function names. If you can't see something in the inventory or source, say so.
+- Don't propose patches against files you haven't read the source for.
+- Don't claim the issue is `actionable` just because you can write SOME diff. Lower-confidence diffs go in `open_questions` instead, with `classification` of `no_action`.
+
+## Output Format
+Return STRICT JSON only — no surrounding prose, no markdown fences:
+
+{
+  "triage_type": "bug_fix" | "new_feature" | "refactor" | "documentation" | "question" | "discussion" | "unrelated" | "unclear",
+  "classification": "actionable" | "no_action" | "unrelated",
+  "confidence": "high" | "medium" | "low",
+  "summary": "2-5 sentences: what the issue asks, what you found, what's needed",
+  "existing_code": [
+    {
+      "path": "...",
+      "symbol": "function_or_class_name",
+      "lines": "approx-X-Y",
+      "snippet": "...verbatim from source...",
+      "role": "implements_current_behavior" | "needs_modification" | "extension_point",
+      "explanation": "one sentence on relevance"
+    }
+  ],
+  "new_code_locations": [
+    {"path": "...", "anchor": "after symbol X" | "new file", "rationale": "..."}
+  ],
+  "approach": "one or two paragraphs describing how the change should work",
+  "diffs": [
+    {"path": "...", "rationale": "one sentence", "diff": "unified diff with proper hunk headers"}
+  ],
+  "open_questions": ["thing 1", "thing 2"]
+}
+
+If `triage_type` is `question`, `discussion`, `unrelated`, or `unclear`: set `classification` to `no_action` (or `unrelated` for the unrelated case), populate `existing_code` with anything relevant you found, and set `diffs` to [].
+"""
 
 
-        def _analysis_prompt(repo, head_sha, number, title, body, html_url, file_blobs):
+        def _format_inventory_block(picked_paths, inventory):
+            """Render inventory entries for the picked files as a
+            markdown block the analysis prompt can consume."""
+            parts = []
+            for p in picked_paths:
+                inv = inventory.get(p)
+                if inv:
+                    parts.append(f"### {p}\n{inv}")
+                else:
+                    parts.append(f"### {p}\n(no inventory entry available)")
+            return "\n\n".join(parts) if parts else "(no inventory available)"
+
+
+        def _format_domains_block(issue_domains, domains_dict):
+            """Render the per-issue domain context as a markdown block."""
+            if not issue_domains:
+                return "(no specific domain identified)"
+            by_name = {d["name"]: d for d in domains_dict.get("domains", [])}
+            parts = []
+            for entry in issue_domains:
+                name = entry["name"]
+                d = by_name.get(name, {})
+                parts.append(
+                    f"- **{name}**: {d.get('description', '(no description)')}\n"
+                    f"  _Why this issue touches it:_ {entry.get('rationale', '')}"
+                )
+            return "\n".join(parts)
+
+
+        def _analysis_prompt(repo, head_sha, number, title, body, html_url,
+                              file_blobs, architecture, issue_domains,
+                              domains_dict, inventory):
             files_section_parts = []
             for fb in file_blobs:
                 files_section_parts.append(
@@ -645,66 +1355,52 @@ async def run(input_dict, tools):
                 if files_section_parts
                 else "(no files were selected as relevant)"
             )
+
+            arch_text = (
+                json.dumps(architecture, indent=2)
+                if architecture
+                else "(architecture summary unavailable)"
+            )
+
+            domains_block = _format_domains_block(issue_domains, domains_dict)
+            inventory_block = _format_inventory_block(
+                [fb["path"] for fb in file_blobs], inventory
+            )
+
             return (
                 f"REPOSITORY: {repo} @ {head_sha[:8]}\n\n"
-                f"ISSUE #{number}: {title}\n"
-                f"ISSUE URL: {html_url}\n\n"
-                f"ISSUE BODY:\n{(body or '(no body)')[:8000]}\n\n"
-                f"FILES (pulled at HEAD):\n\n{files_section}\n\n"
-                f"INSTRUCTIONS:\n"
-                f"\n"
-                f"1) CLASSIFY the issue as exactly one of:\n"
-                f'   - "actionable": you understand the problem AND it relates to this repository\'s code or docs AND you can propose a concrete change.\n'
-                f'   - "no_action": you reviewed the issue but cannot propose a concrete change. Use this if the problem is unclear, requires more information, requires runtime debugging, depends on external systems, is purely a discussion/RFC, or is something you genuinely don\'t understand. Do not guess.\n'
-                f'   - "unrelated": the issue is not related to code, configuration, or documentation in THIS repository.\n'
-                f"\n"
-                f"2) WRITE a 2-6 sentence summary of your understanding of the issue. If you do not understand part of it, say so.\n"
-                f"\n"
-                f'3) If "actionable":\n'
-                f'   - Propose 1-N file changes. For each, give "path", "rationale" (one sentence), and "diff" (a unified diff with `--- a/PATH`, `+++ b/PATH`, and `@@` hunk headers).\n'
-                f"   - Diffs are illustrative drafts for human review; they do not need to apply cleanly. Keep total diff size focused.\n"
-                f"   - You may propose new files (`--- /dev/null`).\n"
-                f"\n"
-                f'4) If "no_action" or "unrelated", set "files" to [].\n'
-                f"\n"
-                f"OUTPUT (STRICT JSON, no surrounding prose, no markdown fences):\n"
-                f"{{\n"
-                f'  "classification": "actionable" | "no_action" | "unrelated",\n'
-                f'  "confidence":     "high" | "medium" | "low",\n'
-                f'  "summary":        "...",\n'
-                f'  "files": [ {{"path": "...", "rationale": "...", "diff": "..."}} ]\n'
-                f"}}"
+                f"# Architecture\n{arch_text}\n\n"
+                f"# Application Domains This Issue Touches\n{domains_block}\n\n"
+                f"# File Inventory (for the files you're about to read)\n"
+                f"{inventory_block}\n\n"
+                f"# ISSUE\n"
+                f"**#{number}: {title}**\n"
+                f"URL: {html_url}\n\n"
+                f"{(body or '(no body)')[:8000]}\n\n"
+                f"# Source files (full content)\n\n{files_section}\n\n"
+                f"# Your Task\n"
+                f"Follow the system instructions to produce a structured "
+                f"JSON triage. Cite real code with line ranges. Be honest "
+                f"about what you do not understand."
             )
 
 
         def _parse_analysis(text):
+            """Parse v2 structured analysis. Tolerates code fences.
+            Returns a normalized dict with all expected keys present."""
             s = (text or "").strip()
             if s.startswith("```"):
                 s = re.sub(r"^```(?:json)?\s*", "", s)
                 if s.endswith("```"):
                     s = s[: -len("```")].strip()
-            start = s.find("{")
-            if start < 0:
-                return {
-                    "classification": "no_action",
-                    "confidence": "low",
-                    "summary": f"Could not parse model response as JSON: {s[:300]}",
-                    "files": [],
-                }
-            for end in range(len(s), start, -1):
-                chunk = s[start:end]
-                try:
-                    data = json.loads(chunk)
-                    break
-                except Exception:
-                    continue
-            else:
-                return {
-                    "classification": "no_action",
-                    "confidence": "low",
-                    "summary": f"Could not parse model response as JSON: {s[:300]}",
-                    "files": [],
-                }
+            data = _parse_relevance_json(s) or {}
+
+            triage_type = str(data.get("triage_type", "unclear")).lower()
+            valid_types = {"bug_fix", "new_feature", "refactor",
+                           "documentation", "question", "discussion",
+                           "unrelated", "unclear"}
+            if triage_type not in valid_types:
+                triage_type = "unclear"
 
             cls = str(data.get("classification", "no_action")).lower()
             if cls not in {"actionable", "no_action", "unrelated"}:
@@ -712,42 +1408,169 @@ async def run(input_dict, tools):
             conf = str(data.get("confidence", "medium")).lower()
             if conf not in {"high", "medium", "low"}:
                 conf = "medium"
-            files_out = []
-            for f in data.get("files", []) or []:
-                if not isinstance(f, dict):
+
+            existing = []
+            for e in data.get("existing_code", []) or []:
+                if not isinstance(e, dict):
                     continue
-                files_out.append(
-                    {
-                        "path": str(f.get("path", "")).strip(),
-                        "rationale": str(f.get("rationale", "")).strip(),
-                        "diff": str(f.get("diff", "")),
-                    }
-                )
+                role = str(e.get("role", "")).strip()
+                if role not in {"implements_current_behavior",
+                                "needs_modification", "extension_point"}:
+                    role = "implements_current_behavior"
+                existing.append({
+                    "path": str(e.get("path", "")).strip(),
+                    "symbol": str(e.get("symbol", "")).strip(),
+                    "lines": str(e.get("lines", "")).strip(),
+                    "snippet": str(e.get("snippet", "")),
+                    "role": role,
+                    "explanation": str(e.get("explanation", "")).strip(),
+                })
+
+            new_locs = []
+            for n in data.get("new_code_locations", []) or []:
+                if not isinstance(n, dict):
+                    continue
+                new_locs.append({
+                    "path": str(n.get("path", "")).strip(),
+                    "anchor": str(n.get("anchor", "")).strip(),
+                    "rationale": str(n.get("rationale", "")).strip(),
+                })
+
+            diffs = []
+            for d in data.get("diffs", []) or []:
+                if not isinstance(d, dict):
+                    continue
+                diffs.append({
+                    "path": str(d.get("path", "")).strip(),
+                    "rationale": str(d.get("rationale", "")).strip(),
+                    "diff": str(d.get("diff", "")),
+                })
+
+            open_qs = [str(q).strip() for q in (data.get("open_questions") or [])
+                       if str(q).strip()]
+
             return {
+                "triage_type": triage_type,
                 "classification": cls,
                 "confidence": conf,
-                "summary": str(data.get("summary", "")).strip(),
-                "files": files_out,
+                "summary": str(data.get("summary", "")).strip()
+                            or "(no summary produced)",
+                "existing_code": existing,
+                "new_code_locations": new_locs,
+                "approach": str(data.get("approach", "")).strip(),
+                "diffs": diffs,
+                "open_questions": open_qs,
             }
 
 
-        def _build_comment(parsed, *, head_sha, branch, files_examined, sentinel,
-                           related_info=None):
+        def _build_comment(parsed, *, head_sha, branch, files_examined,
+                           sentinel, related_info=None, issue_domains=None):
+            """v2 comment format: structured sections for existing-code
+            citations, new-code locations, approach, patches, open questions.
+            """
+            triage_type = parsed.get("triage_type", "unclear")
             cls = parsed["classification"]
             conf = parsed["confidence"]
-            summary = parsed["summary"] or "(no summary produced)"
+            summary = parsed["summary"]
+
+            domain_names = (
+                ", ".join(f"`{e['name']}`" for e in (issue_domains or []))
+                if issue_domains else "_(none identified)_"
+            )
 
             lines = [
                 sentinel,
                 "",
                 f"**Automated triage** — analyzed at `{branch}@{head_sha[:8]}`",
                 "",
-                f"**Classification:** `{cls}`  •  **Confidence:** `{conf}`",
+                f"**Type:** `{triage_type}`  •  **Classification:** `{cls}`  •  **Confidence:** `{conf}`",
+                f"**Application domain(s):** {domain_names}",
                 "",
                 "### Summary",
                 summary,
                 "",
             ]
+
+            existing = parsed.get("existing_code") or []
+            if existing:
+                lines.append("### Where this lives in the code today")
+                lines.append("")
+                for e in existing:
+                    lines.append(
+                        f"#### `{e['path']}` — `{e['symbol']}` "
+                        f"(lines {e['lines']})"
+                    )
+                    role_label = {
+                        "implements_current_behavior": "_currently does this_",
+                        "needs_modification": "_needs modification_",
+                        "extension_point": "_extension point_",
+                    }.get(e["role"], "")
+                    if role_label:
+                        lines.append(role_label)
+                    if e.get("explanation"):
+                        lines.append(e["explanation"])
+                    if e.get("snippet"):
+                        lines.append("")
+                        lines.append("```python")
+                        lines.append(e["snippet"])
+                        lines.append("```")
+                    lines.append("")
+
+            new_locs = parsed.get("new_code_locations") or []
+            if new_locs:
+                lines.append("### Where new code would go")
+                for n in new_locs:
+                    lines.append(
+                        f"- `{n['path']}` — {n['anchor']}"
+                    )
+                    if n.get("rationale"):
+                        lines.append(f"  {n['rationale']}")
+                lines.append("")
+
+            approach = (parsed.get("approach") or "").strip()
+            if approach:
+                lines.append("### Proposed approach")
+                lines.append(approach)
+                lines.append("")
+
+            diffs = parsed.get("diffs") or []
+            if cls == "actionable" and diffs:
+                lines.append("### Suggested patches")
+                lines.append("")
+                for d in diffs:
+                    lines.append(f"#### `{d['path']}`")
+                    if d.get("rationale"):
+                        lines.append(d["rationale"])
+                    lines.append("")
+                    diff_text = d["diff"].strip()
+                    if diff_text:
+                        lines.append("````diff")
+                        lines.append(diff_text)
+                        lines.append("````")
+                    lines.append("")
+
+            open_qs = parsed.get("open_questions") or []
+            if open_qs:
+                lines.append("### Open questions")
+                for q in open_qs:
+                    lines.append(f"- {q}")
+                lines.append("")
+
+            if cls == "no_action" and not diffs:
+                lines.append(
+                    "_The agent reviewed this issue and is not proposing "
+                    "patches in this run. Review the existing-code "
+                    "citations and open questions above before deciding "
+                    "next steps._"
+                )
+                lines.append("")
+            elif cls == "unrelated":
+                lines.append(
+                    "_The agent reviewed this issue and concluded it is "
+                    "not related to the code, configuration, or "
+                    "documentation in this repository._"
+                )
+                lines.append("")
 
             if files_examined:
                 lines.append("### Files examined")
@@ -755,37 +1578,6 @@ async def run(input_dict, tools):
                     lines.append(f"- `{p}`")
                 lines.append("")
 
-            if cls == "actionable" and parsed["files"]:
-                lines.append("### Proposed changes")
-                lines.append("")
-                for f in parsed["files"]:
-                    lines.append(f"#### `{f['path']}`")
-                    if f["rationale"]:
-                        lines.append(f["rationale"])
-                    lines.append("")
-                    diff = f["diff"].strip()
-                    if diff:
-                        lines.append("````diff")
-                        lines.append(diff)
-                        lines.append("````")
-                    lines.append("")
-            elif cls == "no_action":
-                lines.append(
-                    "_The agent reviewed this issue and has no concrete action it can "
-                    "propose. This may mean the issue needs more information, requires "
-                    "runtime debugging, depends on external systems, or is a "
-                    "discussion item. A human reviewer should take it from here._"
-                )
-                lines.append("")
-            elif cls == "unrelated":
-                lines.append(
-                    "_The agent reviewed this issue and concluded it is not related "
-                    "to the code, configuration, or documentation in this repository._"
-                )
-                lines.append("")
-
-            # Related-issues section: appears just above the footer if this
-            # issue was clustered with others by _detect_related_issues.
             if related_info and related_info.get("others"):
                 others = related_info["others"]
                 kind = related_info.get("kind", "related")
@@ -805,8 +1597,9 @@ async def run(input_dict, tools):
 
             lines.append("---")
             lines.append(
-                "*Draft from a triage agent. A human reviewer should validate before "
-                "merging any change. The agent did not run tests or verify diffs apply.*"
+                "*Draft from a triage agent. A human reviewer should "
+                "validate before merging any change. The agent did not "
+                "run tests or verify diffs apply.*"
             )
             return "\n".join(lines)
 
@@ -855,6 +1648,12 @@ async def run(input_dict, tools):
         # comes from setting these explicitly to a Haiku-class model.
         relevance_provider = (input_dict.get("relevance_provider") or "").strip() or "bedrock"
         relevance_model = (input_dict.get("relevance_model") or "").strip() or "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+        # Model for the structural-discovery passes (architecture,
+        # domains, inventory). These run once per SHA and benefit from
+        # something a bit more capable than relevance Haiku — Sonnet is
+        # the right tier per the asvs_discover convention.
+        discovery_provider = (input_dict.get("discovery_provider") or "").strip() or "bedrock"
+        discovery_model = (input_dict.get("discovery_model") or "").strip() or "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
         dry_run = bool(input_dict.get("dry_run", False))
         max_issues = int(input_dict.get("max_issues") or 0)  # 0 = no cap
         issue_filter = set(input_dict.get("issue_numbers") or [])
@@ -862,6 +1661,21 @@ async def run(input_dict, tools):
         skip_already_triaged = bool(input_dict.get("skip_already_triaged", True))
         branch_input = (input_dict.get("branch") or "").strip()
         force_redownload = bool(input_dict.get("force_redownload", False))
+        # Assignee filter: when set, only triage issues assigned to this
+        # GitHub username. Maps to /issues?assignee=USERNAME. Special
+        # values "*" (any assignee) and "none" (unassigned only) are
+        # passed through to GitHub's API as-is. Empty string = no
+        # filter, triage everything (existing behavior).
+        assignee = (input_dict.get("assignee") or "").strip()
+        # Label applied to every issue the agent examines. Idempotent on
+        # GitHub's side (re-adding an existing label is a no-op). Pass
+        # an empty string to disable labeling entirely. Default
+        # "gh-helper" matches the existing convention; the agent will
+        # auto-create the label in the repo if it doesn't exist.
+        if "label" in input_dict:
+            label = (input_dict.get("label") or "").strip()
+        else:
+            label = "gh-helper"
         # Phase-1 additions: cross-issue / cross-PR awareness.
         # skip_when_pr_open: skip triage for any issue that has an open PR
         # using close-keywords (fixes/closes/resolves #N). Catches the
@@ -911,6 +1725,54 @@ async def run(input_dict, tools):
             if r.status_code >= 400:
                 raise RuntimeError(f"POST {url} -> {r.status_code}: {r.text[:500]}")
             return r
+
+        async def ensure_repo_label(label_name):
+            """Idempotent: create the label on the repo if missing.
+            Swallows errors — 422 means it already exists, anything else
+            we log and let per-issue add calls surface their own errors.
+            Bypasses gh_post because gh_post raises on 4xx.
+            """
+            if not label_name:
+                return
+            try:
+                url = f"https://api.github.com/repos/{owner}/{name}/labels"
+                r = await http_client.post(
+                    url, headers=gh_headers,
+                    json={
+                        "name": label_name,
+                        "color": "ededed",
+                        "description": (
+                            "Triaged by the gofannon issue triage agent"
+                        ),
+                    },
+                )
+                if r.status_code not in (201, 422):
+                    print(
+                        f"WARN: ensure_repo_label({label_name!r}) "
+                        f"-> {r.status_code}: {r.text[:200]}",
+                        flush=True,
+                    )
+            except Exception as exc:
+                print(f"WARN: ensure_repo_label failed: {exc}", flush=True)
+
+        async def add_issue_label(issue_number, label_name):
+            """Add a label to an issue. Idempotent on GitHub's side
+            (re-adding an existing label is a no-op). Wrapped in try/
+            except so a label failure doesn't break the run.
+            """
+            if not label_name:
+                return
+            try:
+                await gh_post(
+                    f"/repos/{owner}/{name}/issues/{issue_number}/labels",
+                    json_body={"labels": [label_name]},
+                )
+            except Exception as exc:
+                print(
+                    f"WARN: failed to label #{issue_number} "
+                    f"with {label_name!r}: {exc}",
+                    flush=True,
+                )
 
         # ---------- 2. resolve branch + HEAD sha ----------
         if branch_input:
@@ -1017,13 +1879,36 @@ async def run(input_dict, tools):
                 repo, f"no files found in namespace files:{repo} after extraction"
             )
 
+        # ---------- 4.5. structural discovery (one per SHA, cached) ----------
+        # These three passes build the agent's mental model of the repo
+        # and feed every per-issue analysis. All cached at SHA level so
+        # subsequent runs at the same HEAD are free.
+        print("Building repo understanding (architecture, domains, inventory)...",
+              flush=True)
+        architecture = await _discover_architecture(
+            repo=repo, head_sha=head_sha, all_files=all_files,
+            provider=discovery_provider, model=discovery_model,
+        )
+        domains_dict = await _partition_domains(
+            repo=repo, head_sha=head_sha, all_files=all_files,
+            architecture=architecture,
+            provider=discovery_provider, model=discovery_model,
+        )
+        inventory = await _build_inventory(
+            repo=repo, head_sha=head_sha, all_files=all_files,
+            provider=discovery_provider, model=discovery_model,
+        )
+
         # ---------- 5. fetch open issues (paginate, drop PRs) ----------
         issues = []
         page = 1
         while True:
+            issue_params = {"state": "open", "per_page": "100", "page": str(page)}
+            if assignee:
+                issue_params["assignee"] = assignee
             r = await gh_get(
                 f"/repos/{owner}/{name}/issues",
-                params={"state": "open", "per_page": "100", "page": str(page)},
+                params=issue_params,
             )
             batch = r.json()
             if not batch:
@@ -1081,6 +1966,13 @@ async def run(input_dict, tools):
                 print(f"WARN: related-issue clustering failed: {exc}", flush=True)
 
         # ---------- 7. per-issue triage ----------
+
+        # Ensure the repo has the label before we try applying it.
+        # Idempotent and dry_run-aware. Skipping this is safe — per-issue
+        # add calls will report their own errors if it failed.
+        if label and not dry_run:
+            await ensure_repo_label(label)
+
         results = []
         errors = []
         posted = 0
@@ -1157,17 +2049,45 @@ async def run(input_dict, tools):
                             related_issues=related_others,
                         )
                     )
+                    if label and not dry_run:
+                        await add_issue_label(number, label)
                     continue
 
-                # 7d. relevance scoring (Haiku-style with previews)
-                relevance_scores = await _score_relevance(
+                # 7d. domain classification (which application area(s) does
+                # this issue touch?) — narrows the relevance search
+                issue_domains = await _classify_issue_domains(
                     repo=repo, head_sha=head_sha, issue_number=number,
                     issue_title=title, issue_body=body,
+                    domains=domains_dict,
+                    provider=relevance_provider, model=relevance_model,
+                )
+
+                # Build candidate file set: union of files in chosen domains.
+                # If no domain matched, fall back to all files (v1 behavior).
+                if issue_domains:
+                    candidate_paths = set()
+                    by_name = {d["name"]: d for d in domains_dict.get("domains", [])}
+                    for entry in issue_domains:
+                        d = by_name.get(entry["name"])
+                        if d:
+                            candidate_paths.update(d.get("files", []))
+                    candidate_paths = list(candidate_paths)
+                    if not candidate_paths:
+                        candidate_paths = list(all_files.keys())
+                else:
+                    candidate_paths = list(all_files.keys())
+
+                # 7e. relevance scoring v2 — uses inventory, scoped to domains
+                relevance_scores = await _score_relevance_v2(
+                    repo=repo, head_sha=head_sha, issue_number=number,
+                    issue_title=title, issue_body=body,
+                    inventory=inventory,
+                    candidate_paths=candidate_paths,
                     all_files=all_files,
                     provider=relevance_provider, model=relevance_model,
                 )
 
-                # 7e. pick top-K with score ≥ 4, fall back to ≥ 2 if too few
+                # 7f. pick top-K with score ≥ 4, fall back to ≥ 2 if too few
                 ranked = [
                     (p, s) for p, s in relevance_scores.items()
                     if isinstance(s, (int, float)) and s >= 4
@@ -1181,7 +2101,7 @@ async def run(input_dict, tools):
                 ranked = ranked[:max_files_per_issue]
                 picked = [p for p, _ in ranked]
 
-                # 7f. build file_blobs from in-memory cache (no more API calls)
+                # 7g. build file_blobs from in-memory cache (no more API calls)
                 file_blobs = []
                 for p in picked:
                     content = all_files.get(p, "")
@@ -1191,9 +2111,10 @@ async def run(input_dict, tools):
                         content = content[:30_000] + "\n\n[... file truncated ...]"
                     file_blobs.append({"path": p, "content": content})
 
-                # 7g. deep analysis
+                # 7h. deep analysis (with architecture + domains + inventory)
                 analysis_user = _analysis_prompt(
-                    repo, head_sha, number, title, body, html_url, file_blobs
+                    repo, head_sha, number, title, body, html_url, file_blobs,
+                    architecture, issue_domains, domains_dict, inventory,
                 )
                 analysis_text, _ = await call_llm(
                     provider=provider,
@@ -1208,13 +2129,14 @@ async def run(input_dict, tools):
                 )
                 parsed = _parse_analysis(analysis_text)
 
-                # 7h. comment body — includes related-issues section if applicable
+                # 7i. comment body — v2 grounded format
                 comment_body = _build_comment(
                     parsed,
                     head_sha=head_sha, branch=branch,
                     files_examined=[b["path"] for b in file_blobs],
                     sentinel=SENTINEL_TRIAGE,
                     related_info=related_info,
+                    issue_domains=issue_domains,
                 )
 
                 # 7i. post (or skip in dry run)
@@ -1228,6 +2150,8 @@ async def run(input_dict, tools):
                     comment_url = pr_resp.json().get("html_url", "")
                     did_post = True
                     posted += 1
+                    if label:
+                        await add_issue_label(number, label)
 
                 results.append(
                     _result_row(
