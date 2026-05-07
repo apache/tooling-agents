@@ -50,33 +50,9 @@ Findings span all three ASVS verification levels, indicating deficiencies from b
 
 > *Note: Many findings are applicable to multiple levels simultaneously.*
 
-### Top 5 Risks
+### Top 2 Risks
 
-#### 1. 🔴 Plain-Text Password Storage and Comparison (Critical)
-
-**Findings:** FINDING-008
-
-The Simple Auth Manager stores passwords in plain text without any hashing algorithm and performs direct string equality comparison during authentication. This violates fundamental credential security principles — a single file-system read or backup exposure compromises all user credentials. The comparison is additionally vulnerable to timing side-channel attacks, enabling character-by-character password extraction by a network-adjacent attacker.
-
-**ASVS References:** 11.4.2, 7.3.2, 6.3.1
-
-#### 2. 🔴 No Rate Limiting or Brute Force Protection (Critical)
-
-**Finding:** 
-
-Authentication endpoints accept unlimited login attempts without any rate limiting, account lockout, progressive delays, or CAPTCHA mechanisms. Combined with the timing-vulnerable comparison (FINDING-008), this enables both online brute-force attacks and targeted timing-based password extraction at arbitrary scale.
-
-**ASVS Reference:** 6.3.1
-
-#### 3. 🔴 Irrevocable Sessions and Unenforceable Account Termination (Critical)
-
-**Findings:** FINDING-012, FINDING-013, FINDING-014
-
-JWT tokens serve as the sole session mechanism but cannot be revoked before expiration. No logout endpoint exists, no session listing is available, and disabling or deleting a user account does not terminate active sessions. This means compromised credentials or terminated employees retain valid access until natural token expiration — a direct violation of incident response requirements.
-
-**ASVS References:** 7.4.1, 7.4.2, 7.4.3, 7.4.4, 7.5.2
-
-#### 4. 🟠 Absent Multi-Factor Authentication and Credential Lifecycle (High)
+#### 1. 🟠 Absent Multi-Factor Authentication and Credential Lifecycle (High)
 
 **Findings:** FINDING-006, FINDING-007, FINDING-009, FINDING-010, FINDING-011, FINDING-040
 
@@ -84,7 +60,7 @@ No multi-factor authentication mechanism exists or can be enforced. Users cannot
 
 **ASVS References:** 6.2.2, 6.2.3, 6.3.3, 6.4.1, 6.4.3
 
-#### 5. 🟠 Missing Transport Security and Security Headers (High)
+#### 2. 🟠 Missing Transport Security and Security Headers (High)
 
 **Findings:** FINDING-024, FINDING-025, FINDING-026, FINDING-027, FINDING-028
 
