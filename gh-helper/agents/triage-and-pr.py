@@ -2470,13 +2470,14 @@ If `triage_type` is `question`, `discussion`, `unrelated`, or `unclear`: set `cl
                     architecture, issue_domains, domains_dict, inventory,
                     staleness_metrics,
                 )
-                # Note: temperature, max_tokens, and reasoning_effort
-                # for this call are configured per-model in the
-                # gofannon UI (Invokable Models section). The values
-                # below are defaults the agent expresses; UI config
-                # takes precedence. Recommended UI settings for the
-                # Opus invokable: temperature=1, reasoning_effort=high,
-                # max_tokens=32768.
+                # Opus parameters are passed at the call site rather
+                # than via UI config — this is the asvs_audit
+                # convention and it works reliably. temperature=1 is
+                # required when reasoning_effort is enabled (Anthropic
+                # constraint); max_tokens=32768 leaves room for
+                # thinking budget plus the structured JSON output
+                # (citations + verbatim snippets + diffs + staleness
+                # assessment).
                 analysis_text, _ = await call_llm(
                     provider=provider,
                     model=model,
@@ -2484,7 +2485,11 @@ If `triage_type` is `question`, `discussion`, `unrelated`, or `unclear`: set `cl
                         {"role": "system", "content": _ANALYSIS_SYSTEM},
                         {"role": "user", "content": analysis_user},
                     ],
-                    parameters={"temperature": 0.1, "max_tokens": 16384},
+                    parameters={
+                        "temperature": 1,
+                        "reasoning_effort": "high",
+                        "max_tokens": 32768,
+                    },
                     user_service=None,
                     user_id=None,
                 )
