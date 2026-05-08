@@ -70,8 +70,8 @@ When guidance is hosted here in tooling-agents, each project gets its own subdir
 audit_guidance/
 ├── tooling-trusted-releases/                    ← ATR guidance
 │   ├── assorted-guidance.md
-│   ┊── ~~authentication-security.md~~          ← held in private guidance
-│   ┊── ~~authorization-security.md~~           ← held in private guidance
+│   ┊── authentication-security.md               ← held in private guidance
+│   ┊── authorization-security.md                ← held in private guidance
 ├── steve/                                       ← Apache Steve guidance (future)
 │   └── ...
 └── README.md                                    ← this file
