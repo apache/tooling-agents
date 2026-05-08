@@ -415,12 +415,16 @@ FILES:
                 print(f"  Architecture: cache hit", flush=True)
                 return cached
 
+            # Use 100-line previews (was 200) — enough to identify
+            # framework imports, class shapes, and route patterns
+            # without spending tokens on bodies. Halves token cost
+            # per file, roughly doubling fileset coverage.
             previews = {}
             for path, content in sorted(all_files.items()):
                 if not content:
                     continue
                 lines = content.split('\n')
-                previews[path] = '\n'.join(lines[:200])
+                previews[path] = '\n'.join(lines[:100])
 
             if not previews:
                 return {}
@@ -429,7 +433,12 @@ FILES:
                 ctx = get_context_window(provider, model)
             except Exception:
                 ctx = 200_000
-            safe_limit = int(ctx * 0.40)
+            # 70% safe limit (was 40%). The 40% convention from the
+            # batch-processing template exists to leave room for
+            # hierarchical consolidation; this pass is a single
+            # one-shot with a small (~2K) JSON response, so we can
+            # use the bigger share of the window for content.
+            safe_limit = int(ctx * 0.70)
             try:
                 template_tokens = count_tokens(
                     _ARCHITECTURE_PROMPT, provider, model
@@ -438,10 +447,54 @@ FILES:
                 template_tokens = len(_ARCHITECTURE_PROMPT) // 3
             budget = safe_limit - template_tokens
 
+            # Sort files by architectural informativeness so that the
+            # most signal-dense files get included even when the budget
+            # cuts off the tail. Configs and entry points first, then
+            # files matching architectural keywords, then the rest.
+            def _arch_priority(path):
+                parts = path.split('/')
+                name = parts[-1].lower()
+                depth = len(parts) - 1
+                # Top-level config / build files — strongest signal
+                if depth == 0 and name in (
+                    "pyproject.toml", "package.json", "requirements.txt",
+                    "setup.py", "setup.cfg", "cargo.toml", "go.mod",
+                    "go.sum", "pom.xml", "build.gradle", "build.gradle.kts",
+                    "composer.json", "gemfile", "manifest.in", "makefile",
+                    "dockerfile", "compose.yaml", "compose.yml",
+                    "docker-compose.yml", "docker-compose.yaml",
+                ):
+                    return (0, depth, name)
+                # Top-level entry points
+                if depth == 0 and name in (
+                    "main.py", "app.py", "server.py", "__init__.py",
+                    "__main__.py", "index.js", "index.ts", "main.go",
+                    "main.rs", "main.java",
+                ):
+                    return (1, depth, name)
+                # Package-level entry points (one directory deep)
+                if depth == 1 and name in (
+                    "__init__.py", "main.py", "app.py", "server.py",
+                    "__main__.py",
+                ):
+                    return (2, depth, name)
+                # Files whose path contains architectural keywords
+                arch_keywords = (
+                    "auth", "api/", "/api", "model", "route", "handler",
+                    "controller", "/db/", "schema", "config", "settings",
+                    "middleware", "permission", "security",
+                )
+                path_lower = path.lower()
+                if any(kw in path_lower for kw in arch_keywords):
+                    return (3, depth, path_lower)
+                # Everything else, shallower paths first
+                return (10, depth, path_lower)
+
             entries = []
             used = 0
             included = 0
-            for path in sorted(previews.keys()):
+            ordered_paths = sorted(previews.keys(), key=_arch_priority)
+            for path in ordered_paths:
                 entry = f"\n--- {path} ---\n{previews[path]}\n"
                 try:
                     t = count_tokens(entry, provider, model)
@@ -450,11 +503,9 @@ FILES:
                 if used + t > budget:
                     # Out of budget; fall back to path-only entries for
                     # the rest so the model knows they exist
-                    remaining = sorted(previews.keys())[included:]
+                    remaining = ordered_paths[included:]
                     short = "\nADDITIONAL FILES (no preview, exists):\n"
-                    short += "\n".join(f"- {p}" for p in remaining)
-                    short_tokens = (count_tokens(short, provider, model)
-                                    if True else len(short) // 3)
+                    short += "\n".join(f"- {p}" for p in sorted(remaining))
                     try:
                         short_tokens = count_tokens(short, provider, model)
                     except Exception:
@@ -495,7 +546,9 @@ FILES:
 
         _DOMAINS_PROMPT_TEMPLATE = """You are partitioning a codebase into application domains so issues can be routed to the right area for triage.
 
-Given the architecture summary and the file list below, group the files into 4-12 application DOMAINS. A domain is a coherent area of functionality (e.g., "vote_management", "release_lifecycle", "key_signing") — distinct from a low-level concern like "database access" or "logging".
+Given the architecture summary and the file list below, group the files into between {lo} and {hi} application DOMAINS for this {hint}. A domain is a coherent area of functionality (e.g., "vote_management", "release_lifecycle", "key_signing") — distinct from a low-level concern like "database access" or "logging".
+
+Use the file count and architectural complexity as guidance: prefer fewer, broader domains for small repos and more focused domains for large complex codebases. Combine related sub-features into one domain when they share a coherent purpose; split when subsystems are large and distinct enough to be triaged independently.
 
 ARCHITECTURE SUMMARY:
 {architecture_json}
@@ -516,6 +569,7 @@ Rules:
 - Each file should appear in EXACTLY ONE domain.
 - Configs, migrations, shared utilities go in an "infrastructure" or "shared" domain.
 - Use snake_case names. Be specific to this codebase (not generic categories).
+- Stay between {lo} and {hi} domains total.
 
 FILE LIST:
 """
@@ -539,12 +593,29 @@ FILE LIST:
             file_list_text = "\n".join(f"- {p}" for p in sorted(all_files.keys()))
             arch_json = (json.dumps(architecture, indent=2)
                           if architecture else "{}")
+
+            # Scale the suggested domain count by codebase size.
+            # Small repos get a tight range so they don't over-partition;
+            # huge repos get room to express their actual subsystem count.
+            n_files = len(all_files)
+            if n_files <= 100:
+                lo, hi, hint = 3, 6, "small codebase"
+            elif n_files <= 500:
+                lo, hi, hint = 5, 10, "moderate codebase"
+            elif n_files <= 2000:
+                lo, hi, hint = 7, 14, "substantial codebase"
+            elif n_files <= 5000:
+                lo, hi, hint = 10, 20, "large codebase"
+            else:
+                lo, hi, hint = 12, 30, "very large codebase"
+
             prompt = (_DOMAINS_PROMPT_TEMPLATE.format(
-                architecture_json=arch_json
+                lo=lo, hi=hi, hint=hint, architecture_json=arch_json,
             ) + file_list_text)
 
             print(
-                f"  Domain partitioning: 1 LLM call over {len(all_files)} files",
+                f"  Domain partitioning: 1 LLM call over {n_files} files "
+                f"(target {lo}-{hi} domains, {hint})",
                 flush=True,
             )
 
@@ -1243,6 +1314,84 @@ FILE INVENTORIES:
             return "\n".join(lines)
 
 
+        # ---------- staleness assessment ----------
+
+        def _compute_staleness_metrics(issue, comments):
+            """Compute age and activity metrics for an issue. Returns a
+            dict the deep-analysis prompt can consume to assess
+            staleness.
+
+            comments is the raw GitHub /comments response (list of
+            dicts with created_at). issue is the GitHub issue dict.
+
+            Returns ints for day-counts; None when timestamp data is
+            missing or unparseable. The prompt handles None gracefully.
+            """
+            from datetime import datetime, timezone
+
+            def parse_ts(s):
+                if not s or not isinstance(s, str):
+                    return None
+                try:
+                    return datetime.fromisoformat(s.replace("Z", "+00:00"))
+                except Exception:
+                    return None
+
+            now = datetime.now(timezone.utc)
+
+            def days_since(d):
+                if d is None:
+                    return None
+                return (now - d).days
+
+            created = parse_ts(issue.get("created_at"))
+            updated = parse_ts(issue.get("updated_at"))
+
+            # Find the most recent comment timestamp from non-bot
+            # authors, plus the most recent overall.
+            human_ts = None
+            any_ts = None
+            human_count = 0
+            for c in (comments or []):
+                ts = parse_ts(c.get("created_at"))
+                if ts is None:
+                    continue
+                if any_ts is None or ts > any_ts:
+                    any_ts = ts
+                user = (c.get("user") or {})
+                user_type = (user.get("type") or "").lower()
+                login = (user.get("login") or "").lower()
+                # Skip bots — GitHub marks them as type "Bot", and
+                # also skip our own sentinel comments which are
+                # written by the agent's auth identity.
+                is_bot = (
+                    user_type == "bot"
+                    or login.endswith("[bot]")
+                    or "<!-- gofannon-issue-triage-bot" in (c.get("body") or "")
+                )
+                if is_bot:
+                    continue
+                human_count += 1
+                if human_ts is None or ts > human_ts:
+                    human_ts = ts
+
+            return {
+                "created_at": issue.get("created_at"),
+                "updated_at": issue.get("updated_at"),
+                "last_comment_at": (
+                    any_ts.isoformat() if any_ts else None
+                ),
+                "last_human_comment_at": (
+                    human_ts.isoformat() if human_ts else None
+                ),
+                "days_since_created": days_since(created),
+                "days_since_updated": days_since(updated),
+                "days_since_last_comment": days_since(any_ts),
+                "days_since_last_human_activity": days_since(human_ts),
+                "human_comment_count": human_count,
+            }
+
+
         # ---------- analysis v2 (grounded in architecture + inventory) ----------
 
         _ANALYSIS_SYSTEM = """You are a senior engineer triaging a GitHub issue against a codebase you have a structured understanding of.
@@ -1281,6 +1430,23 @@ For each diff you propose:
 - Don't propose patches against files you haven't read the source for.
 - Don't claim the issue is `actionable` just because you can write SOME diff. Lower-confidence diffs go in `open_questions` instead, with `classification` of `no_action`.
 
+## Staleness Assessment
+For every issue, also assess whether it appears stale and whether closing it should be considered.
+
+An issue is likely **stale** when one or more apply:
+- It was opened more than 180 days ago AND has had no human activity in the last 90 days
+- The code referenced in the issue body has been substantially rewritten or removed (the symbols/files mentioned no longer exist, or your `existing_code` citations are mostly empty despite the issue describing concrete code)
+- The architecture has shifted in a way that obsoletes the issue's premise (e.g., the issue references a framework or subsystem that's been replaced)
+
+An issue is **NOT stale** when:
+- There's been any human comment activity in the last 30 days (regardless of issue age)
+- The issue is a long-running design conversation with continued engagement
+- The code described in the issue body still exists in the current source
+
+Set `recommend_close: true` ONLY when the issue is stale AND closing is the right next step — i.e., the requested change is no longer relevant to the current code, OR no one has engaged for so long that the implicit signal is that it's been abandoned. Provide a clear `rationale` tied to specific observations: cite which files have changed, what activity gap exists, what aspect of the issue's premise no longer holds.
+
+If you're uncertain (e.g., the issue is old but the code still matches the description), set `is_stale: false` and explain in the rationale.
+
 ## Output Format
 Return STRICT JSON only — no surrounding prose, no markdown fences:
 
@@ -1306,7 +1472,12 @@ Return STRICT JSON only — no surrounding prose, no markdown fences:
   "diffs": [
     {"path": "...", "rationale": "one sentence", "diff": "unified diff with proper hunk headers"}
   ],
-  "open_questions": ["thing 1", "thing 2"]
+  "open_questions": ["thing 1", "thing 2"],
+  "staleness": {
+    "is_stale": true | false,
+    "rationale": "one to three sentences explaining the assessment, citing specific signals",
+    "recommend_close": true | false
+  }
 }
 
 If `triage_type` is `question`, `discussion`, `unrelated`, or `unclear`: set `classification` to `no_action` (or `unrelated` for the unrelated case), populate `existing_code` with anything relevant you found, and set `diffs` to [].
@@ -1344,7 +1515,7 @@ If `triage_type` is `question`, `discussion`, `unrelated`, or `unclear`: set `cl
 
         def _analysis_prompt(repo, head_sha, number, title, body, html_url,
                               file_blobs, architecture, issue_domains,
-                              domains_dict, inventory):
+                              domains_dict, inventory, staleness_metrics):
             files_section_parts = []
             for fb in file_blobs:
                 files_section_parts.append(
@@ -1367,6 +1538,25 @@ If `triage_type` is `question`, `discussion`, `unrelated`, or `unclear`: set `cl
                 [fb["path"] for fb in file_blobs], inventory
             )
 
+            # Format the age metrics for the staleness assessment
+            sm = staleness_metrics or {}
+            def _fmt_age(label, ts, days):
+                if days is None:
+                    return f"- {label}: (unavailable)"
+                ts_str = f" ({ts})" if ts else ""
+                return f"- {label}: {days} days ago{ts_str}"
+            age_block = "\n".join([
+                _fmt_age("Issue created", sm.get("created_at"),
+                         sm.get("days_since_created")),
+                _fmt_age("Last update", sm.get("updated_at"),
+                         sm.get("days_since_updated")),
+                _fmt_age("Last comment (any)", sm.get("last_comment_at"),
+                         sm.get("days_since_last_comment")),
+                _fmt_age("Last human activity", sm.get("last_human_comment_at"),
+                         sm.get("days_since_last_human_activity")),
+                f"- Human comments on issue: {sm.get('human_comment_count', 0)}",
+            ])
+
             return (
                 f"REPOSITORY: {repo} @ {head_sha[:8]}\n\n"
                 f"# Architecture\n{arch_text}\n\n"
@@ -1376,12 +1566,14 @@ If `triage_type` is `question`, `discussion`, `unrelated`, or `unclear`: set `cl
                 f"# ISSUE\n"
                 f"**#{number}: {title}**\n"
                 f"URL: {html_url}\n\n"
-                f"{(body or '(no body)')[:8000]}\n\n"
+                f"## Issue age and activity\n{age_block}\n\n"
+                f"## Issue body\n{(body or '(no body)')[:8000]}\n\n"
                 f"# Source files (full content)\n\n{files_section}\n\n"
                 f"# Your Task\n"
                 f"Follow the system instructions to produce a structured "
-                f"JSON triage. Cite real code with line ranges. Be honest "
-                f"about what you do not understand."
+                f"JSON triage. Cite real code with line ranges. Assess "
+                f"staleness using both the age/activity metrics and your "
+                f"code analysis. Be honest about what you do not understand."
             )
 
 
@@ -1449,6 +1641,22 @@ If `triage_type` is `question`, `discussion`, `unrelated`, or `unclear`: set `cl
             open_qs = [str(q).strip() for q in (data.get("open_questions") or [])
                        if str(q).strip()]
 
+            # Staleness object — defaults to "not stale, do not close"
+            # when missing or malformed, so a model that omits the
+            # field doesn't accidentally trigger close-recommendations.
+            staleness_raw = data.get("staleness") or {}
+            if not isinstance(staleness_raw, dict):
+                staleness_raw = {}
+            staleness = {
+                "is_stale": bool(staleness_raw.get("is_stale", False)),
+                "rationale": str(staleness_raw.get("rationale", "")).strip(),
+                "recommend_close": bool(staleness_raw.get("recommend_close", False)),
+            }
+            # Defensive: don't recommend closing without is_stale=true.
+            # Lets the rest of the comment renderer trust this invariant.
+            if staleness["recommend_close"] and not staleness["is_stale"]:
+                staleness["is_stale"] = True
+
             return {
                 "triage_type": triage_type,
                 "classification": cls,
@@ -1460,30 +1668,133 @@ If `triage_type` is `question`, `discussion`, `unrelated`, or `unclear`: set `cl
                 "approach": str(data.get("approach", "")).strip(),
                 "diffs": diffs,
                 "open_questions": open_qs,
+                "staleness": staleness,
             }
 
 
+        def _ground_citations(parsed, all_files):
+            """Replace LLM-claimed line ranges with ranges computed by
+            matching the actual snippet text against the source file.
+
+            Drops citations whose snippets don't appear in the cited
+            file (real text hallucinations, distinct from line-number
+            errors). Keeps citations where we can match the snippet
+            even if the line range was wrong — fixes the line range,
+            preserves the substance.
+
+            The model's snippet text is verbatim accurate in practice
+            (verified against ATR source); only its line annotations
+            are unreliable. So this post-processor turns the
+            unreliable metadata into a derived-from-source value.
+            """
+            grounded = []
+            dropped = 0
+            for cite in parsed.get("existing_code", []) or []:
+                if not isinstance(cite, dict):
+                    continue
+                path = (cite.get("path") or "").strip()
+                snippet = cite.get("snippet") or ""
+                if not path or not snippet.strip():
+                    continue
+                if path not in all_files:
+                    # Path doesn't exist in the repo — hallucinated path
+                    dropped += 1
+                    continue
+                source = all_files[path]
+                snippet_lines = snippet.split("\n")
+
+                # Pick an anchor line we can search for. Prefer
+                # def/class/decorator lines (typically unique within
+                # a file). Fall back to the longest non-trivial line.
+                anchor = None
+                for line in snippet_lines:
+                    stripped = line.strip()
+                    if stripped.startswith(
+                        ("def ", "async def ", "class ", "@")
+                    ):
+                        anchor = line
+                        break
+                if not anchor:
+                    non_empty = [l for l in snippet_lines if l.strip()]
+                    if non_empty:
+                        anchor = max(non_empty, key=len)
+
+                if not anchor or not anchor.strip():
+                    cite["lines"] = "(line range not verified)"
+                    grounded.append(cite)
+                    continue
+
+                # Search for the anchor in the source. Try exact match
+                # first; if that fails, try matching without leading
+                # whitespace (handles snippets that were unindented or
+                # re-indented).
+                idx = source.find(anchor)
+                if idx == -1:
+                    stripped_anchor = anchor.strip()
+                    if len(stripped_anchor) > 10:
+                        idx2 = source.find(stripped_anchor)
+                        if idx2 != -1:
+                            idx = source.rfind("\n", 0, idx2) + 1
+
+                if idx == -1:
+                    # Genuine hallucination: snippet content not in file.
+                    # Don't render this citation.
+                    dropped += 1
+                    continue
+
+                start_line = source[:idx].count("\n") + 1
+                end_line = start_line + len(snippet_lines) - 1
+                cite["lines"] = f"{start_line}-{end_line}"
+                grounded.append(cite)
+
+            if dropped:
+                print(
+                    f"  Citation grounding: dropped {dropped} unverifiable "
+                    f"citation(s) (snippet not found in source)",
+                    flush=True,
+                )
+
+            parsed["existing_code"] = grounded
+            return parsed
+
+
         def _build_comment(parsed, *, head_sha, branch, files_examined,
-                           sentinel, related_info=None, issue_domains=None):
+                           sentinel, related_info=None, issue_domains=None,
+                           staleness_metrics=None):
             """v2 comment format: structured sections for existing-code
             citations, new-code locations, approach, patches, open questions.
+            Includes a staleness assessment section when the model
+            recommends closing or flags the issue as stale.
             """
             triage_type = parsed.get("triage_type", "unclear")
             cls = parsed["classification"]
             conf = parsed["confidence"]
             summary = parsed["summary"]
+            staleness = parsed.get("staleness") or {}
 
             domain_names = (
                 ", ".join(f"`{e['name']}`" for e in (issue_domains or []))
                 if issue_domains else "_(none identified)_"
             )
 
+            # Build header — flag stale issues prominently in the type
+            # line so a maintainer scanning a long thread sees it.
+            type_line = (
+                f"**Type:** `{triage_type}`  •  "
+                f"**Classification:** `{cls}`  •  "
+                f"**Confidence:** `{conf}`"
+            )
+            if staleness.get("recommend_close"):
+                type_line += "  •  ⚠️ **Stale — consider closing**"
+            elif staleness.get("is_stale"):
+                type_line += "  •  ⚠️ **Possibly stale**"
+
             lines = [
                 sentinel,
                 "",
                 f"**Automated triage** — analyzed at `{branch}@{head_sha[:8]}`",
                 "",
-                f"**Type:** `{triage_type}`  •  **Classification:** `{cls}`  •  **Confidence:** `{conf}`",
+                type_line,
                 f"**Application domain(s):** {domain_names}",
                 "",
                 "### Summary",
@@ -1556,6 +1867,40 @@ If `triage_type` is `question`, `discussion`, `unrelated`, or `unclear`: set `cl
                     lines.append(f"- {q}")
                 lines.append("")
 
+            # Staleness section — only renders when there's something
+            # for the maintainer to act on (recommend_close or is_stale).
+            # When the issue is fresh and engaged, we skip this entirely.
+            if staleness.get("is_stale") or staleness.get("recommend_close"):
+                lines.append("### Staleness assessment")
+                lines.append("")
+                sm = staleness_metrics or {}
+                age_bits = []
+                if sm.get("days_since_created") is not None:
+                    age_bits.append(
+                        f"opened {sm['days_since_created']} days ago"
+                    )
+                if sm.get("days_since_last_human_activity") is not None:
+                    age_bits.append(
+                        f"last human comment "
+                        f"{sm['days_since_last_human_activity']} days ago"
+                    )
+                elif sm.get("human_comment_count", 0) == 0:
+                    age_bits.append("no human comments since opening")
+                if age_bits:
+                    lines.append(f"_{'; '.join(age_bits)}._")
+                    lines.append("")
+                if staleness.get("rationale"):
+                    lines.append(staleness["rationale"])
+                    lines.append("")
+                if staleness.get("recommend_close"):
+                    lines.append(
+                        "**Recommendation: consider closing this issue.** "
+                        "If the maintainer agrees, the agent's "
+                        "assessment above provides the rationale to "
+                        "include in a closing comment."
+                    )
+                    lines.append("")
+
             if cls == "no_action" and not diffs:
                 lines.append(
                     "_The agent reviewed this issue and is not proposing "
@@ -1606,7 +1951,8 @@ If `triage_type` is `question`, `discussion`, `unrelated`, or `unclear`: set `cl
 
         def _result_row(number, title, classification, summary, files_examined,
                         comment_body, comment_url, posted, *,
-                        linked_prs=None, related_issues=None):
+                        linked_prs=None, related_issues=None,
+                        recommend_close=False, is_stale=False):
             return {
                 "number": number or 0,
                 "title": title or "",
@@ -1618,6 +1964,8 @@ If `triage_type` is `question`, `discussion`, `unrelated`, or `unclear`: set `cl
                 "posted": bool(posted),
                 "linked_prs": list(linked_prs) if linked_prs else [],
                 "related_issues": list(related_issues) if related_issues else [],
+                "is_stale": bool(is_stale),
+                "recommend_close": bool(recommend_close),
             }
 
 
@@ -1638,26 +1986,29 @@ If `triage_type` is `question`, `discussion`, `unrelated`, or `unclear`: set `cl
         import tarfile
 
         # ---------- 1. inputs ----------
+        # Hardcoded tier configuration. These match what the gofannon
+        # UI's Invokable Models registration should reference.
+        # Per-model parameters (temperature, max_tokens, reasoning_effort)
+        # are configured per invokable model in the gofannon UI.
+        provider = "bedrock"
+        model = "us.anthropic.claude-opus-4-6-v1"               # deep analysis
+        relevance_provider = "bedrock"
+        relevance_model = "us.anthropic.claude-haiku-4-5-20251001-v1:0"  # cheap-batch passes
+        discovery_provider = "bedrock"
+        discovery_model = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"  # structural discovery
+
+        # Hardcoded operational limits. These are not exposed as inputs
+        # because their reasonable values rarely vary and exposing them
+        # adds UI clutter. If a use case demands tuning, promote back
+        # to inputs.
+        max_issues = 0          # 0 = no cap (process all open issues)
+        issue_filter = set()    # empty = no filtering by issue number
+        max_files_per_issue = 8 # files passed to deep analysis per issue
+
+        # User-facing inputs (operational behavior knobs)
         repo = (input_dict.get("repo") or "").strip()
         token = (input_dict.get("github_token") or "").strip()
-        provider = input_dict.get("model_provider") or "bedrock"
-        model = input_dict.get("model_name") or "us.anthropic.claude-opus-4-6-v1"
-        # Cheap-and-fast model for the relevance-scoring pass. Defaults to
-        # the same model as deep analysis (so the agent works out of the
-        # box with a single invokable model configured) but the cost win
-        # comes from setting these explicitly to a Haiku-class model.
-        relevance_provider = (input_dict.get("relevance_provider") or "").strip() or "bedrock"
-        relevance_model = (input_dict.get("relevance_model") or "").strip() or "us.anthropic.claude-haiku-4-5-20251001-v1:0"
-        # Model for the structural-discovery passes (architecture,
-        # domains, inventory). These run once per SHA and benefit from
-        # something a bit more capable than relevance Haiku — Sonnet is
-        # the right tier per the asvs_discover convention.
-        discovery_provider = (input_dict.get("discovery_provider") or "").strip() or "bedrock"
-        discovery_model = (input_dict.get("discovery_model") or "").strip() or "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
         dry_run = bool(input_dict.get("dry_run", False))
-        max_issues = int(input_dict.get("max_issues") or 0)  # 0 = no cap
-        issue_filter = set(input_dict.get("issue_numbers") or [])
-        max_files_per_issue = int(input_dict.get("max_files_per_issue") or 8)
         skip_already_triaged = bool(input_dict.get("skip_already_triaged", True))
         branch_input = (input_dict.get("branch") or "").strip()
         force_redownload = bool(input_dict.get("force_redownload", False))
@@ -1676,7 +2027,6 @@ If `triage_type` is `question`, `discussion`, `unrelated`, or `unclear`: set `cl
             label = (input_dict.get("label") or "").strip()
         else:
             label = "gh-helper"
-        # Phase-1 additions: cross-issue / cross-PR awareness.
         # skip_when_pr_open: skip triage for any issue that has an open PR
         # using close-keywords (fixes/closes/resolves #N). Catches the
         # "someone is already working on this" case to avoid duplicate
@@ -2111,11 +2461,22 @@ If `triage_type` is `question`, `discussion`, `unrelated`, or `unclear`: set `cl
                         content = content[:30_000] + "\n\n[... file truncated ...]"
                     file_blobs.append({"path": p, "content": content})
 
-                # 7h. deep analysis (with architecture + domains + inventory)
+                # 7h. deep analysis (with architecture + domains + inventory + age)
+                staleness_metrics = _compute_staleness_metrics(
+                    issue, existing_comments
+                )
                 analysis_user = _analysis_prompt(
                     repo, head_sha, number, title, body, html_url, file_blobs,
                     architecture, issue_domains, domains_dict, inventory,
+                    staleness_metrics,
                 )
+                # Note: temperature, max_tokens, and reasoning_effort
+                # for this call are configured per-model in the
+                # gofannon UI (Invokable Models section). The values
+                # below are defaults the agent expresses; UI config
+                # takes precedence. Recommended UI settings for the
+                # Opus invokable: temperature=1, reasoning_effort=high,
+                # max_tokens=32768.
                 analysis_text, _ = await call_llm(
                     provider=provider,
                     model=model,
@@ -2123,11 +2484,16 @@ If `triage_type` is `question`, `discussion`, `unrelated`, or `unclear`: set `cl
                         {"role": "system", "content": _ANALYSIS_SYSTEM},
                         {"role": "user", "content": analysis_user},
                     ],
-                    parameters={"temperature": 0.1},
+                    parameters={"temperature": 0.1, "max_tokens": 16384},
                     user_service=None,
                     user_id=None,
                 )
                 parsed = _parse_analysis(analysis_text)
+                # Ground the citations: replace LLM-claimed line ranges
+                # with ranges computed by matching snippets against the
+                # actual source. Drops citations with snippets that
+                # don't appear in the cited file.
+                parsed = _ground_citations(parsed, all_files)
 
                 # 7i. comment body — v2 grounded format
                 comment_body = _build_comment(
@@ -2137,6 +2503,7 @@ If `triage_type` is `question`, `discussion`, `unrelated`, or `unclear`: set `cl
                     sentinel=SENTINEL_TRIAGE,
                     related_info=related_info,
                     issue_domains=issue_domains,
+                    staleness_metrics=staleness_metrics,
                 )
 
                 # 7i. post (or skip in dry run)
@@ -2162,6 +2529,12 @@ If `triage_type` is `question`, `discussion`, `unrelated`, or `unclear`: set `cl
                         comment_body, comment_url, did_post,
                         linked_prs=linked_pr_numbers,
                         related_issues=related_others,
+                        is_stale=parsed.get("staleness", {}).get(
+                            "is_stale", False
+                        ),
+                        recommend_close=parsed.get("staleness", {}).get(
+                            "recommend_close", False
+                        ),
                     )
                 )
 
