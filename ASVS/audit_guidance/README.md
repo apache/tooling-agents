@@ -1,6 +1,6 @@
 # Audit Guidance
 
-Project-specific context that helps the ASVS audit pipeline produce accurate results. Each project ships an `AUDIT_GUIDANCE.md` (typically alongside `AGENTS.md` at the repo root) explaining architecture decisions, security controls, and known patterns that auditors — human or LLM — need to understand.
+Project-specific context that helps the ASVS audit pipeline produce accurate results. Each project provides guidance documents explaining architecture decisions, security controls, and known patterns that auditors — human or LLM — need to understand.
 
 ## Why This Exists
 
@@ -15,11 +15,11 @@ These aren't bugs in the pipeline — they're places where an LLM lacks the proj
 
 ## File Format
 
-The guidance file should be **markdown** (`.md`). Markdown is the best format here for several reasons: LLMs are heavily trained on it and parse its structure (headings, lists, code blocks, links) reliably; humans can read and review it without tooling; it diffs cleanly in pull requests; and the audit pipeline already handles it natively. Use plain prose with headings and bullets — no special schema or front-matter required.
+Guidance files should be **markdown** (`.md`). Markdown is the best format here for several reasons: LLMs are heavily trained on it and parse its structure (headings, lists, code blocks, links) reliably; humans can read and review it without tooling; it diffs cleanly in pull requests; and the audit pipeline already handles it natively. Use plain prose with headings and bullets — no special schema or front-matter required.
 
-## What Goes in the Document
+## What Goes in These Documents
 
-The document should explain each significant architectural decision or security control, covering:
+Each document should explain a specific architectural decision or security control, covering:
 
 - What the pattern is and where it appears in the code
 - Why it exists or why it's acceptable
@@ -28,13 +28,19 @@ The document should explain each significant architectural decision or security 
 
 The goal is to give the LLM enough context to distinguish between a genuine finding and a false positive. Be specific — vague guidance like "authentication is handled correctly" doesn't help. Concrete guidance like "rate limiting is enforced by quart-rate-limiter in `server.py:_app_setup_rate_limits` at 100 req/min per key" does.
 
-## Where Guidance Lives
+## Where Guidance Can Live
 
-Three places, each suited to different content. Projects can use any combination of them; the audit pipeline merges all available sources at run time.
+Four places, each suited to different content. Projects can use any combination of them; the audit pipeline merges all available sources at run time.
 
 ### `AUDIT_GUIDANCE.md` in the project's repo
 
-The canonical location. Sits alongside `AGENTS.md` at the repo root. Travels with the code in the same git history, gets reviewed in the same PRs, evolves at the same pace as the codebase it describes — no drift between what the guidance says and what the code does. The audit pipeline picks it up when it clones the target repo.
+Sits alongside `AGENTS.md` at the repo root. Travels with the code in the same git history, gets reviewed in the same PRs, evolves at the same pace as the codebase it describes — no drift between what the guidance says and what the code does. The audit pipeline picks it up when it clones the target repo.
+
+### `tooling-agents/ASVS/audit_guidance/<project>/`
+
+Hosted here in tooling-agents. The directory layout below (`audit_guidance/tooling-trusted-releases/`, etc.) is exactly this case. Useful when guidance is being iterated on jointly with the Tooling team, when a project hasn't adopted `AUDIT_GUIDANCE.md` yet, or when one team's audit-relevant context spans multiple project repos.
+
+A project can use both repo-hosted and tooling-agents-hosted guidance simultaneously. Common pattern: the project owns `AUDIT_GUIDANCE.md` for architecture-level context that changes as the code changes; Tooling maintains additional files under `audit_guidance/<project>/` for cross-project security patterns or while a project ramps up on the convention.
 
 ### Private guidance via `supplementalData` namespaces
 
@@ -54,10 +60,23 @@ For point-of-use clarification — when the right place to explain a pattern is 
 tree = ET.parse(validated_path)
 ```
 
-Best for narrow, local context (one function, one block). The standalone `AUDIT_GUIDANCE.md` is better for cross-cutting architectural decisions that span many files. The two work well together: the document covers the architecture; inline comments catch the specific spots where an auditor needs the context to reach the code under analysis.
+Best for narrow, local context (one function, one block). Standalone guidance docs are better for cross-cutting architectural decisions that span many files. The two work well together: standalone docs cover the architecture; inline comments catch the specific spots where an auditor needs the context to reach the code under analysis.
 
-## How the Pipeline Uses It
+## Directory Structure
 
-The orchestrator loads all available guidance for the target project — `AUDIT_GUIDANCE.md` from the cloned repo, any `supplementalData` namespaces, and inline `# audit_guidance` comments encountered during file reads — into the data store before starting the audit. The audit agent includes the merged guidance in its prompt context when analyzing each ASVS section.
+When guidance is hosted here in tooling-agents, each project gets its own subdirectory named to match the project's repo or identifier:
 
-A note on the public auth/authz files in projects like Trusted Releases: those topics are typically held in private guidance rather than published in `AUDIT_GUIDANCE.md`, so the public document covers everything else and the `supplementalData` namespace covers the sensitive material. Anyone reading the public guidance will see the architecture-level context but not the defensive details.
+```
+audit_guidance/
+├── tooling-trusted-releases/                    ← ATR guidance
+│   ├── assorted-guidance.md
+│   ┊── ~~authentication-security.md~~          ← held in private guidance
+│   ┊── ~~authorization-security.md~~           ← held in private guidance
+├── steve/                                       ← Apache Steve guidance (future)
+│   └── ...
+└── README.md                                    ← this file
+```
+
+The dotted hyphens (`┊──`) and strikethrough on the auth/authz files indicate that those files exist but live in a private CouchDB namespace rather than the public tree, loaded into the audit at run time via `supplementalData`. The placeholders stay listed here so anyone reading the directory knows the guidance exists and where to find it.
+
+The orchestrator loads all available guidance for the target project — from any of the four sources above — into the data store before starting the audit. The audit agent includes the merged guidance in its prompt context when analyzing each ASVS section.
