@@ -63,6 +63,12 @@ async def run(input_dict, tools):
         # Separate sentinel so the two comment types are independently
         # idempotent.
         SENTINEL_RELATED = "<!-- gofannon-issue-triage-bot v2 related -->"
+        # Posted on issues skipped due to an open PR linking to them
+        # (classification `pr_in_progress`). Without this, the user sees a
+        # `gh-helper` label but no comment explaining why no full triage was
+        # done, which is confusing. Independently sentinel'd so re-runs don't
+        # double-post.
+        SENTINEL_SKIP = "<!-- gofannon-issue-triage-bot v2 skip -->"
 
 
         # ---------- module-level helpers ----------
@@ -569,7 +575,7 @@ Rules:
 - Each file should appear in EXACTLY ONE domain.
 - Configs, migrations, shared utilities go in an "infrastructure" or "shared" domain.
 - Use snake_case names. Be specific to this codebase (not generic categories).
-- Stay between {lo} and {hi} domains total.
+- STRICT REQUIREMENT: produce between {lo} and {hi} domains TOTAL — no exceptions. If you find yourself wanting more than {hi} domains, COMBINE related ones (e.g., merge "voting", "ballot_management", and "vote_results" into one "voting" domain). Smaller is better than fragmented.
 
 FILE LIST:
 """
@@ -648,6 +654,54 @@ FILE LIST:
                     "files": files,
                     "concerns": [str(c).strip() for c in (d.get("concerns") or [])],
                 })
+
+            # Post-process: if the model overshot the cap, consolidate
+            # the smallest domains into a shared "shared" bucket. The
+            # smallest domains are usually scattershot grab-bags or
+            # over-eager splits that can be safely merged. We keep the
+            # `hi - 1` largest domains as-is and merge the rest into
+            # a single shared bucket. Better to have ONE bucket that's
+            # slightly less specific than to have N tiny domains the
+            # downstream relevance pass can't usefully scope on.
+            if len(cleaned_domains) > hi:
+                cleaned_domains.sort(key=lambda d: len(d["files"]),
+                                     reverse=True)
+                keepers = cleaned_domains[:hi - 1]
+                overflow = cleaned_domains[hi - 1:]
+                merged_files = []
+                merged_concerns = []
+                merged_names = []
+                for d in overflow:
+                    merged_files.extend(d["files"])
+                    merged_names.append(d["name"])
+                    for c in d.get("concerns", []):
+                        if c and c not in merged_concerns:
+                            merged_concerns.append(c)
+                # Deduplicate files (a file should not appear twice).
+                seen_files = set()
+                deduped = []
+                for f in merged_files:
+                    if f not in seen_files:
+                        seen_files.add(f)
+                        deduped.append(f)
+                shared_bucket = {
+                    "name": "shared",
+                    "description": (
+                        "Consolidated bucket of smaller subsystems "
+                        "merged together: " + ", ".join(merged_names[:8])
+                        + ("…" if len(merged_names) > 8 else "")
+                    ),
+                    "files": deduped,
+                    "concerns": merged_concerns[:20],
+                }
+                cleaned_domains = keepers + [shared_bucket]
+                print(
+                    f"  Domains: model produced {len(keepers) + len(overflow)} "
+                    f"partitions, over the {hi} cap — consolidated "
+                    f"{len(overflow)} smaller ones into 'shared'",
+                    flush=True,
+                )
+
             result = {"domains": cleaned_domains}
             cache_ns.set("domains", result)
             print(f"  Domains: {len(cleaned_domains)} partitions", flush=True)
@@ -781,18 +835,54 @@ FILES:
                 *[_one_batch(i, b) for i, b in enumerate(batches)]
             )
 
-            # Parse: each file's block starts with "### path/to/file.py"
+            # Parse: each file's block starts with a header line that
+            # names the path. The model is supposed to produce
+            # "### path/to/file.py" but in practice often emits
+            # "## path", "#### path", "### **path**", "### `path`",
+            # or "### File: path" — all mean the same thing. We accept
+            # any header level 2-4, strip markdown decorations, and
+            # validate against all_files. Files that come back missed
+            # by the parser are the single biggest cause of inventory
+            # under-coverage on real runs.
+            _HEADER_RE = re.compile(r'^#{2,4}\s+(.+?)\s*$')
+            _PREFIX_RE = re.compile(
+                r'^(?:File|Path|FILE|PATH)\s*:\s*', re.IGNORECASE,
+            )
             inventory = {}
             current_path = None
             current_block = []
+            misses = []
             for chunk in results:
                 for line in chunk.split('\n'):
-                    m = re.match(r'^###\s+(.+?)\s*$', line)
+                    m = _HEADER_RE.match(line)
                     if m:
                         if current_path and current_path in all_files:
                             inventory[current_path] = '\n'.join(current_block).strip()
                         candidate = m.group(1).strip()
-                        current_path = candidate if candidate in all_files else None
+                        # Strip "File: " / "Path: " prefix if present.
+                        candidate = _PREFIX_RE.sub('', candidate)
+                        # Strip markdown decorations: bold, italic,
+                        # code, surrounding punctuation.
+                        candidate = candidate.strip().strip('*_`"\'')
+                        # Some models wrap in **`path`** — strip again.
+                        candidate = candidate.strip().strip('*_`"\'')
+                        if candidate in all_files:
+                            current_path = candidate
+                        else:
+                            current_path = None
+                            # Track misses so we can debug parser
+                            # coverage later.
+                            if candidate and (
+                                candidate.endswith(
+                                    ('.py', '.ts', '.tsx', '.js', '.jsx',
+                                     '.go', '.java', '.rs', '.rb', '.kt',
+                                     '.swift', '.c', '.cpp', '.h', '.hpp',
+                                     '.toml', '.yaml', '.yml', '.json',
+                                     '.md', '.html', '.css')
+                                )
+                                or '/' in candidate
+                            ):
+                                misses.append(candidate)
                         current_block = []
                     else:
                         if current_path:
@@ -803,6 +893,15 @@ FILES:
             cache_ns.set("triage_inventory", inventory)
             print(f"  Inventory: cataloged {len(inventory)} files",
                   flush=True)
+            if misses:
+                # Show the first few that didn't resolve, so we can
+                # see what shape the parser is missing.
+                preview = ", ".join(misses[:5])
+                print(
+                    f"    Inventory: {len(misses)} header(s) didn't "
+                    f"resolve to a known file (e.g. {preview})",
+                    flush=True,
+                )
             return inventory
 
 
@@ -1314,6 +1413,84 @@ FILE INVENTORIES:
             return "\n".join(lines)
 
 
+        def _build_skip_comment(skip_reason, skip_summary,
+                                linked_pr_list, related_info,
+                                *, head_sha, branch, sentinel):
+            """Brief explanation comment for issues we're skipping with a
+            label applied. Without this the user sees a `gh-helper` label
+            and no comment, which looks like the agent malfunctioned.
+
+            Currently only emitted for `pr_in_progress` skips — sentinel
+            skips already have a full v2 triage comment from the prior
+            run, so a new explanation would just be noise.
+
+            If related-issue clustering also surfaced something for this
+            issue, fold it into the same comment rather than posting two.
+            """
+            lines = [
+                sentinel,
+                "",
+                f"_Automated triage — analyzed at `{branch}@{head_sha[:8]}`_",
+                "",
+            ]
+            if skip_reason == "pr_in_progress" and linked_pr_list:
+                pr_refs = ", ".join(
+                    f"#{p['number']}" for p in linked_pr_list
+                )
+                plural = "s" if len(linked_pr_list) > 1 else ""
+                lines.append(
+                    f"**Classification:** `pr_in_progress`"
+                )
+                lines.append("")
+                lines.append(
+                    f"This issue appears to be addressed by open "
+                    f"PR{plural}: {pr_refs}. The agent skipped detailed "
+                    f"code analysis to avoid duplicating effort."
+                )
+                lines.append("")
+                lines.append(
+                    f"Re-run triage after the PR{plural} merge"
+                    f"{'s' if not plural else ''} or close"
+                    f"{'s' if not plural else ''} if you want a fresh "
+                    f"analysis from the agent."
+                )
+            else:
+                # Generic fallback — should not normally happen since
+                # we only call this for pr_in_progress, but defend
+                # against future skip reasons being added.
+                lines.append(f"**Classification:** `{skip_reason}`")
+                lines.append("")
+                lines.append(skip_summary or
+                             "The agent skipped detailed analysis "
+                             "of this issue.")
+            # Fold related-cluster info into the same comment if present.
+            if related_info:
+                others = related_info.get("others") or []
+                if others:
+                    refs = ", ".join(f"#{n}" for n in others)
+                    kind = related_info.get("kind", "related")
+                    label_text = (
+                        "may be a **duplicate** of (or share root cause with)"
+                        if kind == "duplicate"
+                        else "appears **related** to"
+                    )
+                    lines.append("")
+                    lines.append(f"### Related issues")
+                    lines.append("")
+                    lines.append(f"This issue {label_text}: {refs}.")
+                    rationale = related_info.get("rationale", "")
+                    if rationale:
+                        lines.append("")
+                        lines.append(f"**Rationale:** {rationale}")
+            lines.append("")
+            lines.append("---")
+            lines.append(
+                "*Draft from a triage agent. A human reviewer should "
+                "validate.*"
+            )
+            return "\n".join(lines)
+
+
         # ---------- staleness assessment ----------
 
         def _compute_staleness_metrics(issue, comments):
@@ -1424,11 +1601,26 @@ For each diff you propose:
 - Anchor it to a real file. If the file doesn't exist in the repo, mark it as a new file.
 - Make diffs surgical — show ONLY the changed regions, not the whole file.
 - Keep diffs minimal and clearly motivated. They are starting points for human review.
+- **NEVER write no-op placeholders.** If you are uncertain about a specific value (an enum case you can't verify, a constant, a method signature, the exact name of a field), write `# TODO: confirm <thing>` and place the question in `open_questions`. A line like `x.field = x.field` (assigning a value to itself) or `# Mark as X if Y exists` followed by a self-assignment is worse than no diff at all — it looks like working code on first read and silently does nothing. When you don't know an enum value, write the value you BELIEVE is correct (e.g., `sql.ProjectStatus.ARCHIVED`) with a `# TODO verify this enum exists` comment, not a no-op.
+- **Defer to in-flight work.** If the prior discussion identifies a PR that already implements (or is implementing) what this issue asks for — e.g., "@user noted PR #1186 is ready for review" — DO NOT propose your own diff. Instead, set `diffs` to `[]`, mention the PR in your `summary` and `approach`, and let the maintainer review the actual PR. Producing an illustrative diff in this case wastes reviewer time comparing your guess to the real implementation.
 
 ## What NOT to do
 - Don't invent function names. If you can't see something in the inventory or source, say so.
 - Don't propose patches against files you haven't read the source for.
 - Don't claim the issue is `actionable` just because you can write SOME diff. Lower-confidence diffs go in `open_questions` instead, with `classification` of `no_action`.
+
+## Prior Discussion Context
+You will be given any prior comments on the issue, in chronological order with author and timestamp. **Read the prior discussion CAREFULLY before forming your analysis.** The discussion is often the most current source of truth — more so than the issue body, which reflects the original framing and may be stale.
+
+If the team has, in the discussion:
+- **Already chosen a library, package, or implementation approach** (e.g., "we'll wrap the Rust reference impl rather than reimplement", "we're using package X"): your analysis must build on that decision, not propose alternatives that were already considered and rejected.
+- **Identified blockers** (licensing conflicts, security concerns, upstream dependencies): cite the blocker and route around it.
+- **Filed related external work** (PRs, sister repos, upstream contributions): mention it explicitly and treat it as the locus of work, not propose duplicating it inside this repo.
+- **Decided to wait** (for upstream merges, legal reviews, beta milestones): respect that — don't push for immediate action.
+
+When the discussion contradicts the issue body, defer to the discussion. When you cite something the team decided, name the commenter (e.g., "@username noted that swh.model is GPL-3 and unusable"). When in-flight external work exists, lead with it in your summary rather than proposing new internal work.
+
+If there is no prior discussion (fresh issue), proceed from the body alone.
 
 ## Staleness Assessment
 For every issue, also assess whether it appears stale and whether closing it should be considered.
@@ -1513,9 +1705,99 @@ If `triage_type` is `question`, `discussion`, `unrelated`, or `unclear`: set `cl
             return "\n".join(parts)
 
 
+        def _format_issue_comments(comments,
+                                    *,
+                                    max_total_chars=30000,
+                                    max_comment_chars=2500):
+            """Render non-bot comments as a chronological discussion
+            thread for inclusion in the deep-analysis prompt.
+
+            Filters out:
+              - Bots (user.type == "Bot", login ending in [bot])
+              - The agent's own sentinel-tagged comments (otherwise
+                re-running on the same issue would feed the model
+                its own prior analyses)
+
+            Comments are sorted oldest-first so the model reads the
+            thread the way a human reviewer would. Long comments
+            are truncated at max_comment_chars; total output is
+            capped at max_total_chars by dropping the OLDEST
+            comments (so the freshest context survives), with a
+            marker noting how many were omitted.
+
+            Returns a formatted markdown string, or empty string if
+            no relevant comments exist.
+            """
+            from datetime import datetime, timezone
+
+            if not comments:
+                return ""
+
+            # Filter
+            relevant = []
+            for c in comments:
+                body = c.get("body") or ""
+                if "<!-- gofannon-issue-triage-bot" in body:
+                    continue
+                user = c.get("user") or {}
+                user_type = (user.get("type") or "").lower()
+                login = (user.get("login") or "").lower()
+                if user_type == "bot" or login.endswith("[bot]"):
+                    continue
+                relevant.append(c)
+
+            if not relevant:
+                return ""
+
+            # Sort chronologically (oldest first)
+            def _ts(c):
+                s = c.get("created_at") or ""
+                try:
+                    return datetime.fromisoformat(s.replace("Z", "+00:00"))
+                except Exception:
+                    return datetime.min.replace(tzinfo=timezone.utc)
+            relevant.sort(key=_ts)
+
+            # Format. We build from newest backward so that when we
+            # hit the size cap, the OLDEST comments are dropped
+            # (the freshest discussion is what tells the agent the
+            # current state of the work).
+            blocks = []
+            total = 0
+            dropped = 0
+            for c in reversed(relevant):
+                body = (c.get("body") or "").strip()
+                if not body:
+                    continue
+                if len(body) > max_comment_chars:
+                    body = (
+                        body[:max_comment_chars]
+                        + "\n[... comment truncated ...]"
+                    )
+                author = (c.get("user") or {}).get("login") or "(unknown)"
+                ts = c.get("created_at") or "(no timestamp)"
+                block = f"### Comment by @{author} ({ts})\n{body}\n"
+                if total + len(block) > max_total_chars and blocks:
+                    dropped = len(relevant) - len(blocks)
+                    break
+                blocks.append(block)
+                total += len(block)
+
+            # blocks is newest-first; reverse to chronological order
+            blocks.reverse()
+            if dropped:
+                blocks.insert(
+                    0,
+                    f"_[{dropped} earlier comment(s) omitted for length; "
+                    f"showing most recent {len(blocks)}]_\n",
+                )
+            return "\n".join(blocks)
+
+
         def _analysis_prompt(repo, head_sha, number, title, body, html_url,
                               file_blobs, architecture, issue_domains,
-                              domains_dict, inventory, staleness_metrics):
+                              domains_dict, inventory, staleness_metrics,
+                              issue_comments):
             files_section_parts = []
             for fb in file_blobs:
                 files_section_parts.append(
@@ -1557,6 +1839,18 @@ If `triage_type` is `question`, `discussion`, `unrelated`, or `unclear`: set `cl
                 f"- Human comments on issue: {sm.get('human_comment_count', 0)}",
             ])
 
+            # Render the prior discussion. When there are no prior
+            # comments (fresh issue), the section is omitted entirely
+            # so the model isn't confused by an empty header.
+            discussion = _format_issue_comments(issue_comments)
+            if discussion:
+                discussion_block = (
+                    f"## Prior discussion (chronological, oldest first)\n\n"
+                    f"{discussion}\n\n"
+                )
+            else:
+                discussion_block = ""
+
             return (
                 f"REPOSITORY: {repo} @ {head_sha[:8]}\n\n"
                 f"# Architecture\n{arch_text}\n\n"
@@ -1568,12 +1862,20 @@ If `triage_type` is `question`, `discussion`, `unrelated`, or `unclear`: set `cl
                 f"URL: {html_url}\n\n"
                 f"## Issue age and activity\n{age_block}\n\n"
                 f"## Issue body\n{(body or '(no body)')[:8000]}\n\n"
+                f"{discussion_block}"
                 f"# Source files (full content)\n\n{files_section}\n\n"
                 f"# Your Task\n"
                 f"Follow the system instructions to produce a structured "
-                f"JSON triage. Cite real code with line ranges. Assess "
-                f"staleness using both the age/activity metrics and your "
-                f"code analysis. Be honest about what you do not understand."
+                f"JSON triage. CRITICAL: read the prior discussion "
+                f"section above carefully BEFORE forming your analysis. "
+                f"If the team has already chosen a library, identified "
+                f"a blocker, filed related work, or rejected a particular "
+                f"approach, your analysis MUST reflect those decisions. "
+                f"Cite specific commenters in your summary when relevant "
+                f"(e.g., '@username noted that...'). Then cite real code "
+                f"with line ranges, assess staleness using the age/"
+                f"activity metrics and your code analysis, and be honest "
+                f"about what you do not understand."
             )
 
 
@@ -1672,15 +1974,17 @@ If `triage_type` is `question`, `discussion`, `unrelated`, or `unclear`: set `cl
             }
 
 
-        def _ground_citations(parsed, all_files):
+        def _ground_citations(parsed, all_files, *, issue_number=None):
             """Replace LLM-claimed line ranges with ranges computed by
             matching the actual snippet text against the source file.
 
             Drops citations whose snippets don't appear in the cited
             file (real text hallucinations, distinct from line-number
-            errors). Keeps citations where we can match the snippet
-            even if the line range was wrong — fixes the line range,
-            preserves the substance.
+            errors). Drops citations whose snippet has no def/class/
+            decorator anchor — those are usually prose explanations or
+            usage examples masquerading as source citations, and the
+            longest-line fallback used to silently let them through
+            with the model's claimed line range intact.
 
             The model's snippet text is verbatim accurate in practice
             (verified against ATR source); only its line annotations
@@ -1701,11 +2005,28 @@ If `triage_type` is `question`, `discussion`, `unrelated`, or `unclear`: set `cl
                     dropped += 1
                     continue
                 source = all_files[path]
-                snippet_lines = snippet.split("\n")
 
-                # Pick an anchor line we can search for. Prefer
-                # def/class/decorator lines (typically unique within
-                # a file). Fall back to the longest non-trivial line.
+                # Strip trailing newlines/whitespace before splitting so
+                # the line count reflects actual content, not artifacts
+                # of model output formatting or JSON serialization.
+                # Without this, a snippet ending in many \n chars
+                # produces a giant len(snippet_lines) that makes
+                # end_line wildly overshoot.
+                snippet_clean = snippet.rstrip("\n\r\t ")
+                snippet_lines = snippet_clean.split("\n")
+                # Also drop any leading blank lines.
+                while snippet_lines and not snippet_lines[0].strip():
+                    snippet_lines.pop(0)
+                if not snippet_lines:
+                    dropped += 1
+                    continue
+
+                # Anchor on a def/class/decorator line. If the snippet
+                # has no such line, it's almost certainly prose or a
+                # usage example, not a real source citation — drop it
+                # rather than guess. This catches cases like
+                # "async with db.ensure_session(caller_data) as data:"
+                # being passed off as a function-definition snippet.
                 anchor = None
                 for line in snippet_lines:
                     stripped = line.strip()
@@ -1715,13 +2036,7 @@ If `triage_type` is `question`, `discussion`, `unrelated`, or `unclear`: set `cl
                         anchor = line
                         break
                 if not anchor:
-                    non_empty = [l for l in snippet_lines if l.strip()]
-                    if non_empty:
-                        anchor = max(non_empty, key=len)
-
-                if not anchor or not anchor.strip():
-                    cite["lines"] = "(line range not verified)"
-                    grounded.append(cite)
+                    dropped += 1
                     continue
 
                 # Search for the anchor in the source. Try exact match
@@ -1738,7 +2053,6 @@ If `triage_type` is `question`, `discussion`, `unrelated`, or `unclear`: set `cl
 
                 if idx == -1:
                     # Genuine hallucination: snippet content not in file.
-                    # Don't render this citation.
                     dropped += 1
                     continue
 
@@ -1747,12 +2061,13 @@ If `triage_type` is `question`, `discussion`, `unrelated`, or `unclear`: set `cl
                 cite["lines"] = f"{start_line}-{end_line}"
                 grounded.append(cite)
 
-            if dropped:
-                print(
-                    f"  Citation grounding: dropped {dropped} unverifiable "
-                    f"citation(s) (snippet not found in source)",
-                    flush=True,
-                )
+            tag = (f"Issue #{issue_number}: " if issue_number is not None
+                   else "")
+            print(
+                f"  {tag}Citation grounding: kept {len(grounded)}, "
+                f"dropped {dropped}",
+                flush=True,
+            )
 
             parsed["existing_code"] = grounded
             return parsed
@@ -1760,17 +2075,55 @@ If `triage_type` is `question`, `discussion`, `unrelated`, or `unclear`: set `cl
 
         def _build_comment(parsed, *, head_sha, branch, files_examined,
                            sentinel, related_info=None, issue_domains=None,
-                           staleness_metrics=None):
+                           staleness_metrics=None, issue_number=None,
+                           linked_prs=None):
             """v2 comment format: structured sections for existing-code
             citations, new-code locations, approach, patches, open questions.
             Includes a staleness assessment section when the model
             recommends closing or flags the issue as stale.
+
+            If the analysis text mentions a PR (e.g., '@user noted PR #1186
+            is ready for review') that wasn't caught by close-keyword
+            scanning, suggested patches are suppressed and an 'In-flight
+            work' notice is rendered instead. The model is instructed
+            via the system prompt to defer in this case, but this
+            rendering-side check is a belt-and-suspenders safety net
+            for when the model produces diffs anyway.
             """
+            import re as _re
+
             triage_type = parsed.get("triage_type", "unclear")
             cls = parsed["classification"]
             conf = parsed["confidence"]
             summary = parsed["summary"]
             staleness = parsed.get("staleness") or {}
+
+            # Detect PR mentions in the analysis text not covered by
+            # close-keyword detection. Matches "PR #N" / "PR N" /
+            # "pull request #N" (case-insensitive).
+            text_to_scan = (
+                (parsed.get("summary") or "")
+                + " "
+                + (parsed.get("approach") or "")
+            )
+            pr_mentions = set()
+            for m in _re.finditer(
+                r"(?i)\b(?:pr|pull request)s?\s*#?(\d+)\b",
+                text_to_scan,
+            ):
+                n = int(m.group(1))
+                # Don't treat the issue's own number as a PR mention.
+                if issue_number is not None and n == issue_number:
+                    continue
+                pr_mentions.add(n)
+            already_linked = set(linked_prs or [])
+            unlinked_pr_mentions = sorted(pr_mentions - already_linked)
+            if unlinked_pr_mentions and issue_number is not None:
+                print(
+                    f"  Issue #{issue_number}: analysis mentions "
+                    f"PR(s) {unlinked_pr_mentions} not detected by "
+                    f"close-keyword scan — suppressing diffs"
+                )
 
             domain_names = (
                 ", ".join(f"`{e['name']}`" for e in (issue_domains or []))
@@ -1845,7 +2198,26 @@ If `triage_type` is `question`, `discussion`, `unrelated`, or `unclear`: set `cl
                 lines.append("")
 
             diffs = parsed.get("diffs") or []
-            if cls == "actionable" and diffs:
+            if unlinked_pr_mentions and (cls == "actionable") and diffs:
+                # Don't propose diffs when the analysis identifies
+                # in-flight PR work — the maintainer should review the
+                # actual PR(s) rather than compare them to an
+                # illustrative diff. Render a compact notice so it's
+                # clear *why* there are no patches.
+                lines.append("### In-flight work")
+                lines.append("")
+                pr_list = ", ".join(
+                    f"#{n}" for n in unlinked_pr_mentions
+                )
+                plural = "s" if len(unlinked_pr_mentions) > 1 else ""
+                lines.append(
+                    f"The analysis identifies PR{plural} {pr_list} as "
+                    f"in-flight work for this issue. Suggested patches "
+                    f"are suppressed so reviewers focus on the actual "
+                    f"PR{plural} rather than an illustrative diff."
+                )
+                lines.append("")
+            elif cls == "actionable" and diffs:
                 lines.append("### Suggested patches")
                 lines.append("")
                 for d in diffs:
@@ -2023,10 +2395,22 @@ If `triage_type` is `question`, `discussion`, `unrelated`, or `unclear`: set `cl
         # an empty string to disable labeling entirely. Default
         # "gh-helper" matches the existing convention; the agent will
         # auto-create the label in the repo if it doesn't exist.
-        if "label" in input_dict:
-            label = (input_dict.get("label") or "").strip()
-        else:
+        # Label applied to every issue the agent examines. Idempotent on
+        # GitHub's side (re-adding an existing label is a no-op).
+        #
+        # Defaulting semantics: gofannon's UI submits every declared
+        # input field even when blank, so checking for presence-of-key
+        # is insufficient — we have to default whenever the value is
+        # empty/whitespace. To explicitly DISABLE labeling, pass the
+        # sentinel 'none' (case-insensitive). 'off', 'disabled', and
+        # '-' are accepted aliases.
+        label_input = (input_dict.get("label") or "").strip()
+        if label_input.lower() in ("none", "off", "disabled", "-"):
+            label = ""
+        elif not label_input:
             label = "gh-helper"
+        else:
+            label = label_input
         # skip_when_pr_open: skip triage for any issue that has an open PR
         # using close-keywords (fixes/closes/resolves #N). Catches the
         # "someone is already working on this" case to avoid duplicate
@@ -2081,6 +2465,10 @@ If `triage_type` is `question`, `discussion`, `unrelated`, or `unclear`: set `cl
             Swallows errors — 422 means it already exists, anything else
             we log and let per-issue add calls surface their own errors.
             Bypasses gh_post because gh_post raises on 4xx.
+
+            Logs success/no-op so the user can confirm the call ran.
+            Without this, a silent failure here cascades to every
+            per-issue add_issue_label call returning 422.
             """
             if not label_name:
                 return
@@ -2096,31 +2484,60 @@ If `triage_type` is `question`, `discussion`, `unrelated`, or `unclear`: set `cl
                         ),
                     },
                 )
-                if r.status_code not in (201, 422):
+                if r.status_code == 201:
                     print(
-                        f"WARN: ensure_repo_label({label_name!r}) "
-                        f"-> {r.status_code}: {r.text[:200]}",
+                        f"  ensure_repo_label: created {label_name!r} "
+                        f"on {owner}/{name}",
+                        flush=True,
+                    )
+                elif r.status_code == 422:
+                    print(
+                        f"  ensure_repo_label: {label_name!r} already "
+                        f"exists on {owner}/{name}",
+                        flush=True,
+                    )
+                else:
+                    print(
+                        f"WARN: ensure_repo_label({label_name!r}) -> "
+                        f"{r.status_code}: {r.text[:300]}",
                         flush=True,
                     )
             except Exception as exc:
-                print(f"WARN: ensure_repo_label failed: {exc}", flush=True)
+                print(
+                    f"WARN: ensure_repo_label({label_name!r}) raised: "
+                    f"{type(exc).__name__}: {exc}",
+                    flush=True,
+                )
 
         async def add_issue_label(issue_number, label_name):
             """Add a label to an issue. Idempotent on GitHub's side
-            (re-adding an existing label is a no-op). Wrapped in try/
-            except so a label failure doesn't break the run.
+            (re-adding an existing label is a no-op).
+
+            Logs the response status on every call — without this,
+            a silent failure (e.g., the label doesn't exist at the
+            repo level) is invisible. The previous version only
+            logged on Exception, but gh_post raises on 4xx so
+            422-because-label-doesn't-exist surfaces here, but
+            without context we couldn't tell the user WHY.
             """
             if not label_name:
                 return
             try:
-                await gh_post(
+                r = await gh_post(
                     f"/repos/{owner}/{name}/issues/{issue_number}/labels",
                     json_body={"labels": [label_name]},
                 )
+                # gh_post raises on >=400, so reaching here means 2xx.
+                print(
+                    f"  Labeled #{issue_number} with {label_name!r} "
+                    f"(status {r.status_code})",
+                    flush=True,
+                )
             except Exception as exc:
                 print(
-                    f"WARN: failed to label #{issue_number} "
-                    f"with {label_name!r}: {exc}",
+                    f"WARN: add_issue_label(#{issue_number}, "
+                    f"{label_name!r}) failed: {type(exc).__name__}: "
+                    f"{exc}",
                     flush=True,
                 )
 
@@ -2321,7 +2738,21 @@ If `triage_type` is `question`, `discussion`, `unrelated`, or `unclear`: set `cl
         # Idempotent and dry_run-aware. Skipping this is safe — per-issue
         # add calls will report their own errors if it failed.
         if label and not dry_run:
+            print(
+                f"Labeling enabled: will tag triaged issues with "
+                f"{label!r} on {owner}/{name}",
+                flush=True,
+            )
             await ensure_repo_label(label)
+        else:
+            reason = (
+                "label is empty" if not label
+                else "dry_run is enabled"
+            )
+            print(
+                f"Labeling disabled ({reason}); issues will not be tagged",
+                flush=True,
+            )
 
         results = []
         errors = []
@@ -2336,7 +2767,7 @@ If `triage_type` is `question`, `discussion`, `unrelated`, or `unclear`: set `cl
             comments_url = issue.get("comments_url") or ""
 
             try:
-                # 7a. fetch existing comments once for both sentinel checks
+                # 7a. fetch existing comments once for sentinel checks
                 existing_comments = []
                 if comments_url:
                     cr = await gh_get(comments_url)
@@ -2347,6 +2778,10 @@ If `triage_type` is `question`, `discussion`, `unrelated`, or `unclear`: set `cl
                 )
                 already_has_related = any(
                     SENTINEL_RELATED in (c.get("body") or "")
+                    for c in existing_comments
+                )
+                already_has_skip = any(
+                    SENTINEL_SKIP in (c.get("body") or "")
                     for c in existing_comments
                 )
 
@@ -2370,15 +2805,43 @@ If `triage_type` is `question`, `discussion`, `unrelated`, or `unclear`: set `cl
                     )
 
                 if skip_reason is not None:
-                    # SKIP path. We don't run relevance/analysis. We may
-                    # still post a standalone "see also" comment if this
-                    # issue is part of a duplicate cluster and we haven't
-                    # already posted one.
+                    # SKIP path. We don't run relevance/analysis.
+                    #
+                    # For sentinel-skipped issues (already_triaged), there's
+                    # already a v2 triage comment on the issue from a prior
+                    # run, so a new explanation comment would just be noise.
+                    # We may still post a standalone "see also" comment if
+                    # this issue is part of a cluster and we haven't.
+                    #
+                    # For pr_in_progress, the user has not seen any comment
+                    # from the agent, so we post a short explanation noting
+                    # which PR(s) are in flight. Related-cluster info, if
+                    # present, is folded into the same comment.
                     skipped += 1
                     comment_body = ""
                     comment_url = ""
                     did_post = False
-                    if related_others and not already_has_related:
+                    if skip_reason == "pr_in_progress" and not already_has_skip:
+                        # Combined skip-explanation + related comment
+                        comment_body = _build_skip_comment(
+                            skip_reason, skip_summary,
+                            linked_pr_list,
+                            related_info if (
+                                related_others and not already_has_related
+                            ) else None,
+                            head_sha=head_sha, branch=branch,
+                            sentinel=SENTINEL_SKIP,
+                        )
+                        if not dry_run:
+                            pr_resp = await gh_post(
+                                f"/repos/{owner}/{name}/issues/{number}/comments",
+                                json_body={"body": comment_body},
+                            )
+                            comment_url = pr_resp.json().get("html_url", "")
+                            did_post = True
+                    elif related_others and not already_has_related:
+                        # Sentinel-skip path with cluster info — post a
+                        # standalone related comment as before.
                         comment_body = _build_related_comment(
                             related_info,
                             head_sha=head_sha, branch=branch,
@@ -2461,7 +2924,7 @@ If `triage_type` is `question`, `discussion`, `unrelated`, or `unclear`: set `cl
                         content = content[:30_000] + "\n\n[... file truncated ...]"
                     file_blobs.append({"path": p, "content": content})
 
-                # 7h. deep analysis (with architecture + domains + inventory + age)
+                # 7h. deep analysis (with architecture + domains + inventory + age + prior discussion)
                 staleness_metrics = _compute_staleness_metrics(
                     issue, existing_comments
                 )
@@ -2469,6 +2932,7 @@ If `triage_type` is `question`, `discussion`, `unrelated`, or `unclear`: set `cl
                     repo, head_sha, number, title, body, html_url, file_blobs,
                     architecture, issue_domains, domains_dict, inventory,
                     staleness_metrics,
+                    existing_comments,
                 )
                 # Opus parameters are passed at the call site rather
                 # than via UI config — this is the asvs_audit
@@ -2498,7 +2962,9 @@ If `triage_type` is `question`, `discussion`, `unrelated`, or `unclear`: set `cl
                 # with ranges computed by matching snippets against the
                 # actual source. Drops citations with snippets that
                 # don't appear in the cited file.
-                parsed = _ground_citations(parsed, all_files)
+                parsed = _ground_citations(
+                    parsed, all_files, issue_number=number,
+                )
 
                 # 7i. comment body — v2 grounded format
                 comment_body = _build_comment(
@@ -2509,6 +2975,8 @@ If `triage_type` is `question`, `discussion`, `unrelated`, or `unclear`: set `cl
                     related_info=related_info,
                     issue_domains=issue_domains,
                     staleness_metrics=staleness_metrics,
+                    issue_number=number,
+                    linked_prs=linked_pr_numbers,
                 )
 
                 # 7i. post (or skip in dry run)

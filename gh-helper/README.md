@@ -10,19 +10,19 @@ For each repo (cached per HEAD SHA, run once and shared across all issues):
 
 1. **Downloads the repo as a tarball** and caches files in `data_store`. Re-runs at the same SHA skip the download.
 2. **Architecture discovery** — one Sonnet call produces a structured codebase map: framework, language, purpose, auth systems, API layers, data layer, execution model, key subsystems, trust model. Files are sorted by architectural informativeness (configs, entry points, then keyword matches) so the budget always covers the most signal-dense files.
-3. **Domain partitioning** — one Sonnet call groups the codebase into application areas. The target range scales with file count (3–6 for small codebases, up to 12–30 for very large ones), so a 600-file repo gets ~7–14 domains while a 5,000-file monorepo gets ~10–20.
+3. **Domain partitioning** — one Sonnet call groups the codebase into application areas. The target range scales with file count (3–6 for small codebases, up to 12–30 for very large ones), so a 600-file repo gets ~7–14 domains while a 5,000-file monorepo gets ~10–20. If the model overshoots the cap, the smallest partitions are consolidated into a single `shared` bucket so downstream relevance scoring stays focused.
 4. **File inventory** — Sonnet, batched, builds a per-file structured catalog: purpose, public API with line ranges, concerns. Cache namespace `audit-cache:inventory:{file-set-hash}` is shared with `asvs_audit`, so a repo already audited gets free hits here, and vice versa.
 5. **Open-PR scan** — one `/search/issues` call enumerates open PRs and parses titles + bodies for close-keywords (`fixes #N`, `closes #N`, `resolves #N`). Builds a map of issues that already have someone working on them.
 6. **Issue clustering** — one LLM call groups open issues into duplicate/related clusters. Cached by issue-corpus content.
 
 Then for each issue:
 
-1. **Sentinel and PR-link checks** — skip issues already triaged by this agent, or skip with classification `pr_in_progress` if a PR is linked.
+1. **Sentinel and PR-link checks** — skip issues already triaged by this agent, or skip with classification `pr_in_progress` if a PR is linked. For `pr_in_progress`, a brief explanatory comment is posted (idempotent via its own sentinel) noting which PR(s) the agent identified as in-flight, so the user isn't left wondering why the issue got a label without an explanation. Sentinel-skipped issues already have a full triage comment from the prior run, so no new comment is posted there.
 2. **Domain classification** — one Haiku call routes the issue to 1–3 application domains. Narrows the relevance-search to those domains.
 3. **Relevance scoring** — Haiku, batched, scores files against the issue using *inventory entries* (not raw previews). Returns 0–10 per file. Top-K (8) selected with threshold ≥4, falling back to ≥2 if too few clear the bar.
 4. **Staleness metrics** — computed locally from issue timestamps and comment activity. No LLM cost. Captures: days since created, days since last update, days since last comment, days since last *human* comment (skips bots and the agent's own comments), human comment count.
-5. **Deep analysis** — Opus, with the full structured context: architecture, domain context, inventory entries, full source of picked files, and the staleness metrics. Produces structured JSON: classification, summary, existing-code citations, new-code locations, approach, diffs, open questions, and a staleness assessment with `recommend_close`.
-6. **Citation grounding** — every existing-code citation has its line range computed from the actual source by anchor-matching. The model's claimed line range is replaced with the real one. Citations whose snippets don't appear in the cited file at all (genuine hallucinations) are dropped.
+5. **Deep analysis** — Opus, with the full structured context: architecture, domain context, inventory entries, full source of picked files, staleness metrics, and **any prior human comments on the issue** (chronologically ordered, with bot and self-sentinel comments filtered out). Produces structured JSON: classification, summary, existing-code citations, new-code locations, approach, diffs, open questions, and a staleness assessment with `recommend_close`. When the issue thread already contains team decisions (a library has been chosen, a blocker identified, external work filed), the analysis reflects those decisions and cites commenters by name rather than proposing alternatives the team has already considered.
+6. **Citation grounding** — every existing-code citation has its line range computed from the actual source by anchor-matching on the snippet's first `def`/`class`/`async def`/`@decorator` line. The model's claimed line range is replaced with the real one. Citations whose snippets contain no def/class anchor (typically prose explanations or usage examples masquerading as source citations) are dropped, as are citations whose snippets don't appear in the cited file at all (genuine hallucinations).
 7. **Comment** — renders all of the above as markdown with sections for Where this lives, Where new code would go, Approach, Suggested patches, Open questions, Staleness assessment (only when applicable). Posts to GitHub or returns the draft if `dry_run` is true.
 8. **Label** — applies the configured label to the issue (creates the label in the repo on first run if missing).
 
@@ -145,7 +145,7 @@ A few practical notes on the more nuanced flags:
 - **`skip_already_triaged`**: leave true for normal operation. Only set false when intentionally re-triaging (after a prompt change). Even then, run with `dry_run` first — re-triaged issues get a *new* comment alongside the old one, not a replacement.
 - **`skip_when_pr_open`**: keep true unless you want to re-evaluate issues that already have an open PR. With true, those issues get classification `pr_in_progress` and a small "see also" comment only if related-issue clustering finds duplicates.
 - **`detect_related_issues`**: keep true. The cluster pass costs about one Haiku call per issue corpus and pays for itself by finding duplicates the per-issue analysis can't see.
-- **`label`**: set to `""` to disable labeling entirely. Otherwise the agent ensures the label exists in the repo and applies it to every examined issue.
+- **`label`**: defaults to `gh-helper`. Pass `none` (case-insensitive; `off`, `disabled`, and `-` also work) to disable labeling entirely. An empty string is treated as "use default" rather than "disable" — gofannon's UI submits empty strings for blank fields, so checking presence-of-key isn't sufficient. Pass any other string to use a custom label name; it's created in the repo on first run if missing.
 
 ## Inputs reference
 
@@ -160,7 +160,7 @@ A few practical notes on the more nuanced flags:
 | `assignee` | string | no | `""` | filter to issues assigned to this GitHub username; `*` = any assignee, `none` = unassigned only, empty = no filter |
 | `skip_when_pr_open` | boolean | no | `true` | skip issues with open PRs that close-keyword-link them; classification `pr_in_progress` |
 | `detect_related_issues` | boolean | no | `true` | run the cross-issue clustering pass; false saves one LLM call per corpus |
-| `label` | string | no | `gh-helper` | label applied to every examined issue; created in the repo if missing; empty disables labeling |
+| `label` | string | no | `gh-helper` | label applied to every examined issue; created in the repo if missing. Pass `none` (or `off`/`disabled`/`-`) to disable. Empty string defaults to `gh-helper` since the gofannon UI submits empty strings for blank fields |
 
 Ten inputs total: 2 required, 8 optional. Model selection, cost limits (max issues, max files per issue), and reasoning configuration are all hardcoded internally — model identities match the Invokable Models registration, and per-model parameters (temperature, max_tokens, reasoning_effort) are configured in the gofannon UI.
 
@@ -203,7 +203,7 @@ Triage comments include these sections, in order:
 
 - **Type / Classification / Confidence** — bug_fix / new_feature / refactor / documentation / question / discussion / unrelated / unclear; classification of actionable / no_action / unrelated; confidence high/medium/low. **Stale flag** (⚠️ Stale — consider closing) appears in this header line when the agent recommends closing.
 - **Application domain(s)** — which area(s) of the codebase
-- **Summary** — what the issue asks, what was found
+- **Summary** — what the issue asks, what was found. When the issue thread already contains team decisions, the summary attributes them to the commenters who made them (`@username confirmed...`, `@username noted...`).
 - **Where this lives in the code today** — for each cited piece of existing code: file path, symbol name, line range (computed from actual source by snippet match), role (currently does this / needs modification / extension point), explanation, and a verbatim code snippet
 - **Where new code would go** (only for new-feature issues) — file + anchor + rationale
 - **Proposed approach** — paragraph
@@ -224,6 +224,8 @@ A naive design would send the full code base as a single prompt. Most repos are 
 The cost shape: discovery is roughly 1–3 minutes per SHA on first encounter, then zero. Per-issue cost on the same SHA is dominated by the Opus deep-analysis call. Re-runs at the same SHA on already-triaged issues are essentially free thanks to the sentinel.
 
 The staleness check piggybacks on the deep-analysis call — no extra LLM round-trip. Age metrics are computed locally from data already in scope (issue timestamps, comment timestamps from the sentinel-check fetch). The model integrates these signals with its code analysis to assess whether an issue's premise still holds.
+
+Prior-discussion ingestion also piggybacks on the same fetch — comments retrieved for the sentinel check are reused as context for the deep-analysis prompt, with bots and the agent's own past triages filtered out. This means the analysis incorporates whatever the team has decided in-thread (library choices, blockers, external in-flight work) and cites commenters by name, rather than ignoring the discussion and proposing alternatives the team has already considered and rejected.
 
 ## Caches and namespaces
 
@@ -249,6 +251,7 @@ The `files:{repo}` and `audit-cache:inventory:*` namespaces match what `asvs_aud
 - **Staleness signals.** The agent skips its own comments and other bots when computing "last human activity" — so the agent's own re-triage doesn't reset the staleness clock. Activity by named human accounts is what counts.
 - **Recommended close ≠ auto-close.** The agent only *recommends* closure in the comment body and surfaces `recommend_close: true` in the result row. The agent never closes issues programmatically. A maintainer reading the comment makes the call.
 - **Per-user runs.** Pass `assignee` with a GitHub username to triage only that user's assigned issues. Combined with `dry_run: true` for a personal sanity check before the bot posts anywhere.
+- **Diagnostic prints.** The agent emits a few log lines worth knowing for debugging: `Inventory: N header(s) didn't resolve to a known file (e.g. ...)` flags model output that didn't match any catalog entry; `Domains: model produced X partitions, over the {hi} cap — consolidated K smaller ones into 'shared'` fires when the partition consolidation kicks in; `Issue #N: Citation grounding: kept X, dropped Y` reports how many citations survived anchor matching per issue; and per-issue `Labeled #N with '...' (status 200)` confirms each label apply (or `ensure_repo_label: ...` / `add_issue_label: ...` errors when something fails). If you see consistently high "dropped" counts in citation grounding, the analysis prompt may need tightening; if labels never appear, check that the `Labeling enabled: ...` line at the top of the run shows the expected label name.
 
 ## Roadmap
 
