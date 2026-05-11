@@ -30,13 +30,14 @@ security/
 │   ├── asvs/           ← OWASP ASVS v5.0.0 (345 requirements)
 │   ├── cwe-top-25/     ← CWE/SANS Top 25 (25 entries)
 │   ├── api-top-10/     ← OWASP API Security Top 10 (10 entries)
+│   ├── wstg/           ← OWASP WSTG latest (125 entries, 115 static-applicable)
 │   ├── slsa/           ← SLSA v1.0 Build Levels
 │   └── asf-baseline/   ← ASF-specific baseline (custom)
 ├── audit_guidance/
 └── reports/
 ```
 
-Data store: one namespace per spec (`asvs`, `cwe-top-25`, `api-top-10`, `slsa`, `asf-baseline`). Each follows the same schema.
+Data store: one namespace per spec (`asvs`, `cwe-top-25`, `api-top-10`, `wstg`, `slsa`, `asf-baseline`). Each follows the same schema.
 
 ## Phase 0: Rename and Abstract
 
@@ -174,6 +175,8 @@ Every spec follows the same schema in its namespace. This is what makes the syst
 | `cross_references` | object | Map of spec_name → array of requirement_ids |
 | `detection_methods` | array | How to look for this issue |
 | `evidence` | array | What constitutes a pass/fail |
+| `static_review_applicable` | bool | If `false`, skip in static-review pipelines. Used by WSTG to mark tests that fundamentally require a deployed target (e.g. DNS recon, account-lockout testing). Default `true` if absent. |
+| `parent_id` | string | For sub-tests grouped under a parent (e.g. WSTG's DBMS-specific SQLi variants). Findings on children can roll up to the parent in reports. |
 
 ## Spec Selection: Discovery Agent Enhancement
 
@@ -200,6 +203,11 @@ The discovery agent currently outputs domain-to-file mappings. The enhancement a
       "spec": "api-top-10",
       "coverage": "full",
       "reason": "REST API detected"
+    },
+    {
+      "spec": "wstg",
+      "coverage": "supplement",
+      "reason": "Methodology depth beyond ASVS — especially business logic and client-side"
     },
     {
       "spec": "cwe-top-25",
@@ -234,10 +242,10 @@ The discovery agent currently outputs domain-to-file mappings. The enhancement a
 
 | Project Type | Default Specs |
 |---|---|
-| `web_app` | asvs, api-top-10, asf-baseline |
+| `web_app` | asvs, api-top-10, wstg, asf-baseline |
 | `library` | cwe-top-25, asf-baseline |
 | `cli_tool` | cwe-top-25, asf-baseline |
-| `backend_service` | asvs (partial), cwe-top-25, asf-baseline |
+| `backend_service` | asvs (partial), cwe-top-25, wstg (if HTTP endpoints), asf-baseline |
 | `build_tool` | asf-baseline, slsa |
 
 When `specs="auto"`, the orchestrator uses these defaults. The user can always override with explicit spec selection.

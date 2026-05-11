@@ -1,0 +1,2586 @@
+[
+  {
+    "id": "WSTG-INFO-03",
+    "title": "Review Webserver Metafiles for Information Leakage",
+    "description": "OWASP WSTG: Review Webserver Metafiles for Information Leakage. Full methodology at canonical_url.",
+    "level": 2,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "information gathering",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/01-Information_Gathering/03-Review_Webserver_Metafiles_for_Information_Leakage"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/01-Information_Gathering/03-Review_Webserver_Metafiles_for_Information_Leakage",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/01-Information_Gathering/03-Review_Webserver_Metafiles_for_Information_Leakage.md",
+    "section_path": "4.1.3"
+  },
+  {
+    "id": "WSTG-INFO-04",
+    "title": "Attack Surface Identification",
+    "description": "OWASP WSTG: Attack Surface Identification. Full methodology at canonical_url.",
+    "level": 2,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "information gathering",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/01-Information_Gathering/04-Attack_Surface_Identification"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/01-Information_Gathering/04-Attack_Surface_Identification",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/01-Information_Gathering/04-Attack_Surface_Identification.md",
+    "section_path": "4.1.4"
+  },
+  {
+    "id": "WSTG-INFO-05",
+    "title": "Review Web Page Content for Information Leakage",
+    "description": "OWASP WSTG: Review Web Page Content for Information Leakage. Full methodology at canonical_url.",
+    "level": 1,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "information gathering",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/01-Information_Gathering/05-Review_Web_Page_Content_for_Information_Leakage"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/01-Information_Gathering/05-Review_Web_Page_Content_for_Information_Leakage",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/01-Information_Gathering/05-Review_Web_Page_Content_for_Information_Leakage.md",
+    "section_path": "4.1.5"
+  },
+  {
+    "id": "WSTG-INFO-06",
+    "title": "Identify Application Entry Points",
+    "description": "OWASP WSTG: Identify Application Entry Points. Full methodology at canonical_url.",
+    "level": 1,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "information gathering",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/01-Information_Gathering/06-Identify_Application_Entry_Points"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/01-Information_Gathering/06-Identify_Application_Entry_Points",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/01-Information_Gathering/06-Identify_Application_Entry_Points.md",
+    "section_path": "4.1.6"
+  },
+  {
+    "id": "WSTG-INFO-07",
+    "title": "Map Execution Paths Through Application",
+    "description": "OWASP WSTG: Map Execution Paths Through Application. Full methodology at canonical_url.",
+    "level": 2,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "information gathering",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/01-Information_Gathering/07-Map_Execution_Paths_Through_Application"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/01-Information_Gathering/07-Map_Execution_Paths_Through_Application",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/01-Information_Gathering/07-Map_Execution_Paths_Through_Application.md",
+    "section_path": "4.1.7"
+  },
+  {
+    "id": "WSTG-INFO-10",
+    "title": "Map Application Architecture",
+    "description": "OWASP WSTG: Map Application Architecture. Full methodology at canonical_url.",
+    "level": 2,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "information gathering",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/01-Information_Gathering/10-Map_Application_Architecture"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/01-Information_Gathering/10-Map_Application_Architecture",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/01-Information_Gathering/10-Map_Application_Architecture.md",
+    "section_path": "4.1.10"
+  },
+  {
+    "id": "WSTG-CONF-02",
+    "title": "Test Application Platform Configuration",
+    "description": "OWASP WSTG: Test Application Platform Configuration. Full methodology at canonical_url.",
+    "level": 1,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "configuration and deployment management",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/02-Configuration_and_Deployment_Management_Testing/02-Test_Application_Platform_Configuration"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/02-Configuration_and_Deployment_Management_Testing/02-Test_Application_Platform_Configuration",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/02-Configuration_and_Deployment_Management_Testing/02-Test_Application_Platform_Configuration.md",
+    "section_path": "4.2.2"
+  },
+  {
+    "id": "WSTG-CONF-03",
+    "title": "Test File Extensions Handling for Sensitive Information",
+    "description": "OWASP WSTG: Test File Extensions Handling for Sensitive Information. Full methodology at canonical_url.",
+    "level": 2,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "configuration and deployment management",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/02-Configuration_and_Deployment_Management_Testing/03-Test_File_Extensions_Handling_for_Sensitive_Information"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/02-Configuration_and_Deployment_Management_Testing/03-Test_File_Extensions_Handling_for_Sensitive_Information",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/02-Configuration_and_Deployment_Management_Testing/03-Test_File_Extensions_Handling_for_Sensitive_Information.md",
+    "section_path": "4.2.3"
+  },
+  {
+    "id": "WSTG-CONF-04",
+    "title": "Review Old Backup and Unreferenced Files for Sensitive Information",
+    "description": "OWASP WSTG: Review Old Backup and Unreferenced Files for Sensitive Information. Full methodology at canonical_url.",
+    "level": 2,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "configuration and deployment management",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/02-Configuration_and_Deployment_Management_Testing/04-Review_Old_Backup_and_Unreferenced_Files_for_Sensitive_Information"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/02-Configuration_and_Deployment_Management_Testing/04-Review_Old_Backup_and_Unreferenced_Files_for_Sensitive_Information",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/02-Configuration_and_Deployment_Management_Testing/04-Review_Old_Backup_and_Unreferenced_Files_for_Sensitive_Information.md",
+    "section_path": "4.2.4"
+  },
+  {
+    "id": "WSTG-CONF-05",
+    "title": "Enumerate Infrastructure and Application Admin Interfaces",
+    "description": "OWASP WSTG: Enumerate Infrastructure and Application Admin Interfaces. Full methodology at canonical_url.",
+    "level": 2,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "configuration and deployment management",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/02-Configuration_and_Deployment_Management_Testing/05-Enumerate_Infrastructure_and_Application_Admin_Interfaces"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/02-Configuration_and_Deployment_Management_Testing/05-Enumerate_Infrastructure_and_Application_Admin_Interfaces",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/02-Configuration_and_Deployment_Management_Testing/05-Enumerate_Infrastructure_and_Application_Admin_Interfaces.md",
+    "section_path": "4.2.5"
+  },
+  {
+    "id": "WSTG-CONF-06",
+    "title": "Test HTTP Methods",
+    "description": "OWASP WSTG: Test HTTP Methods. Full methodology at canonical_url.",
+    "level": 1,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "configuration and deployment management",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {
+      "asvs": [
+        "13.1.4"
+      ]
+    },
+    "detection_methods": [
+      "Look for route definitions accepting unintended HTTP methods (TRACE, OPTIONS, PUT, DELETE) without explicit handling."
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/02-Configuration_and_Deployment_Management_Testing/06-Test_HTTP_Methods",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/02-Configuration_and_Deployment_Management_Testing/06-Test_HTTP_Methods.md",
+    "section_path": "4.2.6"
+  },
+  {
+    "id": "WSTG-CONF-07",
+    "title": "Test HTTP Strict Transport Security",
+    "description": "OWASP WSTG: Test HTTP Strict Transport Security. Full methodology at canonical_url.",
+    "level": 1,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "configuration and deployment management",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {
+      "asvs": [
+        "14.4.5",
+        "9.1.1"
+      ]
+    },
+    "detection_methods": [
+      "Search for HSTS header configuration; verify max-age >= 31536000 and includeSubDomains."
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/02-Configuration_and_Deployment_Management_Testing/07-Test_HTTP_Strict_Transport_Security",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/02-Configuration_and_Deployment_Management_Testing/07-Test_HTTP_Strict_Transport_Security.md",
+    "section_path": "4.2.7"
+  },
+  {
+    "id": "WSTG-CONF-08",
+    "title": "Test RIA Cross Domain Policy",
+    "description": "OWASP WSTG: Test RIA Cross Domain Policy. Full methodology at canonical_url.",
+    "level": 3,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "configuration and deployment management",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/02-Configuration_and_Deployment_Management_Testing/08-Test_RIA_Cross_Domain_Policy"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/02-Configuration_and_Deployment_Management_Testing/08-Test_RIA_Cross_Domain_Policy",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/02-Configuration_and_Deployment_Management_Testing/08-Test_RIA_Cross_Domain_Policy.md",
+    "section_path": "4.2.8"
+  },
+  {
+    "id": "WSTG-CONF-09",
+    "title": "Test File Permission",
+    "description": "OWASP WSTG: Test File Permission. Full methodology at canonical_url.",
+    "level": 2,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "configuration and deployment management",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/02-Configuration_and_Deployment_Management_Testing/09-Test_File_Permission"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/02-Configuration_and_Deployment_Management_Testing/09-Test_File_Permission",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/02-Configuration_and_Deployment_Management_Testing/09-Test_File_Permission.md",
+    "section_path": "4.2.9"
+  },
+  {
+    "id": "WSTG-CONF-12",
+    "title": "Test for Content Security Policy",
+    "description": "OWASP WSTG: Test for Content Security Policy. Full methodology at canonical_url.",
+    "level": 1,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "configuration and deployment management",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {
+      "asvs": [
+        "14.4.3"
+      ]
+    },
+    "detection_methods": [
+      "Search for Content-Security-Policy header configuration; verify no 'unsafe-inline'/'unsafe-eval' in script-src."
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/02-Configuration_and_Deployment_Management_Testing/12-Test_for_Content_Security_Policy",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/02-Configuration_and_Deployment_Management_Testing/12-Test_for_Content_Security_Policy.md",
+    "section_path": "4.2.12"
+  },
+  {
+    "id": "WSTG-CONF-13",
+    "title": "Test for Path Confusion",
+    "description": "OWASP WSTG: Test for Path Confusion. Full methodology at canonical_url.",
+    "level": 2,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "configuration and deployment management",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/02-Configuration_and_Deployment_Management_Testing/13-Test_for_Path_Confusion"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/02-Configuration_and_Deployment_Management_Testing/13-Test_for_Path_Confusion",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/02-Configuration_and_Deployment_Management_Testing/13-Test_for_Path_Confusion.md",
+    "section_path": "4.2.13"
+  },
+  {
+    "id": "WSTG-CONF-14",
+    "title": "Test Other HTTP Security Header Misconfigurations",
+    "description": "OWASP WSTG: Test Other HTTP Security Header Misconfigurations. Full methodology at canonical_url.",
+    "level": 1,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "configuration and deployment management",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {
+      "asvs": [
+        "14.4.1",
+        "14.4.2",
+        "14.4.4",
+        "14.4.6",
+        "14.4.7"
+      ]
+    },
+    "detection_methods": [
+      "Check for X-Content-Type-Options: nosniff, X-Frame-Options or CSP frame-ancestors, Referrer-Policy, Permissions-Policy."
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/02-Configuration_and_Deployment_Management_Testing/14-Test_Other_HTTP_Security_Header_Misconfigurations",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/02-Configuration_and_Deployment_Management_Testing/14-Test_Other_HTTP_Security_Header_Misconfigurations.md",
+    "section_path": "4.2.14"
+  },
+  {
+    "id": "WSTG-IDNT-01",
+    "title": "Test Role Definitions",
+    "description": "OWASP WSTG: Test Role Definitions. Full methodology at canonical_url.",
+    "level": 2,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "identity management",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/03-Identity_Management_Testing/01-Test_Role_Definitions"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/03-Identity_Management_Testing/01-Test_Role_Definitions",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/03-Identity_Management_Testing/01-Test_Role_Definitions.md",
+    "section_path": "4.3.1"
+  },
+  {
+    "id": "WSTG-IDNT-02",
+    "title": "Test User Registration Process",
+    "description": "OWASP WSTG: Test User Registration Process. Full methodology at canonical_url.",
+    "level": 2,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "identity management",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/03-Identity_Management_Testing/02-Test_User_Registration_Process"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/03-Identity_Management_Testing/02-Test_User_Registration_Process",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/03-Identity_Management_Testing/02-Test_User_Registration_Process.md",
+    "section_path": "4.3.2"
+  },
+  {
+    "id": "WSTG-IDNT-03",
+    "title": "Test Account Provisioning Process",
+    "description": "OWASP WSTG: Test Account Provisioning Process. Full methodology at canonical_url.",
+    "level": 2,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "identity management",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/03-Identity_Management_Testing/03-Test_Account_Provisioning_Process"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/03-Identity_Management_Testing/03-Test_Account_Provisioning_Process",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/03-Identity_Management_Testing/03-Test_Account_Provisioning_Process.md",
+    "section_path": "4.3.3"
+  },
+  {
+    "id": "WSTG-IDNT-04",
+    "title": "Testing for Account Enumeration and Guessable User Account",
+    "description": "OWASP WSTG: Testing for Account Enumeration and Guessable User Account. Full methodology at canonical_url.",
+    "level": 2,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "identity management",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/03-Identity_Management_Testing/04-Testing_for_Account_Enumeration_and_Guessable_User_Account"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/03-Identity_Management_Testing/04-Testing_for_Account_Enumeration_and_Guessable_User_Account",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/03-Identity_Management_Testing/04-Testing_for_Account_Enumeration_and_Guessable_User_Account.md",
+    "section_path": "4.3.4"
+  },
+  {
+    "id": "WSTG-IDNT-05",
+    "title": "Testing for Weak or Unenforced Username Policy",
+    "description": "OWASP WSTG: Testing for Weak or Unenforced Username Policy. Full methodology at canonical_url.",
+    "level": 2,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "identity management",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/03-Identity_Management_Testing/05-Testing_for_Weak_or_Unenforced_Username_Policy"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/03-Identity_Management_Testing/05-Testing_for_Weak_or_Unenforced_Username_Policy",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/03-Identity_Management_Testing/05-Testing_for_Weak_or_Unenforced_Username_Policy.md",
+    "section_path": "4.3.5"
+  },
+  {
+    "id": "WSTG-ATHN-01",
+    "title": "Testing for Credentials Transported over an Encrypted Channel",
+    "description": "OWASP WSTG: Testing for Credentials Transported over an Encrypted Channel. Full methodology at canonical_url.",
+    "level": 1,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "authentication",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {
+      "asvs": [
+        "2.2.5",
+        "9.1.1"
+      ]
+    },
+    "detection_methods": [
+      "Find login forms / auth endpoints. Verify they require HTTPS and that credentials never appear in URLs or query strings."
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/04-Authentication_Testing/01-Testing_for_Credentials_Transported_over_an_Encrypted_Channel",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/04-Authentication_Testing/01-Testing_for_Credentials_Transported_over_an_Encrypted_Channel.md",
+    "section_path": "4.4.1"
+  },
+  {
+    "id": "WSTG-ATHN-02",
+    "title": "Testing for Default Credentials",
+    "description": "OWASP WSTG: Testing for Default Credentials. Full methodology at canonical_url.",
+    "level": 1,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "authentication",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {
+      "asvs": [
+        "2.1.1",
+        "2.1.2"
+      ]
+    },
+    "detection_methods": [
+      "Search for hardcoded credentials, default admin accounts, sample users in seed/migration files, README admin creds."
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/04-Authentication_Testing/02-Testing_for_Default_Credentials",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/04-Authentication_Testing/02-Testing_for_Default_Credentials.md",
+    "section_path": "4.4.2"
+  },
+  {
+    "id": "WSTG-ATHN-04",
+    "title": "Testing for Bypassing Authentication Schema",
+    "description": "OWASP WSTG: Testing for Bypassing Authentication Schema. Full methodology at canonical_url.",
+    "level": 1,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "authentication",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {
+      "asvs": [
+        "2.1.1"
+      ]
+    },
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/04-Authentication_Testing/04-Testing_for_Bypassing_Authentication_Schema"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/04-Authentication_Testing/04-Testing_for_Bypassing_Authentication_Schema",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/04-Authentication_Testing/04-Testing_for_Bypassing_Authentication_Schema.md",
+    "section_path": "4.4.4"
+  },
+  {
+    "id": "WSTG-ATHN-05",
+    "title": "Testing for Vulnerable Remember Password",
+    "description": "OWASP WSTG: Testing for Vulnerable Remember Password. Full methodology at canonical_url.",
+    "level": 2,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "authentication",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/04-Authentication_Testing/05-Testing_for_Vulnerable_Remember_Password"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/04-Authentication_Testing/05-Testing_for_Vulnerable_Remember_Password",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/04-Authentication_Testing/05-Testing_for_Vulnerable_Remember_Password.md",
+    "section_path": "4.4.5"
+  },
+  {
+    "id": "WSTG-ATHN-06",
+    "title": "Testing for Browser Cache Weaknesses",
+    "description": "OWASP WSTG: Testing for Browser Cache Weaknesses. Full methodology at canonical_url.",
+    "level": 2,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "authentication",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/04-Authentication_Testing/06-Testing_for_Browser_Cache_Weaknesses"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/04-Authentication_Testing/06-Testing_for_Browser_Cache_Weaknesses",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/04-Authentication_Testing/06-Testing_for_Browser_Cache_Weaknesses.md",
+    "section_path": "4.4.6"
+  },
+  {
+    "id": "WSTG-ATHN-07",
+    "title": "Testing for Weak Authentication Methods",
+    "description": "OWASP WSTG: Testing for Weak Authentication Methods. Full methodology at canonical_url.",
+    "level": 1,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "authentication",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/04-Authentication_Testing/07-Testing_for_Weak_Authentication_Methods"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/04-Authentication_Testing/07-Testing_for_Weak_Authentication_Methods",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/04-Authentication_Testing/07-Testing_for_Weak_Authentication_Methods.md",
+    "section_path": "4.4.7"
+  },
+  {
+    "id": "WSTG-ATHN-08",
+    "title": "Testing for Weak Security Question Answer",
+    "description": "OWASP WSTG: Testing for Weak Security Question Answer. Full methodology at canonical_url.",
+    "level": 3,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "authentication",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/04-Authentication_Testing/08-Testing_for_Weak_Security_Question_Answer"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/04-Authentication_Testing/08-Testing_for_Weak_Security_Question_Answer",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/04-Authentication_Testing/08-Testing_for_Weak_Security_Question_Answer.md",
+    "section_path": "4.4.8"
+  },
+  {
+    "id": "WSTG-ATHN-09",
+    "title": "Testing for Weak Password Change or Reset Functionalities",
+    "description": "OWASP WSTG: Testing for Weak Password Change or Reset Functionalities. Full methodology at canonical_url.",
+    "level": 1,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "authentication",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {
+      "asvs": [
+        "2.5.1",
+        "2.5.2",
+        "2.5.3",
+        "2.5.4"
+      ]
+    },
+    "detection_methods": [
+      "Locate password reset / change flows. Check token entropy, single-use, expiry, rate limiting, lack of user enumeration in responses."
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/04-Authentication_Testing/09-Testing_for_Weak_Password_Change_or_Reset_Functionalities",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/04-Authentication_Testing/09-Testing_for_Weak_Password_Change_or_Reset_Functionalities.md",
+    "section_path": "4.4.9"
+  },
+  {
+    "id": "WSTG-ATHN-10",
+    "title": "Testing for Weaker Authentication in Alternative Channel",
+    "description": "OWASP WSTG: Testing for Weaker Authentication in Alternative Channel. Full methodology at canonical_url.",
+    "level": 2,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "authentication",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/04-Authentication_Testing/10-Testing_for_Weaker_Authentication_in_Alternative_Channel"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/04-Authentication_Testing/10-Testing_for_Weaker_Authentication_in_Alternative_Channel",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/04-Authentication_Testing/10-Testing_for_Weaker_Authentication_in_Alternative_Channel.md",
+    "section_path": "4.4.10"
+  },
+  {
+    "id": "WSTG-ATHN-11",
+    "title": "Testing Multi-Factor Authentication",
+    "description": "OWASP WSTG: Testing Multi-Factor Authentication. Full methodology at canonical_url.",
+    "level": 2,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "authentication",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {
+      "asvs": [
+        "2.7.1",
+        "2.7.2",
+        "2.8.1"
+      ]
+    },
+    "detection_methods": [
+      "Identify MFA enrollment and verification code paths. Check rate limiting, code reuse, fallback weakening, recovery code handling."
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/04-Authentication_Testing/11-Testing_Multi-Factor_Authentication",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/04-Authentication_Testing/11-Testing_Multi-Factor_Authentication.md",
+    "section_path": "4.4.11"
+  },
+  {
+    "id": "WSTG-ATHZ-01",
+    "title": "Testing Directory Traversal File Include",
+    "description": "OWASP WSTG: Testing Directory Traversal File Include. Full methodology at canonical_url.",
+    "level": 1,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "authorization",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {
+      "asvs": [
+        "12.3.1",
+        "12.3.2"
+      ],
+      "cwe-top-25": [
+        "CWE-22"
+      ]
+    },
+    "detection_methods": [
+      "Find file path / include / template-load operations using user input. Check for ../, encoded traversal, absolute path acceptance."
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/05-Authorization_Testing/01-Testing_Directory_Traversal_File_Include",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/05-Authorization_Testing/01-Testing_Directory_Traversal_File_Include.md",
+    "section_path": "4.5.1"
+  },
+  {
+    "id": "WSTG-ATHZ-02",
+    "title": "Testing for Bypassing Authorization Schema",
+    "description": "OWASP WSTG: Testing for Bypassing Authorization Schema. Full methodology at canonical_url.",
+    "level": 1,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "authorization",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {
+      "asvs": [
+        "4.1.1",
+        "4.1.2"
+      ],
+      "api-top-10": [
+        "API5"
+      ]
+    },
+    "detection_methods": [
+      "Compare auth checks across endpoints. Look for missing decorators, role checks bypassed by parameter manipulation, IDOR-adjacent gaps."
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/05-Authorization_Testing/02-Testing_for_Bypassing_Authorization_Schema",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/05-Authorization_Testing/02-Testing_for_Bypassing_Authorization_Schema.md",
+    "section_path": "4.5.2"
+  },
+  {
+    "id": "WSTG-ATHZ-03",
+    "title": "Testing for Privilege Escalation",
+    "description": "OWASP WSTG: Testing for Privilege Escalation. Full methodology at canonical_url.",
+    "level": 1,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "authorization",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {
+      "asvs": [
+        "4.1.3",
+        "4.2.1"
+      ],
+      "cwe-top-25": [
+        "CWE-269"
+      ],
+      "api-top-10": [
+        "API5"
+      ]
+    },
+    "detection_methods": [
+      "Look for role/privilege fields in user input or session data that are trusted without server-side verification."
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/05-Authorization_Testing/03-Testing_for_Privilege_Escalation",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/05-Authorization_Testing/03-Testing_for_Privilege_Escalation.md",
+    "section_path": "4.5.3"
+  },
+  {
+    "id": "WSTG-ATHZ-04",
+    "title": "Testing for Insecure Direct Object References",
+    "description": "OWASP WSTG: Testing for Insecure Direct Object References. Full methodology at canonical_url.",
+    "level": 1,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "authorization",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {
+      "asvs": [
+        "4.2.1"
+      ],
+      "cwe-top-25": [
+        "CWE-639"
+      ],
+      "api-top-10": [
+        "API1"
+      ]
+    },
+    "detection_methods": [
+      "Find handlers that load resources by ID from user input without an ownership/permission check."
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/05-Authorization_Testing/04-Testing_for_Insecure_Direct_Object_References",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/05-Authorization_Testing/04-Testing_for_Insecure_Direct_Object_References.md",
+    "section_path": "4.5.4"
+  },
+  {
+    "id": "WSTG-ATHZ-05",
+    "title": "Testing for OAuth Weaknesses",
+    "description": "OWASP WSTG: Testing for OAuth Weaknesses. Full methodology at canonical_url.",
+    "level": 2,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "authorization",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/05-Authorization_Testing/05-Testing_for_OAuth_Weaknesses"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/05-Authorization_Testing/05-Testing_for_OAuth_Weaknesses",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/05-Authorization_Testing/05-Testing_for_OAuth_Weaknesses.md",
+    "section_path": "4.5.5"
+  },
+  {
+    "id": "WSTG-ATHZ-05.1",
+    "title": "Testing for OAuth Authorization Server Weaknesses",
+    "description": "OWASP WSTG: Testing for OAuth Authorization Server Weaknesses. Full methodology at canonical_url.",
+    "level": 2,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "authorization",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/05-Authorization_Testing/05.1-Testing_for_OAuth_Authorization_Server_Weaknesses"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/05-Authorization_Testing/05.1-Testing_for_OAuth_Authorization_Server_Weaknesses",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/05-Authorization_Testing/05.1-Testing_for_OAuth_Authorization_Server_Weaknesses.md",
+    "section_path": "4.5.5.1",
+    "parent_id": "WSTG-ATHZ-05"
+  },
+  {
+    "id": "WSTG-ATHZ-05.2",
+    "title": "Testing for OAuth Client Weaknesses",
+    "description": "OWASP WSTG: Testing for OAuth Client Weaknesses. Full methodology at canonical_url.",
+    "level": 2,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "authorization",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/05-Authorization_Testing/05.2-Testing_for_OAuth_Client_Weaknesses"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/05-Authorization_Testing/05.2-Testing_for_OAuth_Client_Weaknesses",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/05-Authorization_Testing/05.2-Testing_for_OAuth_Client_Weaknesses.md",
+    "section_path": "4.5.5.2",
+    "parent_id": "WSTG-ATHZ-05"
+  },
+  {
+    "id": "WSTG-SESS-01",
+    "title": "Testing for Session Management Schema",
+    "description": "OWASP WSTG: Testing for Session Management Schema. Full methodology at canonical_url.",
+    "level": 1,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "session management",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/06-Session_Management_Testing/01-Testing_for_Session_Management_Schema"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/06-Session_Management_Testing/01-Testing_for_Session_Management_Schema",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/06-Session_Management_Testing/01-Testing_for_Session_Management_Schema.md",
+    "section_path": "4.6.1"
+  },
+  {
+    "id": "WSTG-SESS-02",
+    "title": "Testing for Cookies Attributes",
+    "description": "OWASP WSTG: Testing for Cookies Attributes. Full methodology at canonical_url.",
+    "level": 1,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "session management",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {
+      "asvs": [
+        "3.4.1",
+        "3.4.2",
+        "3.4.3"
+      ]
+    },
+    "detection_methods": [
+      "Search session/cookie configuration. Verify Secure, HttpOnly, SameSite are set; check Path and Domain scoping."
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/06-Session_Management_Testing/02-Testing_for_Cookies_Attributes",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/06-Session_Management_Testing/02-Testing_for_Cookies_Attributes.md",
+    "section_path": "4.6.2"
+  },
+  {
+    "id": "WSTG-SESS-03",
+    "title": "Testing for Session Fixation",
+    "description": "OWASP WSTG: Testing for Session Fixation. Full methodology at canonical_url.",
+    "level": 1,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "session management",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {
+      "asvs": [
+        "3.2.1"
+      ],
+      "cwe-top-25": [
+        "CWE-384"
+      ]
+    },
+    "detection_methods": [
+      "Check that login regenerates session IDs (no fixation). Look for session_regenerate_id, login.session.cycle, etc."
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/06-Session_Management_Testing/03-Testing_for_Session_Fixation",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/06-Session_Management_Testing/03-Testing_for_Session_Fixation.md",
+    "section_path": "4.6.3"
+  },
+  {
+    "id": "WSTG-SESS-04",
+    "title": "Testing for Exposed Session Variables",
+    "description": "OWASP WSTG: Testing for Exposed Session Variables. Full methodology at canonical_url.",
+    "level": 2,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "session management",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/06-Session_Management_Testing/04-Testing_for_Exposed_Session_Variables"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/06-Session_Management_Testing/04-Testing_for_Exposed_Session_Variables",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/06-Session_Management_Testing/04-Testing_for_Exposed_Session_Variables.md",
+    "section_path": "4.6.4"
+  },
+  {
+    "id": "WSTG-SESS-05",
+    "title": "Testing for Cross Site Request Forgery",
+    "description": "OWASP WSTG: Testing for Cross Site Request Forgery. Full methodology at canonical_url.",
+    "level": 1,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "session management",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {
+      "asvs": [
+        "4.2.2",
+        "13.2.3"
+      ],
+      "cwe-top-25": [
+        "CWE-352"
+      ]
+    },
+    "detection_methods": [
+      "Identify state-changing endpoints (POST/PUT/PATCH/DELETE). Verify CSRF token middleware or SameSite=Strict cookie posture."
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/06-Session_Management_Testing/05-Testing_for_Cross_Site_Request_Forgery",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/06-Session_Management_Testing/05-Testing_for_Cross_Site_Request_Forgery.md",
+    "section_path": "4.6.5"
+  },
+  {
+    "id": "WSTG-SESS-06",
+    "title": "Testing for Logout Functionality",
+    "description": "OWASP WSTG: Testing for Logout Functionality. Full methodology at canonical_url.",
+    "level": 1,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "session management",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/06-Session_Management_Testing/06-Testing_for_Logout_Functionality"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/06-Session_Management_Testing/06-Testing_for_Logout_Functionality",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/06-Session_Management_Testing/06-Testing_for_Logout_Functionality.md",
+    "section_path": "4.6.6"
+  },
+  {
+    "id": "WSTG-SESS-07",
+    "title": "Testing Session Timeout",
+    "description": "OWASP WSTG: Testing Session Timeout. Full methodology at canonical_url.",
+    "level": 1,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "session management",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {
+      "asvs": [
+        "3.3.1",
+        "3.3.2"
+      ]
+    },
+    "detection_methods": [
+      "Find session timeout configuration; verify both idle and absolute timeouts are enforced."
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/06-Session_Management_Testing/07-Testing_Session_Timeout",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/06-Session_Management_Testing/07-Testing_Session_Timeout.md",
+    "section_path": "4.6.7"
+  },
+  {
+    "id": "WSTG-SESS-08",
+    "title": "Testing for Session Puzzling",
+    "description": "OWASP WSTG: Testing for Session Puzzling. Full methodology at canonical_url.",
+    "level": 3,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "session management",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/06-Session_Management_Testing/08-Testing_for_Session_Puzzling"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/06-Session_Management_Testing/08-Testing_for_Session_Puzzling",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/06-Session_Management_Testing/08-Testing_for_Session_Puzzling.md",
+    "section_path": "4.6.8"
+  },
+  {
+    "id": "WSTG-SESS-10",
+    "title": "Testing JSON Web Tokens",
+    "description": "OWASP WSTG: Testing JSON Web Tokens. Full methodology at canonical_url.",
+    "level": 2,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "session management",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {
+      "asvs": [
+        "3.5.1",
+        "3.5.2",
+        "3.5.3"
+      ]
+    },
+    "detection_methods": [
+      "Locate JWT issuance and verification. Check algorithm allowlist (no 'none', no HS/RS confusion), expiry, signing-key rotation, claim validation."
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/06-Session_Management_Testing/10-Testing_JSON_Web_Tokens",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/06-Session_Management_Testing/10-Testing_JSON_Web_Tokens.md",
+    "section_path": "4.6.10"
+  },
+  {
+    "id": "WSTG-SESS-11",
+    "title": "Testing for Concurrent Sessions",
+    "description": "OWASP WSTG: Testing for Concurrent Sessions. Full methodology at canonical_url.",
+    "level": 2,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "session management",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/06-Session_Management_Testing/11-Testing_for_Concurrent_Sessions"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/06-Session_Management_Testing/11-Testing_for_Concurrent_Sessions",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/06-Session_Management_Testing/11-Testing_for_Concurrent_Sessions.md",
+    "section_path": "4.6.11"
+  },
+  {
+    "id": "WSTG-INPV-01",
+    "title": "Testing for Reflected Cross Site Scripting",
+    "description": "OWASP WSTG: Testing for Reflected Cross Site Scripting. Full methodology at canonical_url.",
+    "level": 1,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "input validation",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {
+      "asvs": [
+        "5.3.3"
+      ],
+      "cwe-top-25": [
+        "CWE-79"
+      ],
+      "api-top-10": [
+        "API8"
+      ]
+    },
+    "detection_methods": [
+      "Find templates rendering user input without escaping. Check for raw|safe filters, dangerouslySetInnerHTML, innerHTML assignments."
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/01-Testing_for_Reflected_Cross_Site_Scripting",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/01-Testing_for_Reflected_Cross_Site_Scripting.md",
+    "section_path": "4.7.1"
+  },
+  {
+    "id": "WSTG-INPV-02",
+    "title": "Testing for Stored Cross Site Scripting",
+    "description": "OWASP WSTG: Testing for Stored Cross Site Scripting. Full methodology at canonical_url.",
+    "level": 1,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "input validation",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {
+      "asvs": [
+        "5.3.3"
+      ],
+      "cwe-top-25": [
+        "CWE-79"
+      ],
+      "api-top-10": [
+        "API8"
+      ]
+    },
+    "detection_methods": [
+      "Trace user input that is persisted (DB, file, cache) and later rendered. Check for escaping at output, not just input."
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/02-Testing_for_Stored_Cross_Site_Scripting",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/02-Testing_for_Stored_Cross_Site_Scripting.md",
+    "section_path": "4.7.2"
+  },
+  {
+    "id": "WSTG-INPV-03",
+    "title": "Testing for HTTP Verb Tampering",
+    "description": "OWASP WSTG: Testing for HTTP Verb Tampering. Full methodology at canonical_url.",
+    "level": 1,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "input validation",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/03-Testing_for_HTTP_Verb_Tampering"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/03-Testing_for_HTTP_Verb_Tampering",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/03-Testing_for_HTTP_Verb_Tampering.md",
+    "section_path": "4.7.3"
+  },
+  {
+    "id": "WSTG-INPV-04",
+    "title": "Testing for HTTP Parameter Pollution",
+    "description": "OWASP WSTG: Testing for HTTP Parameter Pollution. Full methodology at canonical_url.",
+    "level": 2,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "input validation",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/04-Testing_for_HTTP_Parameter_Pollution"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/04-Testing_for_HTTP_Parameter_Pollution",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/04-Testing_for_HTTP_Parameter_Pollution.md",
+    "section_path": "4.7.4"
+  },
+  {
+    "id": "WSTG-INPV-05",
+    "title": "Testing for SQL Injection",
+    "description": "OWASP WSTG: Testing for SQL Injection. Full methodology at canonical_url.",
+    "level": 1,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "input validation",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {
+      "asvs": [
+        "5.3.4",
+        "5.3.5"
+      ],
+      "cwe-top-25": [
+        "CWE-89"
+      ],
+      "api-top-10": [
+        "API8"
+      ]
+    },
+    "detection_methods": [
+      "Find query construction with string interpolation/concatenation. Flag .format/f-strings/% with user input, raw cursor.execute, ORM raw()."
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/05-Testing_for_SQL_Injection",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/05-Testing_for_SQL_Injection.md",
+    "section_path": "4.7.5"
+  },
+  {
+    "id": "WSTG-INPV-05.1",
+    "title": "Testing for Oracle",
+    "description": "OWASP WSTG: Testing for Oracle. Full methodology at canonical_url.",
+    "level": 2,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "input validation",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/05.1-Testing_for_Oracle"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/05.1-Testing_for_Oracle",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/05.1-Testing_for_Oracle.md",
+    "section_path": "4.7.5.1",
+    "parent_id": "WSTG-INPV-05"
+  },
+  {
+    "id": "WSTG-INPV-05.2",
+    "title": "Testing for MySQL",
+    "description": "OWASP WSTG: Testing for MySQL. Full methodology at canonical_url.",
+    "level": 2,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "input validation",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/05.2-Testing_for_MySQL"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/05.2-Testing_for_MySQL",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/05.2-Testing_for_MySQL.md",
+    "section_path": "4.7.5.2",
+    "parent_id": "WSTG-INPV-05"
+  },
+  {
+    "id": "WSTG-INPV-05.3",
+    "title": "Testing for SQL Server",
+    "description": "OWASP WSTG: Testing for SQL Server. Full methodology at canonical_url.",
+    "level": 2,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "input validation",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/05.3-Testing_for_SQL_Server"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/05.3-Testing_for_SQL_Server",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/05.3-Testing_for_SQL_Server.md",
+    "section_path": "4.7.5.3",
+    "parent_id": "WSTG-INPV-05"
+  },
+  {
+    "id": "WSTG-INPV-05.4",
+    "title": "Testing PostgreSQL",
+    "description": "OWASP WSTG: Testing PostgreSQL. Full methodology at canonical_url.",
+    "level": 2,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "input validation",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/05.4-Testing_PostgreSQL"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/05.4-Testing_PostgreSQL",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/05.4-Testing_PostgreSQL.md",
+    "section_path": "4.7.5.4",
+    "parent_id": "WSTG-INPV-05"
+  },
+  {
+    "id": "WSTG-INPV-05.5",
+    "title": "Testing for MS Access",
+    "description": "OWASP WSTG: Testing for MS Access. Full methodology at canonical_url.",
+    "level": 3,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "input validation",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/05.5-Testing_for_MS_Access"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/05.5-Testing_for_MS_Access",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/05.5-Testing_for_MS_Access.md",
+    "section_path": "4.7.5.5",
+    "parent_id": "WSTG-INPV-05"
+  },
+  {
+    "id": "WSTG-INPV-05.6",
+    "title": "Testing for NoSQL Injection",
+    "description": "OWASP WSTG: Testing for NoSQL Injection. Full methodology at canonical_url.",
+    "level": 2,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "input validation",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/05.6-Testing_for_NoSQL_Injection"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/05.6-Testing_for_NoSQL_Injection",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/05.6-Testing_for_NoSQL_Injection.md",
+    "section_path": "4.7.5.6",
+    "parent_id": "WSTG-INPV-05"
+  },
+  {
+    "id": "WSTG-INPV-05.7",
+    "title": "Testing for ORM Injection",
+    "description": "OWASP WSTG: Testing for ORM Injection. Full methodology at canonical_url.",
+    "level": 2,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "input validation",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/05.7-Testing_for_ORM_Injection"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/05.7-Testing_for_ORM_Injection",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/05.7-Testing_for_ORM_Injection.md",
+    "section_path": "4.7.5.7",
+    "parent_id": "WSTG-INPV-05"
+  },
+  {
+    "id": "WSTG-INPV-05.8",
+    "title": "Testing for Client-side",
+    "description": "OWASP WSTG: Testing for Client-side. Full methodology at canonical_url.",
+    "level": 2,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "input validation",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/05.8-Testing_for_Client-side"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/05.8-Testing_for_Client-side",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/05.8-Testing_for_Client-side.md",
+    "section_path": "4.7.5.8",
+    "parent_id": "WSTG-INPV-05"
+  },
+  {
+    "id": "WSTG-INPV-06",
+    "title": "Testing for LDAP Injection",
+    "description": "OWASP WSTG: Testing for LDAP Injection. Full methodology at canonical_url.",
+    "level": 2,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "input validation",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {
+      "asvs": [
+        "5.3.7"
+      ],
+      "cwe-top-25": [
+        "CWE-90"
+      ]
+    },
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/06-Testing_for_LDAP_Injection"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/06-Testing_for_LDAP_Injection",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/06-Testing_for_LDAP_Injection.md",
+    "section_path": "4.7.6"
+  },
+  {
+    "id": "WSTG-INPV-07",
+    "title": "Testing for XML Injection",
+    "description": "OWASP WSTG: Testing for XML Injection. Full methodology at canonical_url.",
+    "level": 2,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "input validation",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {
+      "asvs": [
+        "5.5.1",
+        "5.5.2"
+      ],
+      "cwe-top-25": [
+        "CWE-91",
+        "CWE-611"
+      ]
+    },
+    "detection_methods": [
+      "Look for XML parsing (lxml, xml.etree, defusedxml absence). Check for external entity disabling, DTD disabling."
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/07-Testing_for_XML_Injection",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/07-Testing_for_XML_Injection.md",
+    "section_path": "4.7.7"
+  },
+  {
+    "id": "WSTG-INPV-08",
+    "title": "Testing for SSI Injection",
+    "description": "OWASP WSTG: Testing for SSI Injection. Full methodology at canonical_url.",
+    "level": 3,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "input validation",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/08-Testing_for_SSI_Injection"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/08-Testing_for_SSI_Injection",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/08-Testing_for_SSI_Injection.md",
+    "section_path": "4.7.8"
+  },
+  {
+    "id": "WSTG-INPV-09",
+    "title": "Testing for XPath Injection",
+    "description": "OWASP WSTG: Testing for XPath Injection. Full methodology at canonical_url.",
+    "level": 2,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "input validation",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/09-Testing_for_XPath_Injection"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/09-Testing_for_XPath_Injection",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/09-Testing_for_XPath_Injection.md",
+    "section_path": "4.7.9"
+  },
+  {
+    "id": "WSTG-INPV-10",
+    "title": "Testing for IMAP SMTP Injection",
+    "description": "OWASP WSTG: Testing for IMAP SMTP Injection. Full methodology at canonical_url.",
+    "level": 2,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "input validation",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/10-Testing_for_IMAP_SMTP_Injection"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/10-Testing_for_IMAP_SMTP_Injection",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/10-Testing_for_IMAP_SMTP_Injection.md",
+    "section_path": "4.7.10"
+  },
+  {
+    "id": "WSTG-INPV-11",
+    "title": "Testing for Code Injection",
+    "description": "OWASP WSTG: Testing for Code Injection. Full methodology at canonical_url.",
+    "level": 1,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "input validation",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {
+      "asvs": [
+        "5.2.4"
+      ],
+      "cwe-top-25": [
+        "CWE-94"
+      ]
+    },
+    "detection_methods": [
+      "Search for eval, exec, compile, Function() constructor, vm.runInContext \u2014 flag any with user-influenced input."
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/11-Testing_for_Code_Injection",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/11-Testing_for_Code_Injection.md",
+    "section_path": "4.7.11"
+  },
+  {
+    "id": "WSTG-INPV-11.1",
+    "title": "Testing for File Inclusion",
+    "description": "OWASP WSTG: Testing for File Inclusion. Full methodology at canonical_url.",
+    "level": 1,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "input validation",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/11.1-Testing_for_File_Inclusion"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/11.1-Testing_for_File_Inclusion",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/11.1-Testing_for_File_Inclusion.md",
+    "section_path": "4.7.11.1",
+    "parent_id": "WSTG-INPV-11"
+  },
+  {
+    "id": "WSTG-INPV-12",
+    "title": "Testing for Command Injection",
+    "description": "OWASP WSTG: Testing for Command Injection. Full methodology at canonical_url.",
+    "level": 1,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "input validation",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {
+      "asvs": [
+        "5.3.8"
+      ],
+      "cwe-top-25": [
+        "CWE-78"
+      ]
+    },
+    "detection_methods": [
+      "Search for shell invocation: subprocess with shell=True, os.system, popen, Runtime.exec, child_process.exec \u2014 flag user-influenced args."
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/12-Testing_for_Command_Injection",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/12-Testing_for_Command_Injection.md",
+    "section_path": "4.7.12"
+  },
+  {
+    "id": "WSTG-INPV-13",
+    "title": "Testing for Format String Injection",
+    "description": "OWASP WSTG: Testing for Format String Injection. Full methodology at canonical_url.",
+    "level": 2,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "input validation",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/13-Testing_for_Format_String_Injection"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/13-Testing_for_Format_String_Injection",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/13-Testing_for_Format_String_Injection.md",
+    "section_path": "4.7.13"
+  },
+  {
+    "id": "WSTG-INPV-14",
+    "title": "Testing for Incubated Vulnerability",
+    "description": "OWASP WSTG: Testing for Incubated Vulnerability. Full methodology at canonical_url.",
+    "level": 3,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "input validation",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/14-Testing_for_Incubated_Vulnerability"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/14-Testing_for_Incubated_Vulnerability",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/14-Testing_for_Incubated_Vulnerability.md",
+    "section_path": "4.7.14"
+  },
+  {
+    "id": "WSTG-INPV-15",
+    "title": "Testing for HTTP Response Splitting",
+    "description": "OWASP WSTG: Testing for HTTP Response Splitting. Full methodology at canonical_url.",
+    "level": 2,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "input validation",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/15-Testing_for_HTTP_Response_Splitting"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/15-Testing_for_HTTP_Response_Splitting",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/15-Testing_for_HTTP_Response_Splitting.md",
+    "section_path": "4.7.15"
+  },
+  {
+    "id": "WSTG-INPV-16",
+    "title": "Testing for HTTP Request Smuggling",
+    "description": "OWASP WSTG: Testing for HTTP Request Smuggling. Full methodology at canonical_url.",
+    "level": 2,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "input validation",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/16-Testing_for_HTTP_Request_Smuggling"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/16-Testing_for_HTTP_Request_Smuggling",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/16-Testing_for_HTTP_Request_Smuggling.md",
+    "section_path": "4.7.16"
+  },
+  {
+    "id": "WSTG-INPV-17",
+    "title": "Testing for Host Header Injection",
+    "description": "OWASP WSTG: Testing for Host Header Injection. Full methodology at canonical_url.",
+    "level": 2,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "input validation",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/17-Testing_for_Host_Header_Injection"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/17-Testing_for_Host_Header_Injection",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/17-Testing_for_Host_Header_Injection.md",
+    "section_path": "4.7.17"
+  },
+  {
+    "id": "WSTG-INPV-18",
+    "title": "Testing for Server-side Template Injection",
+    "description": "OWASP WSTG: Testing for Server-side Template Injection. Full methodology at canonical_url.",
+    "level": 2,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "input validation",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {
+      "asvs": [
+        "5.2.5"
+      ],
+      "cwe-top-25": [
+        "CWE-1336"
+      ]
+    },
+    "detection_methods": [
+      "Find template engine usage (Jinja2, Twig, ERB, Handlebars). Flag template strings constructed from user input."
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/18-Testing_for_Server-side_Template_Injection",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/18-Testing_for_Server-side_Template_Injection.md",
+    "section_path": "4.7.18"
+  },
+  {
+    "id": "WSTG-INPV-19",
+    "title": "Testing for Server-Side Request Forgery",
+    "description": "OWASP WSTG: Testing for Server-Side Request Forgery. Full methodology at canonical_url.",
+    "level": 1,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "input validation",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {
+      "asvs": [
+        "12.6.1"
+      ],
+      "cwe-top-25": [
+        "CWE-918"
+      ],
+      "api-top-10": [
+        "API7"
+      ]
+    },
+    "detection_methods": [
+      "Find HTTP client calls (requests.get, urllib, fetch, axios) with URL or host derived from user input. Check for allowlist / metadata-IP blocking."
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/19-Testing_for_Server-Side_Request_Forgery",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/19-Testing_for_Server-Side_Request_Forgery.md",
+    "section_path": "4.7.19"
+  },
+  {
+    "id": "WSTG-INPV-20",
+    "title": "Testing for Mass Assignment",
+    "description": "OWASP WSTG: Testing for Mass Assignment. Full methodology at canonical_url.",
+    "level": 2,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "input validation",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {
+      "asvs": [
+        "5.1.2"
+      ],
+      "cwe-top-25": [
+        "CWE-915"
+      ],
+      "api-top-10": [
+        "API6"
+      ]
+    },
+    "detection_methods": [
+      "Find ORM/serializer bulk-assign patterns (Model(**data), update(**data), Object.assign). Check for explicit field allowlists."
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/20-Testing_for_Mass_Assignment",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/20-Testing_for_Mass_Assignment.md",
+    "section_path": "4.7.20"
+  },
+  {
+    "id": "WSTG-INPV-21",
+    "title": "Testing for CSV Injection",
+    "description": "OWASP WSTG: Testing for CSV Injection. Full methodology at canonical_url.",
+    "level": 3,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "input validation",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/21-Testing_for_CSV_Injection"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/21-Testing_for_CSV_Injection",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/21-Testing_for_CSV_Injection.md",
+    "section_path": "4.7.21"
+  },
+  {
+    "id": "WSTG-ERRH-01",
+    "title": "Testing for Improper Error Handling",
+    "description": "OWASP WSTG: Testing for Improper Error Handling. Full methodology at canonical_url.",
+    "level": 1,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "error handling",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {
+      "asvs": [
+        "7.4.1"
+      ],
+      "cwe-top-25": [
+        "CWE-209"
+      ]
+    },
+    "detection_methods": [
+      "Find global exception handlers. Check that responses don't leak stack traces, query fragments, file paths, or internal IPs in production."
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/08-Testing_for_Error_Handling/01-Testing_For_Improper_Error_Handling",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/08-Testing_for_Error_Handling/01-Testing_For_Improper_Error_Handling.md",
+    "section_path": "4.8.1"
+  },
+  {
+    "id": "WSTG-ERRH-02",
+    "title": "Testing for Stack Traces",
+    "description": "OWASP WSTG: Testing for Stack Traces. Full methodology at canonical_url.",
+    "level": 1,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "error handling",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {
+      "asvs": [
+        "7.4.1"
+      ],
+      "cwe-top-25": [
+        "CWE-209"
+      ]
+    },
+    "detection_methods": [
+      "Search for debug/development settings active in production paths (DEBUG=True, app.debug, NODE_ENV checks)."
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/08-Testing_for_Error_Handling/02-Testing_for_Stack_Traces",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/08-Testing_for_Error_Handling/02-Testing_for_Stack_Traces.md",
+    "section_path": "4.8.2"
+  },
+  {
+    "id": "WSTG-CRYP-02",
+    "title": "Testing for Padding Oracle",
+    "description": "OWASP WSTG: Testing for Padding Oracle. Full methodology at canonical_url.",
+    "level": 3,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "cryptography",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/09-Testing_for_Weak_Cryptography/02-Testing_for_Padding_Oracle"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/09-Testing_for_Weak_Cryptography/02-Testing_for_Padding_Oracle",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/09-Testing_for_Weak_Cryptography/02-Testing_for_Padding_Oracle.md",
+    "section_path": "4.9.2"
+  },
+  {
+    "id": "WSTG-CRYP-03",
+    "title": "Testing for Sensitive Information Sent via Unencrypted Channels",
+    "description": "OWASP WSTG: Testing for Sensitive Information Sent via Unencrypted Channels. Full methodology at canonical_url.",
+    "level": 1,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "cryptography",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {
+      "asvs": [
+        "9.1.1"
+      ],
+      "cwe-top-25": [
+        "CWE-319"
+      ]
+    },
+    "detection_methods": [
+      "Find HTTP (non-S) requests, plaintext credential storage, plaintext PII in logs, unencrypted DB columns for sensitive fields."
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/09-Testing_for_Weak_Cryptography/03-Testing_for_Sensitive_Information_Sent_via_Unencrypted_Channels",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/09-Testing_for_Weak_Cryptography/03-Testing_for_Sensitive_Information_Sent_via_Unencrypted_Channels.md",
+    "section_path": "4.9.3"
+  },
+  {
+    "id": "WSTG-CRYP-04",
+    "title": "Testing for Weak Cryptographic Primitives",
+    "description": "OWASP WSTG: Testing for Weak Cryptographic Primitives. Full methodology at canonical_url.",
+    "level": 1,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "cryptography",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {
+      "asvs": [
+        "6.2.1",
+        "6.2.2",
+        "6.2.3"
+      ],
+      "cwe-top-25": [
+        "CWE-327"
+      ]
+    },
+    "detection_methods": [
+      "Search for MD5, SHA1, DES, RC4, ECB mode, hardcoded IVs, hardcoded keys, weak random (random.random for security)."
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/09-Testing_for_Weak_Cryptography/04-Testing_for_Weak_Cryptographic_Primitives",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/09-Testing_for_Weak_Cryptography/04-Testing_for_Weak_Cryptographic_Primitives.md",
+    "section_path": "4.9.4"
+  },
+  {
+    "id": "WSTG-BUSL-01",
+    "title": "Test Business Logic Data Validation",
+    "description": "OWASP WSTG: Test Business Logic Data Validation. Full methodology at canonical_url.",
+    "level": 2,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "business logic",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/10-Business_Logic_Testing/01-Test_Business_Logic_Data_Validation"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/10-Business_Logic_Testing/01-Test_Business_Logic_Data_Validation",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/10-Business_Logic_Testing/01-Test_Business_Logic_Data_Validation.md",
+    "section_path": "4.10.1"
+  },
+  {
+    "id": "WSTG-BUSL-02",
+    "title": "Test Ability to Forge Requests",
+    "description": "OWASP WSTG: Test Ability to Forge Requests. Full methodology at canonical_url.",
+    "level": 2,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "business logic",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/10-Business_Logic_Testing/02-Test_Ability_to_Forge_Requests"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/10-Business_Logic_Testing/02-Test_Ability_to_Forge_Requests",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/10-Business_Logic_Testing/02-Test_Ability_to_Forge_Requests.md",
+    "section_path": "4.10.2"
+  },
+  {
+    "id": "WSTG-BUSL-03",
+    "title": "Test Integrity Checks",
+    "description": "OWASP WSTG: Test Integrity Checks. Full methodology at canonical_url.",
+    "level": 2,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "business logic",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/10-Business_Logic_Testing/03-Test_Integrity_Checks"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/10-Business_Logic_Testing/03-Test_Integrity_Checks",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/10-Business_Logic_Testing/03-Test_Integrity_Checks.md",
+    "section_path": "4.10.3"
+  },
+  {
+    "id": "WSTG-BUSL-04",
+    "title": "Test for Process Timing",
+    "description": "OWASP WSTG: Test for Process Timing. Full methodology at canonical_url.",
+    "level": 3,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "business logic",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/10-Business_Logic_Testing/04-Test_for_Process_Timing"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/10-Business_Logic_Testing/04-Test_for_Process_Timing",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/10-Business_Logic_Testing/04-Test_for_Process_Timing.md",
+    "section_path": "4.10.4"
+  },
+  {
+    "id": "WSTG-BUSL-05",
+    "title": "Test Number of Times a Function Can Be Used Limits",
+    "description": "OWASP WSTG: Test Number of Times a Function Can Be Used Limits. Full methodology at canonical_url.",
+    "level": 2,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "business logic",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/10-Business_Logic_Testing/05-Test_Number_of_Times_a_Function_Can_Be_Used_Limits"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/10-Business_Logic_Testing/05-Test_Number_of_Times_a_Function_Can_Be_Used_Limits",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/10-Business_Logic_Testing/05-Test_Number_of_Times_a_Function_Can_Be_Used_Limits.md",
+    "section_path": "4.10.5"
+  },
+  {
+    "id": "WSTG-BUSL-06",
+    "title": "Testing for the Circumvention of Work Flows",
+    "description": "OWASP WSTG: Testing for the Circumvention of Work Flows. Full methodology at canonical_url.",
+    "level": 2,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "business logic",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/10-Business_Logic_Testing/06-Testing_for_the_Circumvention_of_Work_Flows"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/10-Business_Logic_Testing/06-Testing_for_the_Circumvention_of_Work_Flows",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/10-Business_Logic_Testing/06-Testing_for_the_Circumvention_of_Work_Flows.md",
+    "section_path": "4.10.6"
+  },
+  {
+    "id": "WSTG-BUSL-07",
+    "title": "Test Defenses Against Application Misuse",
+    "description": "OWASP WSTG: Test Defenses Against Application Misuse. Full methodology at canonical_url.",
+    "level": 3,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "business logic",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/10-Business_Logic_Testing/07-Test_Defenses_Against_Application_Misuse"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/10-Business_Logic_Testing/07-Test_Defenses_Against_Application_Misuse",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/10-Business_Logic_Testing/07-Test_Defenses_Against_Application_Misuse.md",
+    "section_path": "4.10.7"
+  },
+  {
+    "id": "WSTG-BUSL-08",
+    "title": "Test Upload of Unexpected File Types",
+    "description": "OWASP WSTG: Test Upload of Unexpected File Types. Full methodology at canonical_url.",
+    "level": 2,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "business logic",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/10-Business_Logic_Testing/08-Test_Upload_of_Unexpected_File_Types"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/10-Business_Logic_Testing/08-Test_Upload_of_Unexpected_File_Types",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/10-Business_Logic_Testing/08-Test_Upload_of_Unexpected_File_Types.md",
+    "section_path": "4.10.8"
+  },
+  {
+    "id": "WSTG-BUSL-09",
+    "title": "Test Upload of Malicious Files",
+    "description": "OWASP WSTG: Test Upload of Malicious Files. Full methodology at canonical_url.",
+    "level": 2,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "business logic",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/10-Business_Logic_Testing/09-Test_Upload_of_Malicious_Files"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/10-Business_Logic_Testing/09-Test_Upload_of_Malicious_Files",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/10-Business_Logic_Testing/09-Test_Upload_of_Malicious_Files.md",
+    "section_path": "4.10.9"
+  },
+  {
+    "id": "WSTG-BUSL-10",
+    "title": "Test Payment Functionality",
+    "description": "OWASP WSTG: Test Payment Functionality. Full methodology at canonical_url.",
+    "level": 3,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "business logic",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/10-Business_Logic_Testing/10-Test-Payment-Functionality"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/10-Business_Logic_Testing/10-Test-Payment-Functionality",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/10-Business_Logic_Testing/10-Test-Payment-Functionality.md",
+    "section_path": "4.10.10"
+  },
+  {
+    "id": "WSTG-CLNT-01",
+    "title": "Testing for DOM-Based Cross Site Scripting",
+    "description": "OWASP WSTG: Testing for DOM-Based Cross Site Scripting. Full methodology at canonical_url.",
+    "level": 1,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "client-side",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {
+      "asvs": [
+        "5.3.3"
+      ],
+      "cwe-top-25": [
+        "CWE-79"
+      ]
+    },
+    "detection_methods": [
+      "Find client-side use of location.hash, document.URL, window.name written to innerHTML, document.write, eval, or Function()."
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/11-Client-side_Testing/01-Testing_for_DOM-based_Cross_Site_Scripting",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/11-Client-side_Testing/01-Testing_for_DOM-based_Cross_Site_Scripting.md",
+    "section_path": "4.11.1"
+  },
+  {
+    "id": "WSTG-CLNT-01.1",
+    "title": "Testing for Self DOM Based Cross-Site Scripting",
+    "description": "OWASP WSTG: Testing for Self DOM Based Cross-Site Scripting. Full methodology at canonical_url.",
+    "level": 3,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "client-side",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/11-Client-side_Testing/01.1-Testing_for_Self_DOM_Based_Cross_Site_Scripting"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/11-Client-side_Testing/01.1-Testing_for_Self_DOM_Based_Cross_Site_Scripting",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/11-Client-side_Testing/01.1-Testing_for_Self_DOM_Based_Cross_Site_Scripting.md",
+    "section_path": "4.11.1.1",
+    "parent_id": "WSTG-CLNT-01"
+  },
+  {
+    "id": "WSTG-CLNT-02",
+    "title": "Testing for JavaScript Execution",
+    "description": "OWASP WSTG: Testing for JavaScript Execution. Full methodology at canonical_url.",
+    "level": 2,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "client-side",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/11-Client-side_Testing/02-Testing_for_JavaScript_Execution"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/11-Client-side_Testing/02-Testing_for_JavaScript_Execution",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/11-Client-side_Testing/02-Testing_for_JavaScript_Execution.md",
+    "section_path": "4.11.2"
+  },
+  {
+    "id": "WSTG-CLNT-03",
+    "title": "Testing for HTML Injection",
+    "description": "OWASP WSTG: Testing for HTML Injection. Full methodology at canonical_url.",
+    "level": 2,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "client-side",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/11-Client-side_Testing/03-Testing_for_HTML_Injection"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/11-Client-side_Testing/03-Testing_for_HTML_Injection",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/11-Client-side_Testing/03-Testing_for_HTML_Injection.md",
+    "section_path": "4.11.3"
+  },
+  {
+    "id": "WSTG-CLNT-04",
+    "title": "Testing for Client-side URL Redirect",
+    "description": "OWASP WSTG: Testing for Client-side URL Redirect. Full methodology at canonical_url.",
+    "level": 2,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "client-side",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/11-Client-side_Testing/04-Testing_for_Client-side_URL_Redirect"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/11-Client-side_Testing/04-Testing_for_Client-side_URL_Redirect",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/11-Client-side_Testing/04-Testing_for_Client-side_URL_Redirect.md",
+    "section_path": "4.11.4"
+  },
+  {
+    "id": "WSTG-CLNT-05",
+    "title": "Testing for CSS Injection",
+    "description": "OWASP WSTG: Testing for CSS Injection. Full methodology at canonical_url.",
+    "level": 3,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "client-side",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/11-Client-side_Testing/05-Testing_for_CSS_Injection"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/11-Client-side_Testing/05-Testing_for_CSS_Injection",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/11-Client-side_Testing/05-Testing_for_CSS_Injection.md",
+    "section_path": "4.11.5"
+  },
+  {
+    "id": "WSTG-CLNT-06",
+    "title": "Testing for Client-side Resource Manipulation",
+    "description": "OWASP WSTG: Testing for Client-side Resource Manipulation. Full methodology at canonical_url.",
+    "level": 2,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "client-side",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/11-Client-side_Testing/06-Testing_for_Client-side_Resource_Manipulation"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/11-Client-side_Testing/06-Testing_for_Client-side_Resource_Manipulation",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/11-Client-side_Testing/06-Testing_for_Client-side_Resource_Manipulation.md",
+    "section_path": "4.11.6"
+  },
+  {
+    "id": "WSTG-CLNT-07",
+    "title": "Testing Cross Origin Resource Sharing",
+    "description": "OWASP WSTG: Testing Cross Origin Resource Sharing. Full methodology at canonical_url.",
+    "level": 1,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "client-side",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {
+      "asvs": [
+        "14.5.3"
+      ]
+    },
+    "detection_methods": [
+      "Search for Access-Control-Allow-Origin: * with Access-Control-Allow-Credentials: true; reflected origins without allowlist."
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/11-Client-side_Testing/07-Testing_Cross_Origin_Resource_Sharing",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/11-Client-side_Testing/07-Testing_Cross_Origin_Resource_Sharing.md",
+    "section_path": "4.11.7"
+  },
+  {
+    "id": "WSTG-CLNT-08",
+    "title": "Testing for Cross Site Flashing",
+    "description": "OWASP WSTG: Testing for Cross Site Flashing. Full methodology at canonical_url.",
+    "level": 3,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "client-side",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/11-Client-side_Testing/08-Testing_for_Cross_Site_Flashing"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/11-Client-side_Testing/08-Testing_for_Cross_Site_Flashing",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/11-Client-side_Testing/08-Testing_for_Cross_Site_Flashing.md",
+    "section_path": "4.11.8"
+  },
+  {
+    "id": "WSTG-CLNT-09",
+    "title": "Testing for Clickjacking",
+    "description": "OWASP WSTG: Testing for Clickjacking. Full methodology at canonical_url.",
+    "level": 1,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "client-side",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {
+      "asvs": [
+        "14.4.6"
+      ]
+    },
+    "detection_methods": [
+      "Verify pages set X-Frame-Options or CSP frame-ancestors, especially state-changing or auth-sensitive pages."
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/11-Client-side_Testing/09-Testing_for_Clickjacking",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/11-Client-side_Testing/09-Testing_for_Clickjacking.md",
+    "section_path": "4.11.9"
+  },
+  {
+    "id": "WSTG-CLNT-10",
+    "title": "Testing WebSockets",
+    "description": "OWASP WSTG: Testing WebSockets. Full methodology at canonical_url.",
+    "level": 2,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "client-side",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/11-Client-side_Testing/10-Testing_WebSockets"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/11-Client-side_Testing/10-Testing_WebSockets",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/11-Client-side_Testing/10-Testing_WebSockets.md",
+    "section_path": "4.11.10"
+  },
+  {
+    "id": "WSTG-CLNT-11",
+    "title": "Testing Web Messaging",
+    "description": "OWASP WSTG: Testing Web Messaging. Full methodology at canonical_url.",
+    "level": 2,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "client-side",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/11-Client-side_Testing/11-Testing_Web_Messaging"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/11-Client-side_Testing/11-Testing_Web_Messaging",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/11-Client-side_Testing/11-Testing_Web_Messaging.md",
+    "section_path": "4.11.11"
+  },
+  {
+    "id": "WSTG-CLNT-12",
+    "title": "Testing Browser Storage",
+    "description": "OWASP WSTG: Testing Browser Storage. Full methodology at canonical_url.",
+    "level": 2,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "client-side",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/11-Client-side_Testing/12-Testing_Browser_Storage"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/11-Client-side_Testing/12-Testing_Browser_Storage",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/11-Client-side_Testing/12-Testing_Browser_Storage.md",
+    "section_path": "4.11.12"
+  },
+  {
+    "id": "WSTG-CLNT-13",
+    "title": "Testing for Cross Site Script Inclusion",
+    "description": "OWASP WSTG: Testing for Cross Site Script Inclusion. Full methodology at canonical_url.",
+    "level": 3,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "client-side",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/11-Client-side_Testing/13-Testing_for_Cross_Site_Script_Inclusion"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/11-Client-side_Testing/13-Testing_for_Cross_Site_Script_Inclusion",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/11-Client-side_Testing/13-Testing_for_Cross_Site_Script_Inclusion.md",
+    "section_path": "4.11.13"
+  },
+  {
+    "id": "WSTG-CLNT-14",
+    "title": "Testing for Reverse Tabnabbing",
+    "description": "OWASP WSTG: Testing for Reverse Tabnabbing. Full methodology at canonical_url.",
+    "level": 2,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "client-side",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/11-Client-side_Testing/14-Testing_for_Reverse_Tabnabbing"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/11-Client-side_Testing/14-Testing_for_Reverse_Tabnabbing",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/11-Client-side_Testing/14-Testing_for_Reverse_Tabnabbing.md",
+    "section_path": "4.11.14"
+  },
+  {
+    "id": "WSTG-CLNT-15",
+    "title": "Testing for Client-side Template Injection",
+    "description": "OWASP WSTG: Testing for Client-side Template Injection. Full methodology at canonical_url.",
+    "level": 2,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "client-side",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/11-Client-side_Testing/15-Testing_for_Client-Side_Template_Injection"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/11-Client-side_Testing/15-Testing_for_Client-Side_Template_Injection",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/11-Client-side_Testing/15-Testing_for_Client-Side_Template_Injection.md",
+    "section_path": "4.11.15"
+  },
+  {
+    "id": "WSTG-APIT-01",
+    "title": "API Reconnaissance",
+    "description": "OWASP WSTG: API Reconnaissance. Full methodology at canonical_url.",
+    "level": 2,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "api",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/12-API_Testing/01-API_Reconnaissance"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/12-API_Testing/01-API_Reconnaissance",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/12-API_Testing/01-API_Reconnaissance.md",
+    "section_path": "4.12.1"
+  },
+  {
+    "id": "WSTG-APIT-02",
+    "title": "API Broken Object Level Authorization",
+    "description": "OWASP WSTG: API Broken Object Level Authorization. Full methodology at canonical_url.",
+    "level": 1,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "api",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {
+      "asvs": [
+        "4.1.1",
+        "4.2.1"
+      ],
+      "api-top-10": [
+        "API1"
+      ]
+    },
+    "detection_methods": [
+      "For each API endpoint accepting an object ID, verify ownership/permission check before action."
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/12-API_Testing/02-API_Broken_Object_Level_Authorization",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/12-API_Testing/02-API_Broken_Object_Level_Authorization.md",
+    "section_path": "4.12.2"
+  },
+  {
+    "id": "WSTG-APIT-03",
+    "title": "Testing for Excessive Data Exposure",
+    "description": "OWASP WSTG: Testing for Excessive Data Exposure. Full methodology at canonical_url.",
+    "level": 1,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "api",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {
+      "asvs": [
+        "8.1.6"
+      ],
+      "api-top-10": [
+        "API3"
+      ]
+    },
+    "detection_methods": [
+      "Find API responses that return whole records. Check for serializer field allowlists; flag select_all / *.dict() patterns."
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/12-API_Testing/03-Testing_for_Excessive_Data_Exposure",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/12-API_Testing/03-Testing_for_Excessive_Data_Exposure.md",
+    "section_path": "4.12.3"
+  },
+  {
+    "id": "WSTG-APIT-04",
+    "title": "API Broken Function Level Authorization",
+    "description": "OWASP WSTG: API Broken Function Level Authorization. Full methodology at canonical_url.",
+    "level": 1,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "api",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {
+      "asvs": [
+        "4.1.2"
+      ],
+      "api-top-10": [
+        "API5"
+      ]
+    },
+    "detection_methods": [
+      "Compare admin vs user endpoint authorization. Look for endpoints whose only protection is URL obscurity or client-side hiding."
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/12-API_Testing/04-API_Broken_Function_Level_Authorization",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/12-API_Testing/04-API_Broken_Function_Level_Authorization.md",
+    "section_path": "4.12.4"
+  },
+  {
+    "id": "WSTG-APIT-99",
+    "title": "Testing GraphQL",
+    "description": "OWASP WSTG: Testing GraphQL. Full methodology at canonical_url.",
+    "level": 2,
+    "spec": "wstg",
+    "spec_version": "latest",
+    "category": "api",
+    "languages": [
+      "all"
+    ],
+    "cross_references": {},
+    "detection_methods": [
+      "See methodology at https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/12-API_Testing/99-Testing_GraphQL"
+    ],
+    "static_review_applicable": true,
+    "canonical_url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/12-API_Testing/99-Testing_GraphQL",
+    "source_url": "https://github.com/OWASP/www-project-web-security-testing-guide/blob/master/latest/4-Web_Application_Security_Testing/12-API_Testing/99-Testing_GraphQL.md",
+    "section_path": "4.12.99"
+  }
+]
