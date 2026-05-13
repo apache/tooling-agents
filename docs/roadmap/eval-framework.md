@@ -14,6 +14,24 @@ In the LLM context, an eval is a repeatable measurement of output quality agains
 
 This is different from traditional unit testing. LLM outputs are non-deterministic — the same input can produce different (but equivalent) findings across runs. Evals need to measure semantic correctness, not string equality.
 
+## Prior Art
+
+Potentially useful starting points from [ai-discuss](https://lists.apache.org/thread/85bnlfr4jb647lsppfkg19qzk8k3x122):
+
+[1]: https://inspect.aisi.org.uk/
+[2]: https://github.com/apache/sling-whiteboard/tree/master/skill-evals
+[3]: https://inspect.aisi.org.uk/providers.html
+[4]:
+https://github.com/apache/sling-whiteboard/blob/master/skill-evals/src/skill_evals/jcr_js_nodetypes/dataset.jsonl
+[5]:
+https://github.com/apache/sling-whiteboard/blob/master/skill-evals/src/skill_evals/jcr_js_nodetypes/Dockerfile
+[6]:
+https://github.com/apache/sling-whiteboard/blob/master/skill-evals/src/skill_evals/jcr_js_nodetypes/scorer.py
+[7]: https://inspect.aisi.org.uk/scorers.html
+[8]:
+https://github.com/apache/sling-whiteboard/blob/master/skill-evals/src/skill_evals/compare_eval_runs.py
+[9]: https://gist.github.com/rombert/c099c13013fbdf27445816c976005aba
+
 ## Eval Architecture
 
 ```
