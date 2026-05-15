@@ -40,17 +40,15 @@ This consolidated report presents the results of an automated security audit of 
 
 All findings are mapped to **L1** requirements. The audit scope encompassed the following domains: execution API authentication, TLS transport security, secrets encryption and storage, IPC subprocess isolation, session and state management, authorization and access control, plugin dynamic loading, Jinja template sandboxing, API input validation, output encoding and injection prevention, file upload handling, resource management limits, deployment configuration security, memory safety in native code, OAuth/OIDC flows, password/credential management, secrets masking in logging, browser client security, data protection in transit and at rest, business logic flow control, and GraphQL/WebSocket APIs.
 
-### Top 5 Risks
+### Top Risks
 
-1. **[Critical] Overtime Enforcement Bypass ():** The overtime enforcement control exists but is not applied to `DeferTask` and `RescheduleTask` operations, allowing tasks to potentially bypass execution time limits — a business logic flaw that could lead to resource exhaustion or denial of service.
+1. **[High] Bearer Token Transmission Over Plaintext (FINDING-002):** The client does not validate that `base_url` uses an HTTPS scheme, meaning bearer tokens could be transmitted over unencrypted HTTP connections, exposing credentials to network-level interception.
 
-2. **[High] Bearer Token Transmission Over Plaintext (FINDING-002):** The client does not validate that `base_url` uses an HTTPS scheme, meaning bearer tokens could be transmitted over unencrypted HTTP connections, exposing credentials to network-level interception.
+2. **[High] SecretCache Lacks Session Cleanup (FINDING-003):** The `SecretCache` has no explicit cleanup mechanism tied to session termination, leaving decrypted secrets in memory beyond their intended lifecycle.
 
-3. **[High] SecretCache Lacks Session Cleanup (FINDING-003):** The `SecretCache` has no explicit cleanup mechanism tied to session termination, leaving decrypted secrets in memory beyond their intended lifecycle.
+3. **[Medium] Token Refresh Without Signature Verification (FINDING-004):** Refreshed tokens from the server are accepted and used without client-side signature verification, relying entirely on transport-layer security for token integrity.
 
-4. **[Medium] Token Refresh Without Signature Verification (FINDING-004):** Refreshed tokens from the server are accepted and used without client-side signature verification, relying entirely on transport-layer security for token integrity.
-
-5. **[Medium] No TLS Minimum Version Enforcement (FINDING-005):** The implementation relies on Python/OpenSSL defaults for TLS version negotiation without explicitly enforcing a minimum of TLS 1.2, potentially allowing downgrade attacks in environments with outdated library versions.
+4. **[Medium] No TLS Minimum Version Enforcement (FINDING-005):** The implementation relies on Python/OpenSSL defaults for TLS version negotiation without explicitly enforcing a minimum of TLS 1.2, potentially allowing downgrade attacks in environments with outdated library versions.
 
 ### Positive Security Controls
 
