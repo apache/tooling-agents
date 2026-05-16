@@ -15,26 +15,19 @@
 
 ## Executive Summary
 
-### Severity Distribution
-
-| Severity | Count | Percentage |
-|----------|-------|------------| Medium | 24 | 46.2% | Info | 0 | 0.0% |
-
 ### Level Coverage
 
 All 52 findings map to ASVS Level 1 (L1) requirements. The audit scope was bounded to L1 controls, covering foundational security verification across 12 directories encompassing authentication, authorization, session management, cryptographic operations, transport security, input validation, secrets management, and deployment configuration.
 
-### Top 5 Risks
+### Top Risks
 
-1. **Token Revocation Check Missing from Validation Path (Critical):** The revocation infrastructure exists (RevokedToken model, revoke_token method) but the validation path does not query the revocation table, meaning revoked tokens remain usable until natural expiry. This undermines logout, account termination, and incident response capabilities.
+1. **JWT Refresh Does Not Invalidate Previous Token (FINDING-002, High):** Token refresh issues a new token without revoking the predecessor, creating a window where both old and new tokens are valid simultaneously. This enables replay attacks and makes token theft difficult to remediate.
 
-2. **JWT Refresh Does Not Invalidate Previous Token (FINDING-002, High):** Token refresh issues a new token without revoking the predecessor, creating a window where both old and new tokens are valid simultaneously. This enables replay attacks and makes token theft difficult to remediate.
+2. **Algorithm Blocklist Not Implemented (FINDING-004, High):** The `none` algorithm is not explicitly blocked at the configuration or validation layer. Combined with the GUESS mode that derives algorithms from JWK metadata, this creates a potential path to signature bypass if key material is misconfigured.
 
-3. **Algorithm Blocklist Not Implemented (FINDING-004, High):** The `none` algorithm is not explicitly blocked at the configuration or validation layer. Combined with the GUESS mode that derives algorithms from JWK metadata, this creates a potential path to signature bypass if key material is misconfigured.
+3. **No Password Change Functionality (FINDING-005/006, High):** Users cannot change their own passwords through any available interface, and current-password verification cannot be satisfied. This prevents credential rotation after suspected compromise and violates fundamental identity management requirements.
 
-4. **No Password Change Functionality (FINDING-005/006, High):** Users cannot change their own passwords through any available interface, and current-password verification cannot be satisfied. This prevents credential rotation after suspected compromise and violates fundamental identity management requirements.
-
-5. **Anonymous Admin Account in All-Admins Mode (FINDING-007, High):** When configured in all-admins mode, an anonymous admin account is created without credentials, granting full administrative access without authentication. This represents a complete authentication bypass in specific deployment configurations.
+4. **Anonymous Admin Account in All-Admins Mode (FINDING-007, High):** When configured in all-admins mode, an anonymous admin account is created without credentials, granting full administrative access without authentication. This represents a complete authentication bypass in specific deployment configurations.
 
 ### Positive Controls Observed
 
