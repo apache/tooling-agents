@@ -586,7 +586,14 @@ async def run(input_dict, tools):
             for c in clusters:
                 label = c.get("label", "(no label)")
                 count = c.get("count", 0)
-                sections = c.get("sections", []) or []
+                # The LLM returns sections per-drop in cluster order, so
+                # the same section id can appear multiple times when
+                # multiple findings under that section cluster together
+                # (observed: "2.4.1, 2.4.1, 1.4.2"). Dedupe and sort for
+                # readable output while keeping the underlying ordering
+                # information available via the example_titles list.
+                raw_sections = c.get("sections", []) or []
+                sections = sorted({s for s in raw_sections if s})
                 examples = c.get("example_titles", []) or []
                 guidance = c.get("suggested_guidance", "(no guidance text generated)")
 
