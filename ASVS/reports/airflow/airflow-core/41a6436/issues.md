@@ -1,287 +1,368 @@
 # Security Issues
 
-## Issue: FINDING-001 - Tokens without `jti` claim bypass revocation check
-**Labels:** bug, security, priority:low
-**Description:**
-
-### Summary
-Tokens from external issuers (via `trusted_jwks_url`) that omit the optional `jti` claim silently skip the revocation check in `get_user_from_token()`. This prevents proper token revocation for externally-issued tokens that don't include the JWT ID claim.
-
-### Details
-- **CWE:** N/A
-- **ASVS:** 7.4.1 (L1)
-- **Affected Files:**
-  - `airflow-core/src/airflow/api_fastapi/auth/managers/base_auth_manager.py`
-  - `airflow-core/src/airflow/api_fastapi/auth/tokens.py`
-
-The `jti` claim is not included in `required_claims`, so tokens without it pass validation but cannot be revoked through Airflow's token revocation mechanism. This creates a gap where some valid tokens cannot be revoked if needed.
-
-### Remediation
-Add `jti` to `required_claims` or log a warning when tokens without `jti` are accepted. Alternatively, reject tokens without `jti` to ensure all tokens in the system can be revoked.
-
-### Acceptance Criteria
-- [ ] Fixed: Either `jti` is required for all tokens, or a warning is logged when tokens without `jti` are accepted
-- [ ] Test added: Unit tests verify behavior for tokens with and without `jti` claim
-- [ ] Documentation updated to clarify token revocation requirements
-
-### References
-- Source Report: 7.4.1.md
-- Related Findings: None
-
-### Priority
-**Low** - External token issuers may not include optional claims, but revocation capability should be consistent across all token sources.
-
 ---
-
-## Issue: FINDING-002 - No mechanism to terminate all active sessions when a user account is disabled or deleted
-**Labels:** bug, security, priority:low
+## Issue: FINDING-001 - No Mechanism to Terminate All Active Sessions on User Account Disable/Delete
+**Labels:** bug, security, priority:high
 **Description:**
-
 ### Summary
-The `base_auth_manager.py` lacks per-user bulk session revocation. While production deployments delegate authentication to external auth managers (FAB, Keycloak) which handle user lifecycle, there is no abstract interface for triggering bulk session termination.
+When an administrator disables or deletes a user account, there is no mechanism to invalidate all active JWT tokens for that user. Existing tokens remain valid until their natural expiration, allowing disabled users to continue accessing the system.
 
 ### Details
-- **CWE:** N/A
-- **ASVS:** 7.4.2 (L1)
-- **Affected Files:**
-  - `airflow-core/src/airflow/api_fastapi/auth/managers/base_auth_manager.py`
-  - `airflow-core/src/airflow/models/revoked_token.py`
+The `RevokedToken` model only supports individual JTI-based revocation with no user-to-JTI mapping or per-user invalidation timestamp. This means:
+- No bulk revocation capability exists for a specific user
+- Account disable/delete operations cannot identify all active sessions for a user
+- Compromised or terminated user accounts can continue API access until token expiration
 
-**Note:** Downgraded from Medium severity because production deployments delegate authentication to external auth managers which handle user lifecycle and session termination. The proof-of-concept scenario relies on SimpleAuthManager which is dev-only.
+**CWE:** CWE-613 (Insufficient Session Expiration)  
+**ASVS:** 7.4.2 (L1)  
+**Affected Files:** `airflow-core/src/airflow/models/revoked_token.py`
 
 ### Remediation
-Add an abstract `revoke_all_user_sessions(user_id)` method to `BaseAuthManager` and implement a per-user not-before timestamp mechanism, enabling production auth managers to trigger bulk session termination on account state changes.
+Implement one of the following approaches:
+1. Add a `UserTokenInvalidation` table with per-user invalidation timestamps checked during JWT validation
+2. Extend `RevokedToken` with a `username` column to support bulk revocation queries
+
+Wire the chosen mechanism into account disable/delete flows to ensure immediate session termination.
 
 ### Acceptance Criteria
-- [ ] Fixed: Abstract method added to `BaseAuthManager` for bulk session revocation
-- [ ] Test added: Unit tests verify the interface contract
-- [ ] Documentation added for auth manager implementers
+- [ ] Per-user session invalidation mechanism implemented
+- [ ] Account disable flow automatically revokes all user sessions
+- [ ] Account delete flow automatically revokes all user sessions
+- [ ] Test added for bulk session revocation
+- [ ] Test added for disabled user token validation failure
 
 ### References
 - Source Report: 7.4.2.md
-- Related Findings: None
+- Related: CWE-613
 
 ### Priority
-**Low** - Production auth managers handle this, but a standard interface would improve consistency.
+High
 
 ---
-
-## Issue: FINDING-003 - Bulk CREATE with `action_on_existence=overwrite` Bypasses Existing Resource Team Authorization Check
+## Issue: FINDING-002 - Unbounded `dag_runs_limit` Parameter Allows Excessive Database Load
 **Labels:** bug, security, priority:low
 **Description:**
-
 ### Summary
-The bulk CREATE+overwrite path skips team lookup for CREATE entities, passing `team_name=None` to the authorization check, potentially allowing cross-team resource overwrites in multi-team mode.
+The `dag_runs_limit` parameter accepts any integer value without an upper bound, allowing authenticated users to request arbitrarily large result sets that could cause excessive database load and memory consumption.
 
 ### Details
-- **CWE:** CWE-639 (Authorization Bypass Through User-Controlled Key)
-- **ASVS:** 8.2.2 (L1)
-- **Affected Files:**
-  - `airflow-core/src/airflow/api_fastapi/core_api/security.py`
+While authentication is required and deployment-level rate limiting is expected, the lack of application-level bounds bypasses pagination controls. An authenticated user could specify `dag_runs_limit=999999` to retrieve massive datasets in a single request.
 
-**Note:** Downgraded from Medium severity because the multi-team feature is documented as experimental/work-in-progress. However, the authorization bypass should be fixed before the feature becomes stable.
-
-When `action_on_existence=overwrite` is used with bulk operations, CREATE entities don't have their team context checked, which could allow users to overwrite resources belonging to other teams.
+**CWE:** CWE-770 (Allocation of Resources Without Limits or Throttling)  
+**ASVS:** 2.2.1 (L1)  
+**Affected Files:** `airflow-core/src/airflow/api_fastapi/core_api/routes/ui/dags.py`
 
 ### Remediation
-Include CREATE entities in the team mapping lookup for all three bulk handlers:
-- `requires_access_connection_bulk`
-- `requires_access_pool_bulk`
-- `requires_access_variable_bulk`
-
-This ensures that when `action_on_existence=overwrite` is used, the authorization check includes the existing resource's team context.
-
-### Acceptance Criteria
-- [ ] Fixed: CREATE entities included in team lookup for all bulk handlers
-- [ ] Test added: Integration tests verify cross-team overwrite protection
-- [ ] Test added: Tests verify authorized same-team overwrites still work
-
-### References
-- Source Report: 8.2.2.md
-- Related Findings: None
-
-### Priority
-**Low** - Multi-team feature is experimental, but should be fixed before stabilization.
-
----
-
-## Issue: FINDING-004 - TaskInstancesBatchBody.page_limit Missing Maximum Enforcement and Documentation
-**Labels:** bug, security, priority:low
-**Description:**
-
-### Summary
-The `page_limit` field in `TaskInstancesBatchBody` has no upper bound enforcement or documentation, unlike `LimitFilter` which clamps to `maximum_page_limit`. An authenticated user could request an extremely large number of task instances in a single response.
-
-### Details
-- **CWE:** CWE-770 (Allocation of Resources Without Limits or Throttling)
-- **ASVS:** 2.1.1, 2.2.1 (L1)
-- **Affected Files:**
-  - `airflow-core/src/airflow/api_fastapi/core_api/datamodels/task_instances.py`
-
-The field declares only a non-negative constraint (`ge=0`) and a default of 100, but does not document or enforce the same `maximum_page_limit` that `LimitFilter` enforces. This could lead to:
-- Memory exhaustion
-- Database performance degradation
-- Inconsistent API behavior between query-parameter and request-body pagination
-
-Additionally, the `order_by` field lacks documentation of valid values.
-
-### Remediation
-1. Apply `Field(default=100, ge=0, le=conf.getint('api', 'maximum_page_limit'))` constraint to `TaskInstancesBatchBody.page_limit`
-2. Add description documenting the upper bound
-3. Document valid `order_by` values in the field description to match `LimitFilter` protection
-
-### Acceptance Criteria
-- [ ] Fixed: Maximum limit enforced on `page_limit` field
-- [ ] Test added: Tests verify rejection of excessive page_limit values
-- [ ] Documentation updated: Field descriptions include valid ranges and values
-
-### References
-- Source Reports: 2.1.1.md, 2.2.1.md
-- Related Findings: None
-
-### Priority
-**Low** - Authenticated users only, but resource exhaustion is possible.
-
----
-
-## Issue: FINDING-005 - URL Protocol Validation Depends on External Regex Pattern
-**Labels:** bug, security, priority:low
-**Description:**
-
-### Summary
-The `renderStructuredLog.tsx` component creates clickable links from URLs found in log content without explicit protocol allowlist validation. If the external `urlRegex` could match `javascript:` or `data:` URLs, clicking a link in task logs could trigger script execution.
-
-### Details
-- **CWE:** CWE-79 (Cross-site Scripting)
-- **ASVS:** 1.2.2 (L1)
-- **Affected Files:**
-  - `airflow-core/src/airflow/ui/src/components/renderStructuredLog.tsx` (line 52)
-
-The function relies entirely on `urlRegex` (imported from `src/constants/urlRegex`) to identify URLs. There is no explicit protocol allowlist validation (e.g., only `https://` or `http://`) applied before setting the `href` attribute.
-
-Given that DAG Authors are trusted, this is a cross-trust-boundary concern only in multi-team deployments where Operations Users may view logs from untrusted DAG Authors.
-
-### Remediation
-Add explicit protocol allowlist validation before creating clickable links:
-
-```typescript
-const SAFE_PROTOCOLS = /^https?:\/\//i;
-
-const addAnsiWithLinks = (line: string) => {
-  const urlMatches = [...line.matchAll(urlRegex)];
-  const url = match[0];
-  if (SAFE_PROTOCOLS.test(url)) {
-    elements.push(
-      <Link href={url} rel="noopener noreferrer" target="_blank">
-        {url}
-      </Link>,
-    );
-  } else {
-    elements.push(
-      <AnsiRenderer linkify={false}>{url}</AnsiRenderer>,
-    );
-  }
-};
+Add upper bound validation to the parameter definition:
+```python
+dag_runs_limit: Annotated[int, Query(ge=1, le=100, description="Number of recent DAG runs per DAG")] = 10
 ```
 
 ### Acceptance Criteria
-- [ ] Fixed: Protocol allowlist validation added before creating links
-- [ ] Test added: Unit tests verify rejection of `javascript:` and `data:` URLs
-- [ ] Test added: Tests verify `http://` and `https://` URLs work correctly
+- [ ] Fixed: Upper bound (e.g., 100) added to `dag_runs_limit` parameter
+- [ ] Test added verifying requests above limit are rejected with 422
+- [ ] Test added verifying valid values within range are accepted
+- [ ] Documentation updated with parameter limits
+
+### References
+- Source Report: 2.2.1.md
+- Related Findings: FINDING-003
+
+### Priority
+Low
+
+---
+## Issue: FINDING-003 - Unbounded `run_ids` List in Streaming Endpoint Allows Excessive Sequential Processing
+**Labels:** bug, security, priority:low
+**Description:**
+### Summary
+The `run_ids` query parameter accepts an unbounded list of strings, allowing authenticated attackers to submit thousands of run IDs that cause resource exhaustion through sequential processing overhead.
+
+### Details
+Each iteration in the endpoint opens a database session and executes queries. With no length limit on the `run_ids` list, a worker thread can be tied up for extended periods processing an excessive number of IDs.
+
+**CWE:** CWE-770 (Allocation of Resources Without Limits or Throttling)  
+**ASVS:** 2.2.1 (L1)  
+**Affected Files:** `airflow-core/src/airflow/api_fastapi/core_api/routes/ui/grid.py`
+
+### Remediation
+Add length limit to the parameter:
+```python
+run_ids: Annotated[list[str] | None, Query(max_length=100)] = None
+```
+Or validate at function start before processing.
+
+### Acceptance Criteria
+- [ ] Fixed: Maximum length (e.g., 100) added to `run_ids` parameter
+- [ ] Test added verifying requests with excessive IDs are rejected
+- [ ] Test added verifying valid requests within limit work correctly
+- [ ] Documentation updated with parameter limits
+
+### References
+- Source Report: 2.2.1.md
+- Related Findings: FINDING-002
+
+### Priority
+Low
+
+---
+## Issue: FINDING-004 - Missing `rel` and `target` Attributes on Markdown-Rendered Links
+**Labels:** bug, security, priority:low
+**Description:**
+### Summary
+Markdown-rendered links in DAG descriptions lack `rel="noopener noreferrer"` attributes, allowing opened pages to access `window.opener` and potentially perform reverse tabnabbing attacks.
+
+### Details
+When users middle-click or browser extensions open markdown links in new tabs, the target page can execute `window.opener.location = 'https://phishing.example.com'` to navigate the original Airflow tab.
+
+While `react-markdown` already sanitizes `javascript:` and `data:` protocols, this is a defense-in-depth issue. A DAG description containing `[Click here](https://attacker.example.com)` renders without proper security attributes.
+
+**ASVS:** 1.2.1 (L1)  
+**Affected Files:** `airflow-core/src/airflow/ui/src/components/ReactMarkdown.tsx:47-54`
+
+### Remediation
+Update the `LinkComponent` to include security attributes:
+```tsx
+<Link 
+  color="fg.info" 
+  fontWeight="bold" 
+  href={href} 
+  rel="noopener noreferrer" 
+  target="_blank" 
+  title={title}
+>
+  {children}
+</Link>
+```
+
+### Acceptance Criteria
+- [ ] Fixed: `rel="noopener noreferrer"` and `target="_blank"` added to Link component
+- [ ] Test added verifying rendered links include security attributes
+- [ ] Manual test confirming `window.opener` is null in opened tabs
+
+### References
+- Source Report: 1.2.1.md
+
+### Priority
+Low
+
+---
+## Issue: FINDING-005 - Missing URL Encoding for mapIndex Parameter in Iframe URL Construction
+**Labels:** bug, security, priority:low
+**Description:**
+### Summary
+The `mapIndex` parameter is directly substituted into iframe src URLs without `encodeURIComponent()` encoding, while other parameters are properly encoded, potentially allowing query parameter injection.
+
+### Details
+Data flows from URL path parameter (user-controlled) through `useParams()` to `mapIndex` and is directly substituted into iframe src. If a plugin defines href with `{MAP_INDEX}` placeholder, a user could inject additional query parameters.
+
+Impact is limited by iframe sandbox (`allow-scripts allow-same-origin allow-forms`) and the base template coming from trusted plugin configuration.
+
+**ASVS:** 1.2.2 (L1)  
+**Affected Files:** `airflow-core/src/airflow/ui/src/pages/Iframe.tsx:43`
+
+### Remediation
+Apply `encodeURIComponent` to the `mapIndex` parameter:
+```typescript
+if (mapIndex !== undefined) {
+  src = src.replaceAll("{MAP_INDEX}", encodeURIComponent(mapIndex));
+}
+```
+
+### Acceptance Criteria
+- [ ] Fixed: `encodeURIComponent()` applied to `mapIndex` parameter
+- [ ] Test added with special characters in mapIndex verifying proper encoding
+- [ ] Test added attempting parameter injection to verify it's blocked
 
 ### References
 - Source Report: 1.2.2.md
-- Related Findings: None
 
 ### Priority
-**Low** - Requires multi-team deployment with untrusted DAG Authors viewing each other's logs.
+Low
 
 ---
-
-## Issue: FINDING-006 - No Explicit Anti-Forgery Token Mechanism Visible for Cookie-Authenticated Endpoints
+## Issue: FINDING-006 - JWKS URL Mode Lacks Explicit Static Algorithm Allowlist
 **Labels:** bug, security, priority:low
 **Description:**
-
 ### Summary
-No visible explicit anti-forgery token mechanism for cookie-authenticated core API endpoints. The application relies on CORS preflight and JSON content-type requirements for CSRF protection, but this strategy is not explicitly documented.
+When using `trusted_jwks_url` without explicitly setting `jwt_algorithm`, the effective algorithm allowlist is whatever algorithms appear in the JWKS keys, providing no defense-in-depth against JWKS endpoint compromise.
 
 ### Details
-- **CWE:** CWE-352 (Cross-Site Request Forgery)
-- **ASVS:** 3.5.1 (L1)
-- **Affected Files:**
-  - `airflow-core/src/airflow/api_fastapi/core_api/app.py`
+If the JWKS endpoint is compromised or serves keys with unexpected algorithms, tokens signed with those algorithms would be accepted. The current implementation uses `["GUESS"]` mode which accepts any algorithm present in the JWKS.
 
-**Note:** Downgraded from Medium severity because the application relies on CORS preflight (deferred to 3.5.2), and FastAPI's JSON body requirement provides implicit preflight triggering for most endpoints.
-
-Auth manager middlewares may provide additional protection but implementation is not visible in the audited code.
+**CWE:** CWE-757 (Selection of Less-Secure Algorithm During Negotiation)  
+**ASVS:** 9.1.2 (L1)  
+**Affected Files:** `airflow-core/src/airflow/api_fastapi/auth/tokens.py`
 
 ### Remediation
-1. Document the CSRF protection strategy explicitly in code comments and/or security documentation
-2. Consider adding a custom header requirement (e.g., `X-Requested-With`) as defense-in-depth for endpoints that accept no body or optional bodies
+When `trusted_jwks_url` is configured without an explicit `jwt_algorithm`, default to `["RS256", "EdDSA"]` rather than `["GUESS"]` to provide defense-in-depth against JWKS endpoint compromise.
 
 ### Acceptance Criteria
-- [ ] Fixed: CSRF protection strategy documented in code
-- [ ] Test added: Tests verify CSRF protection for cookie-authenticated endpoints
-- [ ] Documentation: Security documentation updated with CSRF protection approach
+- [ ] Fixed: Default algorithm allowlist set to `["RS256", "EdDSA"]` for JWKS mode
+- [ ] Test added verifying only allowed algorithms are accepted
+- [ ] Test added verifying tokens with disallowed algorithms are rejected
+- [ ] Documentation updated explaining algorithm allowlist behavior
 
 ### References
-- Source Report: 3.5.1.md
-- Related Findings: FINDING-007
+- Source Report: 9.1.2.md
 
 ### Priority
-**Low** - Implicit protections exist, but explicit documentation and defense-in-depth would improve security posture.
+Low
 
 ---
-
-## Issue: FINDING-007 - No Content-Type Enforcement Visible at Application Level to Guarantee CORS Preflight
+## Issue: FINDING-007 - No Cookie Security Configuration Visible in Application Initialization
 **Labels:** bug, security, priority:low
 **Description:**
-
 ### Summary
-No explicit middleware rejects CORS-safelisted Content-Types for state-changing requests. While FastAPI's Pydantic parsing rejects incorrect content types at deserialization, endpoints accepting no body (e.g., DELETE with path params) could potentially process cross-origin simple requests without triggering preflight.
+No application-wide cookie security defaults are configured, though this is speculative as no cookies are currently set in the analyzed code (JWT Bearer tokens are used for authentication).
 
 ### Details
-- **CWE:** CWE-352 (Cross-Site Request Forgery)
-- **ASVS:** 3.5.2 (L1)
-- **Affected Files:**
-  - `airflow-core/src/airflow/api_fastapi/core_api/app.py`
+This finding represents a coverage gap rather than a confirmed vulnerability. The codebase uses JWT Bearer tokens for authentication, and no cookies are actually set in the analyzed code. However, if cookies were to be used anywhere in the auth flow, there are no established security defaults.
 
-CORS-safelisted Content-Types include:
-- `application/x-www-form-urlencoded`
-- `multipart/form-data`
-- `text/plain`
-
-Endpoints that don't require a request body (e.g., DELETE operations with only path parameters) may not trigger CORS preflight, potentially allowing CSRF attacks via simple requests.
+**ASVS:** 3.3.1 (L1)  
+**Affected Files:** `airflow-core/src/airflow/api_fastapi/core_api/app.py`
 
 ### Remediation
-Add a middleware that validates Content-Type for state-changing requests, rejecting CORS-safelisted types for sensitive endpoints:
+If cookies are used anywhere in the auth flow, establish application-wide cookie security defaults with:
+- `Secure` attribute (HTTPS only)
+- `HttpOnly` attribute (no JavaScript access)
+- `SameSite` attribute (CSRF protection)
+- `__Host-` or `__Secure-` prefixes
 
+### Acceptance Criteria
+- [ ] Audit completed confirming whether cookies are used in auth flow
+- [ ] If cookies are used: security defaults implemented
+- [ ] If cookies are used: tests added verifying security attributes
+- [ ] Documentation updated clarifying cookie usage (or lack thereof)
+
+### References
+- Source Report: 3.3.1.md
+
+### Priority
+Low
+
+---
+## Issue: FINDING-008 - Unconstrained import_string() in Exception and Trigger Deserialization
+**Labels:** bug, security, priority:low
+**Description:**
+### Summary
+The `BaseSerialization.deserialize()` method uses `import_string()` to dynamically load exception and trigger classes without validating against a whitelist or checking subclass relationships, though exploitation requires database content manipulation.
+
+### Details
+For `AIRFLOW_EXC_SER`, any importable class path can be specified and instantiated with arbitrary args/kwargs. The `BASE_TRIGGER` path similarly loads and instantiates any importable class.
+
+**Context:** Per the project's security model, DAG authors are trusted with code execution. The source data is the metadata database, written exclusively by DagFileProcessorProcess from trusted DAG authors. `import_string()` only loads already-installed modules (not arbitrary code execution like eval()).
+
+This represents a defense-in-depth gap rather than an active vulnerability.
+
+**ASVS:** 1.3.2 (L1)  
+**Affected Files:** `airflow-core/src/airflow/serialization/serialized_objects.py` (within deserialize classmethod)
+
+### Remediation
+Add type validation:
+
+**For exceptions:**
 ```python
-@app.middleware("http")
-async def enforce_content_type(request: Request, call_next):
-    if request.method in ("POST", "PUT", "PATCH", "DELETE"):
-        content_type = request.headers.get("content-type", "").split(";")[0].strip()
-        safelisted = [
-            "application/x-www-form-urlencoded",
-            "multipart/form-data", 
-            "text/plain"
-        ]
-        if content_type in safelisted:
-            return JSONResponse(
-                status_code=415,
-                content={"detail": "Unsupported Content-Type"}
-            )
-    return await call_next(request)
+elif type_ == DAT.AIRFLOW_EXC_SER:
+    exc_cls = import_string(exc_cls_name)
+    if not (isinstance(exc_cls, type) and issubclass(exc_cls, BaseException)):
+        raise TypeError(f"Expected exception class, got {exc_cls_name}")
+    return exc_cls(*args, **kwargs)
+```
+
+**For triggers:**
+```python
+elif type_ == DAT.BASE_TRIGGER:
+    tr_cls = import_string(tr_cls_name)
+    if not (isinstance(tr_cls, type) and issubclass(tr_cls, BaseTrigger)):
+        raise TypeError(f"Expected trigger class, got {tr_cls_name}")
+    return tr_cls(**kwargs)
 ```
 
 ### Acceptance Criteria
-- [ ] Fixed: Middleware added to reject CORS-safelisted Content-Types for state-changing requests
-- [ ] Test added: Tests verify rejection of safelisted Content-Types
-- [ ] Test added: Tests verify accepted Content-Types still work (application/json)
+- [ ] Fixed: Type validation added for exception deserialization
+- [ ] Fixed: Type validation added for trigger deserialization
+- [ ] Test added verifying invalid exception classes are rejected
+- [ ] Test added verifying invalid trigger classes are rejected
+- [ ] Test added verifying valid classes still deserialize correctly
 
 ### References
-- Source Report: 3.5.2.md
-- Related Findings: FINDING-006
+- Source Report: 1.3.2.md
 
 ### Priority
-**Low** - Related to CSRF protection strategy; should be addressed alongside FINDING-006.
+Low
+
+---
+## Issue: FINDING-009 - No Client-Side Cleanup Mechanism for Session Termination Scenarios
+**Labels:** bug, security, priority:low
+**Description:**
+### Summary
+The application does not implement client-side storage cleanup mechanisms for session termination scenarios, though practical security impact is minimal as no authenticated data is stored in browser-accessible storage.
+
+### Details
+The `LogoutModal` performs no explicit client-side storage cleanup before redirecting to server logout. There are no `beforeunload` or 401-response handlers to clear client storage on non-interactive session termination.
+
+**Context:** Audit confirmed that no authenticated data (tokens, credentials) is stored in browser-accessible storage—only UI preferences are stored in localStorage. This represents a defense-in-depth gap rather than an active vulnerability.
+
+**CWE:** CWE-922 (Insecure Storage of Sensitive Information)  
+**ASVS:** 14.3.1 (L1)  
+**Affected Files:** `airflow-core/src/airflow/ui/src/layouts/Nav/LogoutModal.tsx`
+
+### Remediation
+Implement a centralized client-side storage cleanup utility that:
+1. Is invoked in the logout flow before server redirect
+2. Registers a `beforeunload` event handler to clear storage on browser close
+3. Implements an API response interceptor to clear storage on 401 responses
+
+Document the current architecture decision that authentication data is not stored client-side.
+
+### Acceptance Criteria
+- [ ] Fixed: Centralized storage cleanup utility implemented
+- [ ] Fixed: Cleanup invoked on explicit logout
+- [ ] Fixed: `beforeunload` handler registered
+- [ ] Fixed: 401 response interceptor implemented
+- [ ] Test added verifying storage cleared on logout
+- [ ] Documentation updated explaining client-side storage policy
+
+### References
+- Source Report: 14.3.1.md
+
+### Priority
+Low
+
+---
+## Issue: FINDING-010 - DagRun.set_state() Lacks Explicit State Machine Transition Validation
+**Labels:** bug, security, priority:low
+**Description:**
+### Summary
+The `set_state()` method validates that the target state is valid but does not validate that the transition from the current state to the target state is logically valid according to workflow progression rules.
+
+### Details
+While all current callers follow correct patterns, this is a defense-in-depth gap. Invalid state transitions could bypass expected workflow progression. For example, a QUEUED DAG run should not be able to transition directly to SUCCESS without going through RUNNING.
+
+This represents a potential violation of sequential business logic flow enforcement.
+
+**CWE:** CWE-841 (Improper Enforcement of Behavioral Workflow)  
+**ASVS:** 2.3.1 (L1)  
+**Affected Files:** `airflow-core/src/airflow/models/dagrun.py`
+
+### Remediation
+Add explicit state transition validation map in `DagRun.set_state()` to enforce valid transitions. Implement a state machine pattern that validates transitions against allowed paths before allowing state changes.
+
+Example valid transitions:
+- QUEUED → RUNNING, FAILED
+- RUNNING → SUCCESS, FAILED
+- (but not QUEUED → SUCCESS)
+
+### Acceptance Criteria
+- [ ] Fixed: State transition validation map implemented
+- [ ] Fixed: Validation enforced in `set_state()` method
+- [ ] Test added verifying invalid transitions are rejected
+- [ ] Test added verifying all valid transitions still work
+- [ ] Documentation added explaining valid state transitions
+
+### References
+- Source Report: 2.3.1.md
+
+### Priority
+Low
