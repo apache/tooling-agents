@@ -1250,12 +1250,30 @@ async def run(input_dict, tools):
                 asvs_ns = data_store.use_namespace("asvs")
                 all_keys = asvs_ns.list_keys()
                 req_keys = [k for k in all_keys if k.startswith("asvs:requirements:")]
+                skipped_empty = 0
+                skipped_bad_level = []
                 for rk in req_keys:
                     req = asvs_ns.get(rk)
-                    if req:
-                        section_id = rk.replace("asvs:requirements:", "")
+                    if not req:
+                        skipped_empty += 1
+                        continue
+                    section_id = rk.replace("asvs:requirements:", "")
+                    try:
                         asvs_level_cache[section_id] = int(req.get("level", 1))
+                    except (TypeError, ValueError):
+                        # Don't let one malformed entry abort the whole
+                        # cache load; record it and continue so the
+                        # coverage report can warn the operator.
+                        skipped_bad_level.append(section_id)
                 print(f"  Loaded ASVS levels for {len(asvs_level_cache)} sections", flush=True)
+                if skipped_empty or skipped_bad_level:
+                    print(
+                        f"    WARNING: skipped {skipped_empty} empty + "
+                        f"{len(skipped_bad_level)} malformed-level entries "
+                        f"out of {len(req_keys)} keys"
+                        + (f"; malformed: {skipped_bad_level[:10]}" if skipped_bad_level else ""),
+                        flush=True,
+                    )
             except Exception as e:
                 print(f"  WARNING: Could not load ASVS levels: {e}", flush=True)
 
@@ -1579,6 +1597,31 @@ async def run(input_dict, tools):
                 total_sections = sum(len(p.get("asvs_sections", [])) for p in passes)
                 print(f"  Total sections now: {total_sections}", flush=True)
 
+            # Coverage check: confirm every L3 control appears in at least
+            # one pass. The chapter-pass fallback above is supposed to
+            # guarantee this; the check verifies it explicitly and warns
+            # loudly if the asvs_level_cache itself is incomplete (which
+            # would silently reduce coverage without this check).
+            final_covered = set()
+            for p in passes:
+                final_covered.update(p.get("asvs_sections", []))
+            all_set = set(all_level_sections)
+            still_uncovered = sorted(all_set - final_covered)
+            print(
+                f"  Unique L{max_level_num} controls covered: "
+                f"{len(final_covered & all_set)} / {len(all_set)} "
+                f"(controls in ASVS data store at level <= L{max_level_num})",
+                flush=True,
+            )
+            if still_uncovered:
+                print(
+                    f"  WARNING: {len(still_uncovered)} L{max_level_num} "
+                    f"control(s) still uncovered after chapter-pass "
+                    f"fallback: {still_uncovered[:10]}"
+                    f"{'...' if len(still_uncovered) > 10 else ''}",
+                    flush=True,
+                )
+
         # =============================================================
         # Step 3: Audit + push (with parallel section dispatch + bundling)
         # =============================================================
@@ -1845,6 +1888,7 @@ async def run(input_dict, tools):
                 f"reports_namespace: {reports_namespace}",
                 f"source_namespace: {code_namespace}",
                 f"output_directory: {output_directory}",
+                f"source_id: {source_id}",
             ]
             # One PAT covers both jobs: GitHub repo-root fetch (against
             # source_repo) and private-repo push (against private_repo).

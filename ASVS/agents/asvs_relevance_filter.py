@@ -78,6 +78,12 @@ async def run(input_dict, tools):
         reports_namespace = fields.get("reports_namespace") or ""
         source_namespace = fields.get("source_namespace") or ""
         output_directory = fields.get("output_directory") or ""
+        # source_id is used in commit subjects so apache commits@ mailing
+        # list digests can be grepped by audited target. Format matches
+        # what the orchestrator uses for its own pushes:
+        # "owner/repo[/path] @ commit_hash". Fall back to owner_repo if
+        # not passed (older orchestrators) so the filter still works.
+        source_id = fields.get("source_id") or owner_repo or "unknown"
         guidance_raw = fields.get("audit_guidance_namespaces") or ""
         try:
             batch_max_chars = int(fields.get("batch_max_chars") or "120000")
@@ -94,6 +100,52 @@ async def run(input_dict, tools):
             output_directory = reports_namespace.split(":", 1)[-1]
 
         owner_repo_root = "/".join(owner_repo.split("/", 2)[:2]) if owner_repo else ""
+
+        # Validate guidance namespaces against the repo being audited.
+        # Bug observed in production: a stale supplementalData value
+        # carried airflow's audit_guidance namespace into a log4net
+        # audit, so airflow's "DAG authors are trusted" policy was
+        # applied to a .NET logging library and dropped legitimate
+        # findings. Reject any audit_guidance:{project} namespace
+        # whose project component doesn't match either the repo org
+        # or its basename. Org-level guidance (audit_guidance:apache)
+        # is allowed for any apache/* repo; project-level guidance
+        # (audit_guidance:airflow) is allowed only for the airflow
+        # repo and its subdirectories. Non-audit_guidance namespaces
+        # (e.g. project-specific data namespaces) pass through
+        # unchecked since they aren't subject to this convention.
+        rejected_guidance_namespaces = []
+        if owner_repo_root:
+            org_part, _, base_part = owner_repo_root.partition("/")
+            allowed_projects = {p for p in (org_part, base_part) if p}
+            kept = []
+            for gns in guidance_namespaces:
+                if not gns.startswith("audit_guidance:"):
+                    kept.append(gns)
+                    continue
+                project = gns.split(":", 1)[1]
+                if project in allowed_projects:
+                    kept.append(gns)
+                else:
+                    rejected_guidance_namespaces.append((gns, project))
+            if rejected_guidance_namespaces:
+                print(
+                    f"[filter] WARN: rejected "
+                    f"{len(rejected_guidance_namespaces)} guidance "
+                    f"namespace(s) whose project does not match "
+                    f"repo {owner_repo_root} "
+                    f"(allowed projects: {sorted(allowed_projects)}):"
+                )
+                for gns, project in rejected_guidance_namespaces:
+                    print(
+                        f"[filter]   - {gns} (project={project}) — "
+                        f"likely guidance from a different project. "
+                        f"If intentional, rename the namespace to "
+                        f"match this repo, or set "
+                        f"supplementalData=audit_guidance:{base_part} "
+                        f"in the orchestrator input."
+                    )
+            guidance_namespaces = kept
 
         print(f"[filter] owner_repo={owner_repo} (root={owner_repo_root})")
         print(f"[filter] reports_namespace={reports_namespace}")
@@ -1229,6 +1281,39 @@ async def run(input_dict, tools):
         )
         review_md = _build_review_queue_md(all_drop_entries, profile_hash)
 
+        # If any guidance namespaces were rejected as cross-project
+        # leakage, prepend a visible banner to the security profile
+        # artifact so the operator notices when looking at filter
+        # output (rejection is also logged to stdout during run).
+        if rejected_guidance_namespaces and owner_repo_root:
+            base_part = owner_repo_root.split("/", 1)[-1]
+            banner_lines = [
+                "> ⚠️  **Guidance namespace mismatch — content rejected**",
+                ">",
+                f"> The filter rejected {len(rejected_guidance_namespaces)} "
+                f"`audit_guidance:*` namespace(s) because their project "
+                f"component does not match this repo "
+                f"(`{owner_repo_root}`):",
+                ">",
+            ]
+            for gns, project in rejected_guidance_namespaces:
+                banner_lines.append(
+                    f"> - `{gns}` (project=`{project}`)"
+                )
+            banner_lines.extend([
+                ">",
+                "> Guidance from these namespaces was **not loaded**, "
+                "and policies from those projects did not affect this "
+                "run's drops. If intentional cross-project reuse, "
+                "rename the namespace to match this repo basename or "
+                "org. Otherwise, set "
+                f"`supplementalData=audit_guidance:{base_part}` in "
+                f"the orchestrator input for the correct namespace.",
+                "",
+                "",
+            ])
+            profile = "\n".join(banner_lines) + profile
+
         artifacts = {
             "_security_profile.md": profile,
             "_filter_drop_log.md": drop_log_md,
@@ -1252,7 +1337,7 @@ async def run(input_dict, tools):
                 path = f"{output_directory.rstrip('/')}/{fname}"
                 ok = await _push_to_private_repo(
                     path, body,
-                    f"asvs_relevance_filter: update {fname}",
+                    f"asvs_relevance_filter: update {fname} [source: {source_id}]",
                 )
                 if ok:
                     pushed.append(fname)
