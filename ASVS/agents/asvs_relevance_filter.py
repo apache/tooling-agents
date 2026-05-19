@@ -352,12 +352,68 @@ async def run(input_dict, tools):
                 "",
             ]
 
+            # CITATION-AWARE SPLIT: drops that already cite an existing
+            # audit_guidance file by name are NOT inferred gaps — they
+            # are guidance working as intended. On the May 19 airflow-
+            # core run the filter dropped 8 findings explicitly citing
+            # delegated_infrastructure_controls.md, then this function
+            # suggested uploading that exact file as "new" guidance.
+            # Split entries into cited vs inferred; cluster only the
+            # inferred ones; surface the cited ones in a separate
+            # diagnostic section so the operator can confirm existing
+            # guidance is doing work.
+            citation_re = re.compile(r"audit_guidance:[^:]+::[\w_.\-]+\.md")
+            cited_entries = []
+            inferred_entries = []
+            cited_by_file = {}
+            for e in entries:
+                reason = e.get("reason") or ""
+                matches = citation_re.findall(reason)
+                if matches:
+                    cited_entries.append(e)
+                    for path in matches:
+                        cited_by_file.setdefault(path, []).append(e)
+                else:
+                    inferred_entries.append(e)
+
+            def _codified_section_lines():
+                if not cited_by_file:
+                    return []
+                out = [
+                    "",
+                    "## Already-codified patterns confirmed working",
+                    "",
+                    "*These drops cited an existing audit_guidance file by "
+                    "name. The filter is working as intended for these "
+                    "patterns — no new guidance needed. Listed here as a "
+                    "sanity check that uploaded policy docs are being "
+                    "applied.*",
+                    "",
+                ]
+                for path, drops in sorted(
+                    cited_by_file.items(), key=lambda x: -len(x[1])
+                ):
+                    out.append(f"### {len(drops)}×: cited `{path}`")
+                    out.append("")
+                    secs = sorted({d.get("section", "?") for d in drops})
+                    if secs:
+                        out.append(f"**ASVS sections:** {', '.join(secs)}")
+                        out.append("")
+                return out
+
             if not entries:
                 return "\n".join(header + ["*No drops in this run.*"])
-            if len(entries) < min_cluster:
-                return "\n".join(header + [
-                    f"*Only {len(entries)} drops — too few to cluster meaningfully.*"
-                ])
+            if len(inferred_entries) < min_cluster:
+                msg = (
+                    f"*Only {len(inferred_entries)} inferred drops (drops "
+                    f"not citing existing guidance files) — too few to "
+                    f"cluster. {len(cited_entries)} drops cited existing "
+                    f"audit_guidance files and were excluded from "
+                    f"suggestion clustering.*"
+                )
+                return "\n".join(
+                    header + [msg] + _codified_section_lines()
+                )
 
             drops_for_prompt = [
                 {
@@ -366,7 +422,7 @@ async def run(input_dict, tools):
                     "title": (e.get("title") or "")[:200],
                     "reason": (e.get("reason") or "")[:600],
                 }
-                for e in entries
+                for e in inferred_entries
             ]
 
             prompt = (
@@ -444,10 +500,16 @@ async def run(input_dict, tools):
 
             clusters = parsed.get("clusters", []) if isinstance(parsed, dict) else []
             if not clusters:
-                return "\n".join(header + [
-                    f"*No clusters of size >= {min_cluster} found. See "
-                    "`_filter_drop_log.md` for the long tail.*"
-                ])
+                msg = (
+                    f"*No clusters of size >= {min_cluster} found among "
+                    f"{len(inferred_entries)} inferred drops. "
+                    f"{len(cited_entries)} additional drops cited existing "
+                    f"audit_guidance files. See `_filter_drop_log.md` for "
+                    f"the long tail.*"
+                )
+                return "\n".join(
+                    header + [msg] + _codified_section_lines()
+                )
 
             lines = list(header) + ["## Recurring drop clusters", ""]
             for c in clusters:
@@ -481,6 +543,7 @@ async def run(input_dict, tools):
                     "alongside source code."
                 )
                 lines.append("")
+            lines.extend(_codified_section_lines())
             return "\n".join(lines)
 
         def _build_review_queue_md(entries, profile_hash):
