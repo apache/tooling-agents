@@ -27,6 +27,18 @@ async def run(input_dict, tools):
 
         input_namespace = input_dict.get("inputNamespace", "")
 
+        # ASVS level filtering — if set, exclude sections above this
+        # level from discover's analysis so we don't waste a Sonnet call
+        # classifying sections the audit phase will immediately throw
+        # away. Same parsing rules the orchestrator uses for its own
+        # post-discovery filter ("1" → "L1", lowercase OK, empty = no
+        # filter / treat as L3).
+        level = (input_dict.get("level") or "").strip().upper()
+        if level and not level.startswith("L"):
+            level = f"L{level}"
+        LEVEL_ORDER = {"L1": 1, "L2": 2, "L3": 3}
+        max_level_num = LEVEL_ORDER.get(level, 3)
+
         namespaces = [ns.strip() for ns in input_namespace.split(",") if ns.strip()]
         if not namespaces:
             all_ns = data_store.list_namespaces()
@@ -128,9 +140,22 @@ async def run(input_dict, tools):
         print(f"Total lines: {total_lines}", flush=True)
 
         # =============================================================
-        # Step 2: Architecture classification (Sonnet)
+        # Step 2: Architecture classification (Sonnet, batched)
         # =============================================================
-        print("\n=== Step 2: Architecture classification ===", flush=True)
+        # Previously: single Sonnet call with as many file previews as
+        # would fit, OR path-only mode when even the path list barely
+        # fit. For big repos (airflow-core ~2,332 files), the previews
+        # mode silently truncated to the first N files that fit, and
+        # the path-only mode forced Sonnet to classify the architecture
+        # from filenames alone. Both produced poor architecture data,
+        # which downstream caused Step 3 to hallucinate file paths
+        # because it had nothing accurate to anchor against.
+        #
+        # Now: chunk files into preview-sized batches, classify each
+        # in parallel, then merge the partial architectures. Every
+        # file gets a preview-level look. Same downstream contract —
+        # `architecture` ends up as a single merged dict.
+        print("\n=== Step 2: Architecture classification (batched) ===", flush=True)
 
         CLASSIFY_PROMPT = """You are a security architect analyzing a codebase structure.
 
@@ -161,51 +186,129 @@ Return ONLY a JSON object with this structure:
   ],
   "trust_model": "one paragraph describing who is trusted and what boundaries exist"
 }
+
+Use EXACT file paths from the FILES section. Do not abbreviate, normalize, or
+invent paths — downstream tooling uses these as cache and audit keys.
 """
+
         template_tokens = count_tokens(CLASSIFY_PROMPT, PROVIDER, MODEL)
         preview_budget = SAFE_LIMIT - template_tokens
 
-        path_list = "\n".join(sorted(all_files.keys()))
-        path_tokens = count_tokens(path_list, PROVIDER, MODEL)
+        # Build batches of files-with-previews that each fit within budget.
+        # Order by path for stable batching across re-runs.
+        arch_batches = []
+        current_entries = []
+        current_tokens = 0
+        for path in sorted(all_files.keys()):
+            entry = f"\n--- {path} ---\n{file_previews[path]}\n"
+            entry_tokens = count_tokens(entry, PROVIDER, MODEL)
+            if current_tokens + entry_tokens > preview_budget and current_entries:
+                arch_batches.append(current_entries)
+                current_entries = []
+                current_tokens = 0
+            current_entries.append(entry)
+            current_tokens += entry_tokens
+        if current_entries:
+            arch_batches.append(current_entries)
 
-        if path_tokens + template_tokens < SAFE_LIMIT:
-            entries = []
-            current_tokens = 0
-            for path in sorted(all_files.keys()):
-                entry = f"\n--- {path} ---\n{file_previews[path]}\n"
-                entry_tokens = count_tokens(entry, PROVIDER, MODEL)
-                if current_tokens + entry_tokens > preview_budget:
-                    break
-                entries.append(entry)
-                current_tokens += entry_tokens
-            classify_content = CLASSIFY_PROMPT + "\nFILES:\n" + "".join(entries)
-        else:
-            classify_content = CLASSIFY_PROMPT + f"\nFILE PATHS ({len(all_files)} files):\n" + path_list
+        print(f"  Batches: {len(arch_batches)} ({sum(len(b) for b in arch_batches)} files with previews)", flush=True)
 
-        print(f"  Classification prompt: {count_tokens(classify_content, PROVIDER, MODEL)} tokens", flush=True)
+        async def classify_batch(i, entries):
+            content = CLASSIFY_PROMPT + f"\n\nFILES (batch {i+1}/{len(arch_batches)}):\n" + "".join(entries)
+            for attempt in range(2):
+                try:
+                    result, _ = await call_llm(
+                        provider=PROVIDER, model=MODEL,
+                        messages=[{"role": "user", "content": content}],
+                        parameters=PARAMS,
+                        timeout=300,
+                    )
+                    json_match = re.search(r'\{[\s\S]*\}', result)
+                    if json_match:
+                        partial = json.loads(json_match.group())
+                        print(f"  Batch {i+1}: {len(partial.get('auth_systems', []))} auth, "
+                              f"{len(partial.get('api_layers', []))} api, "
+                              f"{len(partial.get('security_relevant_areas', []))} areas",
+                              flush=True)
+                        return partial
+                except Exception as e:
+                    if attempt == 0:
+                        print(f"  Batch {i+1} attempt 1 failed ({type(e).__name__}), retrying...", flush=True)
+                        await asyncio.sleep(5)
+                    else:
+                        print(f"  Batch {i+1} FAILED: {e}", flush=True)
+            return None
 
-        architecture = {}
-        for attempt in range(2):
-            try:
-                result, _ = await call_llm(
-                    provider=PROVIDER, model=MODEL,
-                    messages=[{"role": "user", "content": classify_content}],
-                    parameters=PARAMS,
-                    timeout=300,
-                )
-                json_match = re.search(r'\{[\s\S]*\}', result)
-                if json_match:
-                    architecture = json.loads(json_match.group())
-                    print(f"  Framework: {architecture.get('framework', '?')}", flush=True)
-                    print(f"  Auth systems: {len(architecture.get('auth_systems', []))}", flush=True)
-                    print(f"  Security-relevant areas: {len(architecture.get('security_relevant_areas', []))}", flush=True)
-                    break
-            except Exception as e:
-                if attempt == 0:
-                    print(f"  Attempt 1 failed ({type(e).__name__}), retrying...", flush=True)
-                    await asyncio.sleep(5)
-                else:
-                    print(f"  Classification FAILED: {e}", flush=True)
+        partial_architectures = await asyncio.gather(*[
+            classify_batch(i, b) for i, b in enumerate(arch_batches)
+        ])
+        partial_architectures = [p for p in partial_architectures if p]
+
+        if not partial_architectures:
+            return {"outputText": json.dumps({"error": "Failed to classify codebase architecture (all batches failed)"})}
+
+        # Deterministic merge: dedupe arrays by name/area, union files lists,
+        # first-wins for scalars, take the most-complete dict for nested objects.
+        # Programmatic merge is preferred over an LLM synthesis call because it
+        # is reproducible, free, and can't introduce its own hallucinations.
+        def _merge_architectures(parts):
+            if len(parts) == 1:
+                return parts[0]
+            merged = {
+                "framework": "",
+                "language": "",
+                "auth_systems": [],
+                "api_layers": [],
+                "data_layer": {},
+                "execution_model": {},
+                "security_relevant_areas": [],
+                "trust_model": "",
+            }
+            # Scalar fields: first non-empty wins
+            for p in parts:
+                for k in ("framework", "language", "trust_model"):
+                    if not merged[k] and p.get(k):
+                        merged[k] = p[k]
+            # Array-of-dict fields: dedupe by identifying key, union files
+            for arr_key, id_key in (
+                ("auth_systems", "name"),
+                ("api_layers", "name"),
+                ("security_relevant_areas", "area"),
+            ):
+                by_id = {}
+                for p in parts:
+                    for item in p.get(arr_key, []) or []:
+                        if not isinstance(item, dict):
+                            continue
+                        ident = item.get(id_key, "") or ""
+                        if ident not in by_id:
+                            by_id[ident] = dict(item)
+                        else:
+                            existing_files = set(by_id[ident].get("files", []) or [])
+                            existing_files.update(item.get("files", []) or [])
+                            by_id[ident]["files"] = sorted(existing_files)
+                merged[arr_key] = list(by_id.values())
+            # Dict fields: pick the most complete (most keys with non-empty values)
+            for k in ("data_layer", "execution_model"):
+                best = {}
+                best_score = -1
+                for p in parts:
+                    candidate = p.get(k) or {}
+                    if not isinstance(candidate, dict):
+                        continue
+                    score = sum(1 for v in candidate.values() if v)
+                    if score > best_score:
+                        best = candidate
+                        best_score = score
+                merged[k] = best
+            return merged
+
+        architecture = _merge_architectures(partial_architectures)
+        print(f"  Merged from {len(partial_architectures)} batch(es):", flush=True)
+        print(f"    Framework: {architecture.get('framework', '?')}", flush=True)
+        print(f"    Auth systems: {len(architecture.get('auth_systems', []))}", flush=True)
+        print(f"    API layers: {len(architecture.get('api_layers', []))}", flush=True)
+        print(f"    Security-relevant areas: {len(architecture.get('security_relevant_areas', []))}", flush=True)
 
         if not architecture:
             return {"outputText": json.dumps({"error": "Failed to classify codebase architecture"})}
@@ -218,6 +321,7 @@ Return ONLY a JSON object with this structure:
 
         # ----- Step 3 prep -----
         asvs_sections_available = []
+        sections_dropped_above_level = 0
         try:
             asvs_ns = data_store.use_namespace("asvs")
             all_keys = asvs_ns.list_keys()
@@ -226,9 +330,27 @@ Return ONLY a JSON object with this structure:
                 req = asvs_ns.get(rk)
                 if req:
                     section_id = rk.replace("asvs:requirements:", "")
+                    # ASVS req levels are integers (1, 2, 3). Skip
+                    # anything above the requested max; sections with
+                    # missing/non-int levels default to 1 so they're
+                    # always included rather than silently dropped.
+                    try:
+                        req_level_num = int(req.get("level", 1))
+                    except (TypeError, ValueError):
+                        req_level_num = 1
+                    if req_level_num > max_level_num:
+                        sections_dropped_above_level += 1
+                        continue
                     req_level = req.get("level", "?")
                     desc = req.get("req_description", "")[:100]
                     asvs_sections_available.append(f"{section_id} (L{req_level}): {desc}")
+            if level:
+                print(
+                    f"  Filtered ASVS sections to level {level}: "
+                    f"{len(asvs_sections_available)} included, "
+                    f"{sections_dropped_above_level} dropped above L{max_level_num}",
+                    flush=True,
+                )
         except Exception as e:
             print(f"  WARNING: Could not load ASVS sections: {e}", flush=True)
 
@@ -358,6 +480,43 @@ Return ONLY a JSON array of strings:
                 d["asvs_sections"] = valid
             if total_dropped:
                 print(f"  Dropped {total_dropped} hallucinated section IDs from discovery output", flush=True)
+
+        # Same validation as ASVS section IDs: drop any file paths that
+        # don't exist in `all_files`. The domain LLM hallucinates paths
+        # (truncated prefixes, made-up subdirs, glob patterns it thinks
+        # are valid), and unvalidated they reach bundle/audit as
+        # includeFiles, which fnmatch'es zero keys and aborts with "No
+        # files found in namespaces". Dropping them here at the source
+        # means the bundle either gets a smaller valid list, or an empty
+        # list which it correctly treats as "no filter applied" and
+        # audits the full primary namespace.
+        total_files_dropped = 0
+        for d in domains:
+            requested = d.get("files", [])
+            valid_files = [f for f in requested if f in all_files]
+            dropped_files = [f for f in requested if f not in all_files]
+            if dropped_files:
+                total_files_dropped += len(dropped_files)
+                print(
+                    f"    {d['name']}: dropping {len(dropped_files)} "
+                    f"hallucinated file path(s): {dropped_files[:3]}"
+                    f"{'...' if len(dropped_files) > 3 else ''}",
+                    flush=True,
+                )
+            d["files"] = valid_files
+            if requested and not valid_files:
+                print(
+                    f"    {d['name']}: ALL {len(requested)} file paths "
+                    f"were hallucinated — bundle will scan full namespace "
+                    f"for this domain (slower but produces findings)",
+                    flush=True,
+                )
+        if total_files_dropped:
+            print(
+                f"  Dropped {total_files_dropped} hallucinated file paths "
+                f"from discovery output",
+                flush=True,
+            )
 
         for d in domains:
             print(f"    {d['name']}: {len(d.get('asvs_sections', []))} sections, {len(d.get('files', []))} files", flush=True)

@@ -461,27 +461,70 @@ This means one of the following:
         # =============================================================
         print("\n=== Step 1: Reading files from data store ===", flush=True)
 
+        # See asvs_bundle.py for the full rationale. Same two-tier
+        # supplemental model:
+        #   audit_guidance:* namespaces → guidance_keys (authoritative,
+        #     rendered as a guidance section, removed from source scope)
+        #   other supplemental namespaces → supplemental_keys only
+        #     (filter-exempt, rendered as source code in the prompt)
+        # Both sets bypass include_files / SKIP / relevance filters.
         all_files = {}
-        for ns in namespaces:
+        supplemental_keys = set()
+        guidance_keys = set()
+        primary_file_count = 0
+        for idx, ns in enumerate(namespaces):
+            is_primary = (idx == 0)
+            is_guidance = (not is_primary) and ns.startswith("audit_guidance:")
             ns_store = data_store.use_namespace(ns)
             keys = ns_store.list_keys()
-            if include_files:
-                keys = [k for k in keys if any(
+            if is_primary and include_files:
+                pre_filter_count = len(keys)
+                filtered_keys = [k for k in keys if any(
                     fnmatch.fnmatch(k, pattern) for pattern in include_files
                 )]
-                print(f"Namespace '{ns}': {len(keys)} keys (scoped by includeFiles)", flush=True)
+                if not filtered_keys and pre_filter_count > 0:
+                    # Discovery emitted include_files patterns that match
+                    # zero keys in this namespace. Causes: hallucinated
+                    # paths from Sonnet, wrong path prefix, fnmatch's
+                    # `**` quirk, or repo-layout drift since discovery
+                    # last ran. Fall back to the unfiltered key list
+                    # rather than aborting with "No files found" and
+                    # producing an empty stub — the audit will cost more
+                    # tokens but actually produce findings.
+                    print(f"Namespace '{ns}' (primary): include_files "
+                          f"matched 0 of {pre_filter_count} keys — "
+                          f"FALLING BACK to unfiltered. Bad discovery "
+                          f"patterns (first 5):", flush=True)
+                    for p in include_files[:5]:
+                        print(f"  - {p!r}", flush=True)
+                    # `keys` left as-is (unfiltered)
+                else:
+                    keys = filtered_keys
+                    print(f"Namespace '{ns}' (primary): {len(keys)} keys (scoped by includeFiles)", flush=True)
             else:
-                print(f"Namespace '{ns}': {len(keys)} keys", flush=True)
+                if is_primary:
+                    scope = "primary"
+                elif is_guidance:
+                    scope = "supplemental-guidance"
+                else:
+                    scope = "supplemental-code"
+                print(f"Namespace '{ns}' ({scope}): {len(keys)} keys", flush=True)
 
             file_contents = ns_store.get_many(keys) if keys else {}
             for k, v in file_contents.items():
                 if v is not None:
                     content = v if isinstance(v, str) else json.dumps(v, default=str) if v else ""
                     all_files[k] = content
+                    if is_primary:
+                        primary_file_count += 1
+                    else:
+                        supplemental_keys.add(k)
+                        if is_guidance:
+                            guidance_keys.add(k)
 
         print(f"Total files loaded: {len(all_files)}", flush=True)
 
-        if not all_files:
+        if primary_file_count == 0:
             return {"outputText": f"Error: No files found in namespaces {namespaces}"}
 
         SKIP_DIRS = {
@@ -531,6 +574,13 @@ This means one of the following:
         filtered_files = {}
         skipped_count = 0
         for key, content in all_files.items():
+            # Supplemental files bypass the skip rules. See bundle agent
+            # for full rationale; SKIP_FILES would otherwise drop
+            # README.md, CONTRIBUTING.md, LICENSE.md if anyone tried to
+            # ingest them as guidance.
+            if key in supplemental_keys:
+                filtered_files[key] = content
+                continue
             if should_skip_file(key):
                 skipped_count += 1
                 continue
@@ -565,6 +615,11 @@ This means one of the following:
             else:
                 file_previews = {}
                 for path, content in filtered_files.items():
+                    # Supplemental files are guidance, not auditable
+                    # code — don't waste Haiku tokens scoring them.
+                    # They get force-included below regardless.
+                    if path in supplemental_keys:
+                        continue
                     lines = content.split('\n')
                     file_previews[path] = '\n'.join(lines[:200])
 
@@ -648,12 +703,19 @@ FILES TO EVALUATE:
 
             relevant_files = {}
             for path, content in filtered_files.items():
+                # Supplemental files always pass — they weren't scored
+                # by Haiku and represent intentionally included context.
+                if path in supplemental_keys:
+                    relevant_files[path] = content
+                    continue
                 score = relevance_scores.get(path, 5)
                 if isinstance(score, (int, float)) and score >= 4:
                     relevant_files[path] = content
 
             if len(relevant_files) < 3 and filtered_files:
                 for path, content in filtered_files.items():
+                    if path in supplemental_keys:
+                        continue  # already included above
                     score = relevance_scores.get(path, 5)
                     if isinstance(score, (int, float)) and score >= 2:
                         relevant_files[path] = content
@@ -787,16 +849,81 @@ FILES:
             threshold_val = severity_levels.get(severity_threshold.upper(), 0)
             if threshold_val > 0:
                 included = [k for k, v in severity_levels.items() if v >= threshold_val]
-                analysis_system_prompt += f"\n## Severity Threshold\nOnly report findings at these severity levels: {', '.join(included)}.\nDo not include findings below {severity_threshold.upper()} severity.\n"
+                analysis_system_prompt += f"\n## Severity Threshold\nReport findings at these severity levels and ONLY these: {', '.join(included)}.\nFindings at lower severities ({severity_threshold.upper()}-below) should be omitted entirely.\nDo NOT bias toward {severity_threshold.upper()} as the default — CRITICAL findings (Type B/C/D gaps per the rules below) are equally in scope and must be reported as CRITICAL when the gap-type rule applies.\n"
 
         if false_positive_guidance:
             guidance_text = "\n".join(f"- {g}" for g in false_positive_guidance)
             analysis_system_prompt += f"\n## Known False Positive Patterns (DO NOT FLAG)\nThe following patterns are intentional design decisions in this codebase. Do not report them as vulnerabilities:\n{guidance_text}\n"
 
+        # See asvs_bundle.py for the full rationale. Only guidance_keys
+        # (from audit_guidance:* namespaces) get the authoritative-guidance
+        # framing; other supplemental files stay in relevant_files and get
+        # rendered as source code below.
+        if guidance_keys:
+            guidance_parts = []
+            for k in sorted(guidance_keys):
+                if k in relevant_files:
+                    guidance_parts.append(f"### {k}\n\n{relevant_files[k]}")
+            if guidance_parts:
+                guidance_block = "\n\n".join(guidance_parts)
+                analysis_system_prompt += (
+                    "\n## Project Security Guidance (Authoritative)\n"
+                    "The following documents are provided by the project's own maintainers "
+                    "as guidance on what this codebase considers a vulnerability versus a "
+                    "documented design decision, known limitation, or deployment-manager "
+                    "responsibility. Treat this content as AUTHORITATIVE: when a potential "
+                    "finding aligns with content marked here as \"by design\", \"not a "
+                    "vulnerability\", \"documented limitation\", \"known limitation\", or "
+                    "\"deployment-manager responsibility\", do NOT report it as a finding. "
+                    "Note it under positive controls instead, or omit it.\n\n"
+                    "Do NOT audit these guidance documents themselves as if they were source "
+                    "code. Their existence in the repository is not a finding; their purpose "
+                    "is to calibrate which source-code findings are real versus false "
+                    "positives.\n\n"
+                    f"{guidance_block}\n"
+                )
+
+            for k in list(guidance_keys):
+                relevant_files.pop(k, None)
+            sorted_relevant = [k for k in sorted_relevant if k not in guidance_keys]
+
         analysis_system_prompt += f"""
 ## Audit Instructions
 
 Follow ALL of these analysis requirements:
+
+### Scope Check — do this FIRST, before generating any findings
+
+Some ASVS requirements target SPECIFIC architectural patterns and apply
+only to systems exhibiting those patterns. Before generating findings,
+verify the audited codebase actually uses the pattern this requirement
+targets. If not, produce a single N/A finding explaining why, and STOP.
+
+Concrete examples (not exhaustive):
+- **Requirements about REFERENCE tokens** (e.g. 7.2.3 "Reference tokens
+  unique with 128 bits entropy") apply only to systems issuing opaque
+  reference tokens that are looked up server-side for state. Systems
+  using self-contained tokens (JWT, signed cookies, PASETO) are OUT OF
+  SCOPE — their security is governed by signing/algorithm requirements
+  in V9, not entropy of reference identifiers. DO NOT apply
+  reference-token requirements to JWT signing keys.
+- **OAuth Authorization Server requirements** (e.g. V10.4.x) apply only
+  to systems acting as an OAuth provider issuing tokens to third-party
+  clients. Systems that only CONSUME OAuth (OAuth clients) are out of
+  scope for these requirements.
+- **WebSocket requirements** (e.g. 4.4.x) apply only to systems using
+  the WebSocket protocol.
+- **XML parser requirements** (e.g. 1.5.1) apply only when the codebase
+  parses XML.
+- **File-upload requirements** (V5.2.x) apply only when the codebase
+  accepts and processes user-uploaded files.
+
+If the audited codebase does not exhibit the architectural pattern this
+requirement targets, return a single N/A finding with a clear
+explanation of WHY this requirement is not in scope (e.g. "Codebase uses
+self-contained JWTs validated cryptographically; this requirement
+applies only to opaque reference tokens"). Do NOT stretch the
+requirement to fit some loosely related aspect of the code.
 
 ### Core Principle: Existence ≠ Application
 For each security control found:
@@ -805,13 +932,46 @@ For each security control found:
 - Verify it's actually CALLED at each entry point
 - Flag coverage gaps (control exists but not applied = CRITICAL)
 
-### Gap Type Classification
-| Gap Type | Description | Severity |
-|----------|-------------|----------|
-| Type A | Entry point with NO control | Standard vulnerability |
-| Type B | Control EXISTS but NOT CALLED | CRITICAL (false confidence) |
-| Type C | Control CALLED but RESULT IGNORED | CRITICAL |
-| Type D | Control CALLED but AFTER sensitive operation | CRITICAL |
+### Gap Type Classification — severity is DETERMINED by gap type, not your judgment
+
+For EVERY finding you produce, first classify the gap type, then assign severity
+according to the rules below. You do not have discretion to override these.
+
+**Type A — Entry point with NO control**
+  Severity: HIGH (or LOW/MEDIUM if impact is minor)
+  Finding ID format: `ASVS-{asvs.replace('.', '')}-HIGH-NNN`
+  Example: an endpoint accepts user input and concatenates it directly into a
+  shell command — no validation anywhere → Type A → HIGH.
+
+**Type B — Control EXISTS but is NOT CALLED at this entry point**
+  Severity: **CRITICAL** (false confidence — operators believe protected, aren't)
+  Finding ID format: `ASVS-{asvs.replace('.', '')}-CRIT-NNN`
+  Example: a login endpoint validates passwords, but a `try: ... except JSONDecodeError: pass`
+  block silently skips validation when the body is malformed → control exists,
+  not called → **CRITICAL, not High**.
+  Example: `is_authorized_pool` exists and works, but the auth check is wrapped in
+  `with suppress(JSONDecodeError):` so it's bypassed on parse failure → **CRITICAL**.
+
+**Type C — Control CALLED but RESULT IGNORED**
+  Severity: **CRITICAL** (work performed without consequence)
+  Finding ID format: `ASVS-{asvs.replace('.', '')}-CRIT-NNN`
+  Example: auth backend returns "access denied" but caller treats this identically
+  to "not found" and falls through to the next backend → **CRITICAL, not High**.
+  Example: token revocation list is checked but the result is logged-only and
+  doesn't actually reject the request → **CRITICAL**.
+
+**Type D — Control CALLED but AFTER the sensitive operation**
+  Severity: **CRITICAL** (control runs too late to prevent harm)
+  Finding ID format: `ASVS-{asvs.replace('.', '')}-CRIT-NNN`
+  Example: SQL query is executed and THEN the parameter is validated → **CRITICAL**.
+  Example: file is written to disk, then path traversal check runs → **CRITICAL**.
+
+**Hard rule:** If your finding's description includes phrases like "control exists
+but not called", "control called but result ignored", "validation skipped",
+"check bypassed", "silently fails", "exception suppressed", or "Type B/C/D" —
+the Finding ID MUST use the `CRIT` token, NOT `HIGH`. There is no case where
+a Type B/C/D gap should be marked HIGH. This is the most common failure mode
+in audits and you must guard against it.
 
 ### Related Function Analysis
 When you find a vulnerability, IMMEDIATELY search for:
@@ -838,14 +998,31 @@ Do NOT report:
 
 ### Output Requirements
 For each finding, provide:
-- Severity level (CRITICAL/HIGH/MEDIUM/LOW)
-- Finding ID (format: ASVS-{asvs.replace('.', '')}-SEV-NNN)
+- Severity level (CRITICAL/HIGH/MEDIUM/LOW) — determined by the Gap Type rules above, not your discretion
+- Finding ID using ONE of these exact formats based on severity:
+  - `ASVS-{asvs.replace('.', '')}-CRIT-NNN` for Critical (Type B/C/D gaps)
+  - `ASVS-{asvs.replace('.', '')}-HIGH-NNN` for High
+  - `ASVS-{asvs.replace('.', '')}-MED-NNN`  for Medium
+  - `ASVS-{asvs.replace('.', '')}-LOW-NNN`  for Low
 - Exact file location and function name with line numbers
 - Vulnerable code quote
 - Data flow (source → sink → missing control)
 - Proof of concept (specific malicious request)
 - Impact description
 - Remediation with code example
+
+### Final Severity Pass — DO THIS BEFORE EMITTING OUTPUT
+
+After you've drafted all findings, walk back through them once more:
+1. For each finding marked HIGH, re-read its own description.
+2. If the description says or implies the control exists somewhere but is not
+   reached, not called, bypassed, suppressed, called-but-ignored, or called-too-late —
+   that is a Type B/C/D gap. Change the severity to CRITICAL and the Finding ID
+   token from HIGH to CRIT.
+3. If the description says no such control exists at all — leave it as HIGH.
+
+This pass is not optional. The most common audit failure is marking Type B/C/D
+gaps as HIGH out of caution. Your job is to apply the rule, not to be cautious.
 
 Also provide:
 - Security Controls Inventory with coverage analysis
@@ -1064,7 +1241,7 @@ Required structure:
 2. **Security Controls Inventory** — each control with location, purpose, coverage status
 3. **Critical File Review** — tables for key files showing all security-sensitive functions reviewed
 4. **Findings** — grouped by severity (Critical → High → Medium → Low), each with:
-   - ID (format: ASVS-{asvs.replace('.', '')}-SEV-NNN)
+   - ID using one of: `ASVS-{asvs.replace('.', '')}-CRIT-NNN`, `ASVS-{asvs.replace('.', '')}-HIGH-NNN`, `ASVS-{asvs.replace('.', '')}-MED-NNN`, or `ASVS-{asvs.replace('.', '')}-LOW-NNN` (preserve the severity token from the source analysis exactly — do NOT downgrade Critical to High during formatting)
    - Location with file, function, line numbers
    - Related functions checked
    - Description, vulnerable code, data flow, PoC, impact, remediation

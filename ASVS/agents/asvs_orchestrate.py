@@ -328,6 +328,7 @@ async def run(input_dict, tools):
                 `**Finding ID:** ASVS-NNN-SEV-NNN` inside
             """
             critical_findings = []
+            leaks_detected = []
             redacted = content
 
             # Match a finding block: starts with `#### <header>` and runs until
@@ -372,7 +373,42 @@ async def run(input_dict, tools):
                 block = match.group(1)
                 if is_critical_block(block):
                     finding_id = extract_finding_id(block)
-                    critical_findings.append({"id": finding_id, "block": block.strip()})
+                    # Extract the title from the block's first heading line
+                    # — used later by the title-based leak scrub (3d).
+                    # Patterns to handle:
+                    #   #### FINDING-NNN: Title goes here
+                    #   #### Title goes here
+                    #   #### CRITICAL  (no title — title comes from a later
+                    #                    "**Title:** Foo" or "**Finding:** Foo" field)
+                    title = ""
+                    first_line = block.split("\n", 1)[0]
+                    # case A: heading has the title after a colon
+                    m_title = re.match(
+                        r'#{1,6}\s+(?:FINDING-\d+:\s*)?(.+?)\s*$',
+                        first_line,
+                    )
+                    if m_title:
+                        candidate = m_title.group(1).strip()
+                        # heading may be just "CRITICAL" / "[CRITICAL]" / "Critical"
+                        if not re.match(r'^\[?\s*CRITICAL\s*\]?$', candidate, re.IGNORECASE):
+                            title = candidate
+                    # case B: title in an inline field
+                    if not title:
+                        m_field = re.search(
+                            r'\*\*(?:Title|Finding)\*\*:?\s*(.+?)\s*(?:\n|$)',
+                            block,
+                            re.IGNORECASE,
+                        )
+                        if m_field:
+                            title = m_field.group(1).strip()
+                    # strip trailing punctuation/decorations
+                    title = re.sub(r'\s*\*+\s*$', '', title).strip()
+                    title = re.sub(r'\s*\([^)]*\)\s*$', '', title).strip()
+                    critical_findings.append({
+                        "id": finding_id,
+                        "title": title,
+                        "block": block.strip(),
+                    })
                     redacted = redacted.replace(match.group(1), "")
 
             # Strip the Critical-severity section in the report body
@@ -614,6 +650,57 @@ async def run(input_dict, tools):
                         return '\n'.join(out)
                     redacted = _strip_critical_heading_blocks(redacted)
 
+                    # 3c. Drop flat list-item Critical risks. Consolidate
+                    # sometimes renders Top 5 Risks as plain numbered or
+                    # bulleted list lines with a severity prefix:
+                    #
+                    #     1. [Critical] Title: full risk description...
+                    #     - [Critical] Title: full risk description...
+                    #     2. **Critical** Title: ...
+                    #
+                    # Neither the table-row stripper (3a) nor the heading
+                    # stripper (3b) catches these — they're just markdown
+                    # prose lines. This stripper drops any line that starts
+                    # with a list marker (`N.`, `-`, or `*`) and contains
+                    # one of the unambiguous Critical severity tokens
+                    # before continuing into the title/description.
+                    #
+                    # Detection is narrow on purpose: we require [Critical],
+                    # (Critical), **Critical**, or the 🔴 emoji. A bare
+                    # mention of the word "critical" in a list item's
+                    # prose does NOT match (e.g., "1. Critical Path
+                    # Analysis: ..." in a non-Critical risk would be
+                    # preserved). Severity tokens with brackets/parens/
+                    # bold/emoji are the dominant way severity gets
+                    # rendered into list-item leaders, and we accept the
+                    # rare false-negative case in exchange for not
+                    # over-redacting innocent list items.
+                    def _strip_critical_list_items(text):
+                        out = []
+                        in_fence = False
+                        crit_list_re = re.compile(
+                            r'^\s*(?:\d+\.|[-*])\s+.*?'
+                            r'(?:\[\s*Critical\s*\]'
+                            r'|\(\s*Critical\s*\)'
+                            r'|\*\*\s*Critical\s*\*\*'
+                            r'|🔴)',
+                            re.IGNORECASE,
+                        )
+                        for line in text.split('\n'):
+                            stripped = line.lstrip()
+                            if stripped.startswith('```'):
+                                in_fence = not in_fence
+                                out.append(line)
+                                continue
+                            if in_fence:
+                                out.append(line)
+                                continue
+                            if crit_list_re.match(line):
+                                continue  # drop the entire list item line
+                            out.append(line)
+                        return '\n'.join(out)
+                    redacted = _strip_critical_list_items(redacted)
+
                     sorted_ids = sorted(redacted_ids,
                                          key=lambda s: int(re.search(r'(\d+)', s).group(1)) if re.search(r'(\d+)', s) else 0)
 
@@ -697,7 +784,20 @@ async def run(input_dict, tools):
                     # Use [ \t] not \s to avoid eating newlines, which would
                     # weld the end of a table to the start of the next section.
                     redacted = re.sub(r'\|[ \t]{2,}', '| ', redacted)
-                    redacted = re.sub(r'\|\s+\|\s+(Critical|High|Medium|Low)\b[^\n]*\n', '', redacted)
+                    # Drop Cross-Reference Matrix rows whose Finding ID cell
+                    # is now empty (left by redacting FINDING-001 etc.).
+                    # Anchor to line start with re.MULTILINE and use
+                    # [ \t]+ (NOT \s+) so the regex cannot cross newlines.
+                    # The previous \s+ form ate the trailing pipe of the
+                    # Severity Distribution alignment row plus the next
+                    # row whenever it was Critical/High/Medium/Low — exactly
+                    # the mangled table seen in the May 19 public report.
+                    redacted = re.sub(
+                        r'^\|[ \t]+\|[ \t]+(Critical|High|Medium|Low)\b[^\n]*\n',
+                        '',
+                        redacted,
+                        flags=re.MULTILINE,
+                    )
 
                 # Polish: tables left empty by Critical-row removal get
                 # replaced with an explanatory notice. This catches things
@@ -797,6 +897,251 @@ async def run(input_dict, tools):
                 if critical_findings:
                     redacted = _replace_empty_tables(redacted, len(critical_findings))
 
+                # 3d. Title-based leak scrub. After all the regex strippers
+                # have done their best, walk the document one more time and
+                # drop any line that contains a redacted finding's TITLE
+                # (extracted up at block-detection time). This is the
+                # authoritative leak catcher — it uses the actual content
+                # of the redacted finding rather than guessing at format,
+                # so it catches Top 5 Risks paragraphs, cross-reference
+                # entries, and any future format the consolidate LLM
+                # invents. We also strip immediately-following continuation
+                # lines (paragraph wrap, indented continuations) until we
+                # hit a blank line or a clear structural boundary.
+                #
+                # Titles need to be at least 6 words / 30 chars to be safe
+                # to substring-match on — shorter titles risk false
+                # positives against unrelated text. Below the threshold we
+                # fall back to whole-line containment with word boundaries.
+                redacted_titles = [
+                    cf["title"] for cf in critical_findings
+                    if cf.get("title") and len(cf["title"]) >= 6
+                ]
+                if redacted_titles:
+                    def _strip_title_leaks(text, titles):
+                        out = []
+                        lines = text.split('\n')
+                        in_fence = False
+                        i = 0
+                        while i < len(lines):
+                            line = lines[i]
+                            stripped = line.lstrip()
+                            if stripped.startswith('```'):
+                                in_fence = not in_fence
+                                out.append(line)
+                                i += 1
+                                continue
+                            if in_fence:
+                                out.append(line)
+                                i += 1
+                                continue
+                            # Does this line contain any redacted title?
+                            matched_title = None
+                            for t in titles:
+                                # Use literal substring match (case-
+                                # insensitive). Titles are distinctive
+                                # enough that this is reliable.
+                                if t.lower() in line.lower():
+                                    matched_title = t
+                                    break
+                            if matched_title is None:
+                                out.append(line)
+                                i += 1
+                                continue
+                            # Drop this line. Also drop following
+                            # continuation lines until we hit a blank
+                            # line, a heading, a table separator, or a
+                            # new list item — whichever comes first.
+                            i += 1
+                            while i < len(lines):
+                                nxt = lines[i]
+                                nxt_strip = nxt.lstrip()
+                                if not nxt_strip:
+                                    # blank line ends the dropped block;
+                                    # consume it too so we don't leave
+                                    # an orphan paragraph break
+                                    i += 1
+                                    break
+                                if nxt_strip.startswith('```'):
+                                    break
+                                if re.match(r'^#{1,6}\s', nxt_strip):
+                                    break
+                                if re.match(r'^\s*(?:\d+\.|[-*])\s+\S', nxt):
+                                    break
+                                if re.match(r'^\|[\s:|-]+\|\s*$', nxt):
+                                    break
+                                # otherwise it's a continuation line
+                                # (wrapped prose, indented sub-bullet) —
+                                # drop it
+                                i += 1
+                        return '\n'.join(out)
+                    redacted = _strip_title_leaks(redacted, redacted_titles)
+
+                # 3e. Severity-distribution table regeneration. The
+                # in-place regex editing above is fragile against malformed
+                # tables that the consolidate LLM occasionally emits
+                # (separator and data rows glued together, missing rows,
+                # etc). Rather than chasing each malformation, locate the
+                # Severity Distribution section and rebuild its table
+                # cleanly from the post-redaction findings.
+                #
+                # We count surviving findings by walking remaining finding
+                # blocks for their `**Severity:** X` field. This is robust
+                # — it doesn't depend on what shape the original table was
+                # in.
+                def _rebuild_severity_table(text):
+                    counts = {"Critical": 0, "High": 0, "Medium": 0,
+                              "Low": 0, "Info": 0}
+                    # Find every surviving finding block and count its
+                    # severity.
+                    surviving_pattern = re.compile(
+                        r'####\s+[^\n]+\n[\s\S]*?(?=####\s|##\s|\n---\n|\Z)',
+                        re.MULTILINE,
+                    )
+                    # Severity appears in several formats in practice:
+                    #   - Table cell, bold label:  `| **Severity** | 🟠 High |`
+                    #   - Table cell, plain label: `| Severity | ⚪ Info |`  (FINDING-020 used this)
+                    #   - Inline, colon inside:    `**Severity:** 🟠 High`
+                    #   - Inline, colon after:     `**Severity**: 🟠 High`
+                    # The "Info" severity uses the full word "Informational"
+                    # in some findings. The previous regex only matched the
+                    # inline-with-colon-inside form and only the short "Info"
+                    # name — so on the May 19 run it counted ZERO surviving
+                    # findings, total stayed 0, the function returned text
+                    # unchanged, and the malformed table that stripper 787
+                    # left behind never got regenerated.
+                    #
+                    # Two-form regex: form A is `**Severity:**` (colon
+                    # inside the bold acts as implicit separator). Form B
+                    # is bold-or-plain `Severity` followed by an explicit
+                    # `|` or `:` separator. The required separator/internal
+                    # colon is what keeps this from over-matching prose
+                    # like "the severity was high".
+                    sev_re = re.compile(
+                        r'(?:\*\*Severity:\*\*'
+                        r'|(?:\*\*)?Severity(?:\*\*)?\s*[|:])'
+                        r'\s*(?:🔴|🟠|🟡|🔵|⚪|🟢)?\s*\**'
+                        r'(Critical|High|Medium|Low|Info(?:rmational)?)\b',
+                        re.IGNORECASE,
+                    )
+                    for m in surviving_pattern.finditer(text):
+                        blk = m.group(0)
+                        sev_m = sev_re.search(blk)
+                        if sev_m:
+                            raw_sev = sev_m.group(1).capitalize()
+                            # Normalize "Informational" → "Info" so it
+                            # maps to the counts dict key.
+                            key = "Info" if raw_sev.lower().startswith("info") else raw_sev
+                            counts[key] = counts.get(key, 0) + 1
+                    total = sum(counts.values())
+                    if total == 0:
+                        return text  # nothing to regenerate against
+
+                    def pct(n):
+                        return f"{(100.0 * n / total):.1f}%" if total else "0.0%"
+
+                    fresh_table = "\n".join([
+                        "| Severity | Count | Percentage |",
+                        "|----------|-------|------------|",
+                        f"| Critical | {counts['Critical']} | {pct(counts['Critical'])} |",
+                        f"| High     | {counts['High']} | {pct(counts['High'])} |",
+                        f"| Medium   | {counts['Medium']} | {pct(counts['Medium'])} |",
+                        f"| Low      | {counts['Low']} | {pct(counts['Low'])} |",
+                        f"| Info     | {counts['Info']} | {pct(counts['Info'])} |",
+                    ])
+
+                    # Find the Severity Distribution heading and replace
+                    # the immediately-following table block (everything
+                    # from the heading's next non-blank `|`-line through
+                    # the last `|`-line of that block).
+                    heading_re = re.compile(
+                        r'(^#{2,4}\s+Severity\s+Distribution[^\n]*\n+)',
+                        re.IGNORECASE | re.MULTILINE,
+                    )
+                    h_match = heading_re.search(text)
+                    if not h_match:
+                        return text
+
+                    start = h_match.end()
+                    # advance past blank lines
+                    j = start
+                    while j < len(text) and text[j] in ('\n', ' ', '\t'):
+                        if text[j] == '\n':
+                            j += 1
+                            continue
+                        break
+                    # find table end: scan forward while lines start with `|`
+                    # or are blank, until two consecutive non-`|`-non-blank
+                    # lines (i.e. table ended). simpler: consume contiguous
+                    # `|` lines and one trailing blank.
+                    table_end = j
+                    lines_after = text[j:].split('\n')
+                    consumed = 0
+                    for L in lines_after:
+                        if L.lstrip().startswith('|'):
+                            consumed += len(L) + 1  # +1 for the \n
+                            continue
+                        # allow one blank inside the table, then stop
+                        if not L.strip():
+                            consumed += len(L) + 1
+                            continue
+                        break
+                    table_end = j + consumed
+
+                    return text[:start] + "\n" + fresh_table + "\n\n" + text[table_end:]
+
+                redacted = _rebuild_severity_table(redacted)
+
+                # 3f. Defense-in-depth final leak check. After every stripper
+                # above has run, scan the output for the redacted findings'
+                # titles and IDs. If any survive, prepend a visible LEAK
+                # warning to the report. The push still happens so the
+                # pipeline doesn't break, but the warning is impossible to
+                # miss for anyone reading the published file.
+                #
+                # False-positive guard: title length >= 20 chars (short
+                # titles are common phrases that may legitimately appear in
+                # surviving finding descriptions); only count matches
+                # OUTSIDE code fences (code examples often reproduce
+                # vulnerability descriptions). IDs only count when they
+                # match a clear FINDING-/ASVS- pattern with a word boundary.
+                def _final_leak_check(text, findings):
+                    # Strip code fences for scanning — code examples often
+                    # legitimately reproduce vulnerability text
+                    no_fences = re.sub(r'```[\s\S]*?```', '', text)
+                    leaks = []
+                    for cf in findings:
+                        title = (cf.get("title") or "").strip()
+                        fid = (cf.get("id") or "").strip()
+                        if title and len(title) >= 20:
+                            idx = no_fences.lower().find(title.lower())
+                            if idx >= 0:
+                                ctx = no_fences[max(0, idx - 40):idx + len(title) + 40]
+                                leaks.append({
+                                    "type": "title",
+                                    "value": title,
+                                    "context": " ".join(ctx.split()),
+                                })
+                        if fid and fid != "?" and re.match(r'^(FINDING|ASVS|CVE)[-_]', fid, re.IGNORECASE):
+                            m = re.search(r'\b' + re.escape(fid) + r'\b', no_fences)
+                            if m:
+                                idx = m.start()
+                                ctx = no_fences[max(0, idx - 40):idx + len(fid) + 40]
+                                leaks.append({
+                                    "type": "id",
+                                    "value": fid,
+                                    "context": " ".join(ctx.split()),
+                                })
+                    return leaks
+
+                leaks_detected = _final_leak_check(redacted, critical_findings)
+                if leaks_detected:
+                    print(f"!!! REDACTOR LEAK CHECK: {len(leaks_detected)} possible leaks "
+                          f"survived all strippers", flush=True)
+                    for l in leaks_detected[:10]:
+                        print(f"  - {l['type'].upper()}: '{l['value']}' "
+                              f"@ \"...{l['context']}...\"", flush=True)
+
                 notice = (
                     f"\n\n> **Note:** {len(critical_findings)} Critical "
                     f"{'finding has' if len(critical_findings) == 1 else 'findings have'} "
@@ -808,7 +1153,7 @@ async def run(input_dict, tools):
                     redacted = redacted[:first_sep + 5] + notice + redacted[first_sep + 5:]
                 else:
                     redacted = notice + redacted
-            return redacted, critical_findings
+            return redacted, critical_findings, leaks_detected
 
         def redact_issues(content):
             """Strip Critical issues from the issues.md file.
@@ -944,6 +1289,94 @@ async def run(input_dict, tools):
         if clear_cache:
             print(f"{'='*60}\nStep 1: Downloading source code\n  Source: {source_repo}\n{'='*60}", flush=True)
 
+            # clearCache=true should mean "wipe everything for this
+            # repo/subdir so the run is genuinely from scratch", not
+            # just "redownload source code". Until this loop existed,
+            # the flag only gated the download step; audit-cache,
+            # bundle-cache, and per-commit reports survived across
+            # runs. That meant prompt changes silently kept returning
+            # the previous run's findings for any cache-hit section.
+            #
+            # Scope of the wipe:
+            #
+            # CLEARED (anything derived from this source for this
+            # commit):
+            #   - files:{source}                        (source code)
+            #   - audit-cache:relevance:asvs-*-{src}    (per-section
+            #   - audit-cache:analysis:asvs-*-{src}      Haiku/Opus
+            #   - audit-cache:relevance:bundle-*-{src}   audit cache)
+            #   - audit-cache:analysis:bundle-*-{src}
+            #   - audit-reports:{output_directory}      (per-section reports)
+            #   - audit-reports-filtered:{output_dir}   (filter outputs)
+            #
+            # PRESERVED (intentionally, with reasoning):
+            #   - audit-cache:inventory:{file_set_hash} — keyed by
+            #     content hash; naturally invalidates if files change.
+            #   - relevance-filter-cache:{owner_repo_root} — owner_repo_root
+            #     can span multiple audited subdirs (e.g. apache/airflow
+            #     covers airflow-core, airflow-task-sdk, ...); wiping
+            #     here would over-wipe peer subdirs. The cache is
+            #     content-keyed by profile_hash and batch_hash, so it
+            #     self-invalidates on real changes.
+            #   - consolidation:* / extraction:* — keyed by the PUSH
+            #     repo (e.g. apache/tooling-runbooks), shared across
+            #     audits. Content-hashed internally.
+            #   - audit_guidance:* — uploaded guidance, not derived
+            #     state. Survives runs by design.
+            try:
+                all_ns = data_store.list_namespaces() or []
+            except Exception as e:
+                all_ns = []
+                print(f"  WARNING: could not enumerate namespaces "
+                      f"({type(e).__name__}: {e}); proceeding with "
+                      f"download only (downstream caches may be stale)",
+                      flush=True)
+
+            def _owned_by_this_run(ns_name):
+                if ns_name == code_namespace:
+                    return True
+                if ns_name == f"audit-reports:{output_directory}":
+                    return True
+                if ns_name == f"audit-reports-filtered:{output_directory}":
+                    return True
+                # Audit/bundle caches embed the source namespace string
+                # literally in their namespace name (asvs_audit/bundle:
+                # `audit-cache:{relevance,analysis}:{prefix}` where
+                # prefix is asvs-{section}-{namespaces} or bundle-{...}).
+                if ns_name.startswith("audit-cache:relevance:") or ns_name.startswith("audit-cache:analysis:"):
+                    if code_namespace in ns_name:
+                        return True
+                return False
+
+            to_clear = [ns for ns in all_ns if _owned_by_this_run(ns)]
+            if to_clear:
+                print(f"  clearCache=true: wiping {len(to_clear)} "
+                      f"namespace(s) for {code_namespace}", flush=True)
+                total_keys = 0
+                for ns_name in to_clear:
+                    try:
+                        ns = data_store.use_namespace(ns_name)
+                        keys = ns.list_keys() or []
+                        deleted = 0
+                        for k in keys:
+                            try:
+                                ns.delete(k)
+                                deleted += 1
+                            except Exception as de:
+                                # Per-key failures shouldn't abort the
+                                # whole wipe; log and continue.
+                                print(f"    {ns_name}/{k}: delete failed: {de}", flush=True)
+                        total_keys += deleted
+                        print(f"    {ns_name}: deleted {deleted}/{len(keys)} key(s)", flush=True)
+                    except Exception as e:
+                        print(f"    {ns_name}: list/delete failed: "
+                              f"{type(e).__name__}: {e}", flush=True)
+                print(f"  Cleared {total_keys} keys across "
+                      f"{len(to_clear)} namespace(s)", flush=True)
+            else:
+                print(f"  clearCache=true: no existing namespaces to "
+                      f"wipe for {code_namespace}", flush=True)
+
             download_input = download_source
             if source_token:
                 download_input += f"\n{source_token}"
@@ -1041,7 +1474,15 @@ async def run(input_dict, tools):
             try:
                 discovery_result = await gofannon_client.call(
                     agent_name="asvs_discover",
-                    input_dict={"inputNamespace": ",".join(namespaces)},
+                    input_dict={
+                        "inputNamespace": ",".join(namespaces),
+                        # Pass level so discover pre-filters ASVS sections.
+                        # Without this, discover classifies all ~345
+                        # sections even when the run is L1 (~130 sections),
+                        # wasting a Sonnet call and producing misleading
+                        # "343/345 sections assigned" log lines.
+                        "level": level,
+                    },
                 )
                 pass_config = json.loads(discovery_result.get("outputText", "{}"))
                 if "error" in pass_config:
@@ -1376,8 +1817,85 @@ async def run(input_dict, tools):
         # If clean_stale_reports is False (default), nothing happens here.
 
         # =============================================================
-        # Step 4: Consolidate (unchanged from original)
+        # Step 3.7: Relevance filter (NEW)
         # =============================================================
+        # Triage findings against the project's own documented threat
+        # model before consolidation. asvs_relevance_filter auto-
+        # discovers SECURITY.md, AGENTS.md, docs/security/* from the
+        # source repo (walking both the downloaded source namespace
+        # AND the GitHub repo root, so monorepo-subdir audits inherit
+        # the top-level project docs), synthesizes a Project Security
+        # Profile, and drops or downgrades findings the project
+        # documents as out-of-scope.
+        #
+        # Outputs are written to audit-reports-filtered:{output_dir}
+        # in CouchDB; the four _*.md analysis artifacts also get
+        # pushed to {private_repo}/{output_directory}/ when a private
+        # repo + PAT are configured.
+        #
+        # Fail-soft end-to-end: if the filter fails or returns no
+        # usable namespace, consolidate reads from the original
+        # audit-reports namespace and the pipeline behaves as if the
+        # filter weren't installed.
+        filtered_reports_namespace = reports_namespace  # safe default
+        if successes:
+            print(f"\n{'='*60}\nStep 3.7: Relevance filter\n{'='*60}", flush=True)
+            filter_input_lines = [
+                f"owner_repo: {source_repo}",
+                f"reports_namespace: {reports_namespace}",
+                f"source_namespace: {code_namespace}",
+                f"output_directory: {output_directory}",
+            ]
+            # One PAT covers both jobs: GitHub repo-root fetch (against
+            # source_repo) and private-repo push (against private_repo).
+            # Prefer private_token because the artifact push is the
+            # consequential side-effect; falls back to source_token for
+            # the fetch leg. If source is private and private_token
+            # lacks access, the fetch will quietly 404 and the filter
+            # will still work on whatever it found in the source ns.
+            filter_pat = private_token or source_token
+            if filter_pat:
+                filter_input_lines.append(f"pat: {filter_pat}")
+            if private_repo:
+                filter_input_lines.append(f"private_repo: {private_repo}")
+            if supplemental_data:
+                filter_input_lines.append(
+                    f"audit_guidance_namespaces: {supplemental_data}"
+                )
+            try:
+                filter_result = await gofannon_client.call(
+                    agent_name="asvs_relevance_filter",
+                    input_dict={"inputText": "\n".join(filter_input_lines)},
+                )
+                filter_output = ""
+                filter_ns = ""
+                if isinstance(filter_result, dict):
+                    filter_output = filter_result.get("outputText", "") or ""
+                    filter_ns = filter_result.get("filteredReportsNamespace", "") or ""
+                if filter_output:
+                    print(filter_output, flush=True)
+                if filter_ns and not filter_output.startswith("Error:"):
+                    filtered_reports_namespace = filter_ns
+                    print(f"  Consolidate will read from: {filtered_reports_namespace}", flush=True)
+                else:
+                    print(
+                        f"  Filter did not return a usable namespace; "
+                        f"falling back to {reports_namespace}",
+                        flush=True,
+                    )
+            except Exception as e:
+                print(
+                    f"  Relevance filter raised; falling back to "
+                    f"{reports_namespace}: {type(e).__name__}: {e}",
+                    flush=True,
+                )
+
+        # =============================================================
+        # Step 4: Consolidate
+        # =============================================================
+        # Reads from filtered_reports_namespace (set by Step 3.7 to
+        # audit-reports-filtered:* when the filter succeeded, else
+        # falls back to the raw audit-reports:* namespace).
         if consolidate and successes:
             print(f"\n{'='*60}\nStep 4: Consolidating reports\n  Pushing to: {push_repo}\n{'='*60}", flush=True)
             # Build a flat list of every section ID audited in this run, so
@@ -1411,7 +1929,7 @@ async def run(input_dict, tools):
                             f"output: {push_directory}",
                             f"sections: {sections_arg}",
                             f"source: {source_id}",
-                            f"reports_namespace: {reports_namespace}",
+                            f"reports_namespace: {filtered_reports_namespace}",
                         ]),
                         "domainGroups": json.dumps(domain_groups),
                         "level": level or "L3",
@@ -1446,49 +1964,218 @@ async def run(input_dict, tools):
                 failures.append(f"consolidation: {err_type}: {err_msg}")
 
         # =============================================================
-        # Step 5: Carve-out — redact and publish (unchanged)
+        # Step 5: Carve-out — redact and publish
         # =============================================================
         if carve_out and consolidate and successes:
             print(f"\n{'='*60}\nStep 5: Redacting critical findings for public report\n{'='*60}", flush=True)
-            consolidated_content = await read_file_from_github(
-                private_repo, private_token, f"{output_directory}/consolidated.md")
-            issues_content = await read_file_from_github(
-                private_repo, private_token, f"{output_directory}/issues.md")
+            # Read consolidate's outputs from the namespace it mirrors
+            # them into, NOT from GitHub. GitHub's contents API is
+            # eventually consistent: reading a file from there
+            # immediately after pushing it 404s reliably enough that it
+            # broke the redactor's issues.md fetch on the May 19 run.
+            # The namespace (consolidation:{owner}/{repo}/{dirs_key}) is
+            # strongly consistent and is the same one consolidate already
+            # uses for its intermediate state. consolidate writes keys
+            # `final:consolidated.md` and `final:issues.md` for exactly
+            # this purpose. If either is missing, fail loudly — silent
+            # warnings hid the problem last time.
+            consolidated_content = None
+            issues_content = None
+            try:
+                push_owner, push_repo_only = push_repo.split("/", 1)
+                _consol_dirs_key = "+".join(sorted(pass_prefixes))
+                _consol_ns_name = f"consolidation:{push_owner}/{push_repo_only}/{_consol_dirs_key}"
+                _consol_ns = data_store.use_namespace(_consol_ns_name)
+                consolidated_content = _consol_ns.get("final:consolidated.md")
+                issues_content = _consol_ns.get("final:issues.md")
+                if consolidated_content is None:
+                    msg = (f"redact: consolidate did not mirror final:consolidated.md "
+                           f"to namespace {_consol_ns_name}; cannot redact")
+                    print(f"  ERROR: {msg}", flush=True)
+                    failures.append(msg)
+                if issues_content is None:
+                    msg = (f"redact: consolidate did not mirror final:issues.md "
+                           f"to namespace {_consol_ns_name}; cannot redact")
+                    print(f"  ERROR: {msg}", flush=True)
+                    failures.append(msg)
+            except Exception as _ns_e:
+                msg = f"redact: namespace read failed: {type(_ns_e).__name__}: {_ns_e}"
+                print(f"  ERROR: {msg}", flush=True)
+                failures.append(msg)
+
+            # Track what actually gets pushed so the completion summary
+            # doesn't lie. Previous summary printed
+            # "Redacted consolidated and issues pushed to ..."
+            # unconditionally — and on May 19 issues.md was never pushed
+            # (it 404'd on read) but the summary still claimed success.
+            consolidated_pushed = False
+            issues_pushed = False
 
             critical_findings = []
             if consolidated_content:
-                redacted_consolidated, critical_findings = redact_consolidated(consolidated_content)
+                redacted_consolidated, critical_findings, consolidated_leaks = redact_consolidated(consolidated_content)
                 print(f"  Redacted {len(critical_findings)} critical findings", flush=True)
-                try:
-                    push_result = await gofannon_client.call(
-                        agent_name="asvs_push_github",
-                        input_dict={
-                            "inputText": json.dumps({
-                                "repo": output_repo, "token": output_token,
-                                "directory": output_directory, "filename": "consolidated.md",
-                            }),
-                            "commitMessage": f"ASVS {level or 'full'} audit: consolidated report (redacted) [source: {source_id}]",
-                            "fileContents": redacted_consolidated,
-                        }
+                if consolidated_leaks:
+                    # ─── Leak detected: route around the public push ────
+                    # Build the warning banner here in the orchestrator
+                    # rather than in the redactor so the redactor stays a
+                    # pure transform. Banner goes ONLY on the private-repo
+                    # quarantine file; the public repo gets a clean
+                    # placeholder explaining the report is under review.
+                    leak_summary_lines = [
+                        f"- **{l['type'].upper()}:** `{l['value']}` — context: `...{l['context']}...`"
+                        for l in consolidated_leaks[:10]
+                    ]
+                    leak_banner = (
+                        "> # ⚠️ CARVE-OUT LEAK DETECTED — DO NOT REDISTRIBUTE ⚠️\n"
+                        ">\n"
+                        "> The post-redaction defense-in-depth scan found references to "
+                        f"redacted Critical findings still present in this file ({len(consolidated_leaks)} "
+                        f"detection{'s' if len(consolidated_leaks) != 1 else ''}). The "
+                        "automated pipeline withheld this report from the public repo and "
+                        "wrote it here for manual inspection.\n"
+                        ">\n"
+                        "> ## Detected references\n"
+                        ">\n"
+                        + "\n".join(f"> {ln}" for ln in leak_summary_lines)
+                        + "\n>\n"
+                        "> ## Next steps\n"
+                        ">\n"
+                        "> 1. Verify each detection — if any are real leaks, identify "
+                        "where the stripper missed and patch the redactor.\n"
+                        "> 2. After fixing, re-run the carve-out manually or via a "
+                        "re-audit of the same commit.\n"
+                        "> 3. If detections are false positives (a surviving finding "
+                        "happens to mention a redacted finding's title), the public push "
+                        "can be done by hand from this content with the banner removed.\n\n"
+                        "---\n\n"
                     )
-                    output_text = push_result.get("outputText", "") if isinstance(push_result, dict) else ""
-                    if not output_text or "\"content\"" not in output_text or "\"commit\"" not in output_text:
-                        err_msg = output_text[:300] if output_text else "(no outputText)"
-                        try:
-                            parsed = json.loads(output_text) if output_text else {}
-                            if isinstance(parsed, dict) and "message" in parsed:
-                                err_msg = parsed["message"]
-                        except Exception:
-                            pass
-                        failures.append(f"redacted consolidated push to {output_repo}: {err_msg}")
-                        print(f"  Push redacted consolidated.md to {output_repo} FAILED: {err_msg}", flush=True)
-                    else:
-                        print(f"  Pushed redacted consolidated.md to {output_repo}", flush=True)
-                except Exception as e:
-                    typed = type(e).__name__
-                    detail = str(e) or f"{typed} (no detail)"
-                    failures.append(f"redacted consolidated push: {detail}")
-                    print(f"  Push redacted consolidated.md FAILED: {detail}", flush=True)
+
+                    # 1) Push the leaky-with-banner version to the PRIVATE repo
+                    quarantine_filename = "_redaction_warning_consolidated.md"
+                    try:
+                        q_result = await gofannon_client.call(
+                            agent_name="asvs_push_github",
+                            input_dict={
+                                "inputText": json.dumps({
+                                    "repo": private_repo, "token": private_token,
+                                    "directory": output_directory,
+                                    "filename": quarantine_filename,
+                                }),
+                                "commitMessage": (
+                                    f"ASVS audit: redaction warning ({len(consolidated_leaks)} "
+                                    f"suspected leak{'s' if len(consolidated_leaks) != 1 else ''}) "
+                                    f"[source: {source_id}]"
+                                ),
+                                "fileContents": leak_banner + redacted_consolidated,
+                            }
+                        )
+                        q_output = q_result.get("outputText", "") if isinstance(q_result, dict) else ""
+                        if q_output and "\"content\"" in q_output and "\"commit\"" in q_output:
+                            print(f"  Quarantine pushed: {private_repo}/{output_directory}/{quarantine_filename}", flush=True)
+                        else:
+                            err_msg = q_output[:300] if q_output else "(no outputText)"
+                            failures.append(f"quarantine push: {err_msg}")
+                            print(f"  Quarantine push FAILED: {err_msg}", flush=True)
+                    except Exception as e:
+                        typed = type(e).__name__
+                        detail = str(e) or f"{typed} (no detail)"
+                        failures.append(f"quarantine push: {detail}")
+                        print(f"  Quarantine push FAILED: {detail}", flush=True)
+
+                    # 2) Push a clean placeholder to the PUBLIC repo so
+                    #    the URL still resolves but doesn't expose leaks
+                    public_placeholder = (
+                        f"# Security Audit Report — Pending Review\n\n"
+                        f"This ASVS security audit report has been withheld from "
+                        f"publication pending manual review.\n\n"
+                        f"**Status:** Under review "
+                        f"({len(consolidated_leaks)} detection"
+                        f"{'s' if len(consolidated_leaks) != 1 else ''} from the "
+                        f"post-redaction defense-in-depth scan)\n\n"
+                        f"**Source:** {source_id}\n\n"
+                        f"The audit pipeline's automated redaction process detected "
+                        f"references to Critical-severity findings that should not be "
+                        f"disclosed publicly. Per the project's coordinated-disclosure "
+                        f"policy, the report has not been published until those references "
+                        f"have been verified and either removed or confirmed as false "
+                        f"positives.\n\n"
+                        f"For coordinated disclosure of Critical findings, contact the "
+                        f"project's security team via the channels documented at the "
+                        f"project's `SECURITY.md` or `/security` documentation.\n\n"
+                        f"_This placeholder will be replaced with the full redacted "
+                        f"report after review completes._\n"
+                    )
+                    try:
+                        p_result = await gofannon_client.call(
+                            agent_name="asvs_push_github",
+                            input_dict={
+                                "inputText": json.dumps({
+                                    "repo": output_repo, "token": output_token,
+                                    "directory": output_directory,
+                                    "filename": "consolidated.md",
+                                }),
+                                "commitMessage": (
+                                    f"ASVS {level or 'full'} audit: placeholder "
+                                    f"(report withheld pending review) [source: {source_id}]"
+                                ),
+                                "fileContents": public_placeholder,
+                            }
+                        )
+                        p_output = p_result.get("outputText", "") if isinstance(p_result, dict) else ""
+                        if p_output and "\"content\"" in p_output and "\"commit\"" in p_output:
+                            print(f"  Public placeholder pushed to {output_repo}", flush=True)
+                            consolidated_pushed = True
+                        else:
+                            err_msg = p_output[:300] if p_output else "(no outputText)"
+                            failures.append(f"public placeholder push: {err_msg}")
+                            print(f"  Public placeholder push FAILED: {err_msg}", flush=True)
+                    except Exception as e:
+                        typed = type(e).__name__
+                        detail = str(e) or f"{typed} (no detail)"
+                        failures.append(f"public placeholder push: {detail}")
+                        print(f"  Public placeholder push FAILED: {detail}", flush=True)
+
+                    # Surface as a failure so the run summary doesn't claim
+                    # everything was clean.
+                    failures.append(
+                        f"carve-out leak check: {len(consolidated_leaks)} suspected "
+                        f"leak(s); public report replaced with placeholder, full "
+                        f"version in {private_repo}/{output_directory}/{quarantine_filename}"
+                    )
+                else:
+                    # ─── No leaks: normal public push ─────────────────────
+                    try:
+                        push_result = await gofannon_client.call(
+                            agent_name="asvs_push_github",
+                            input_dict={
+                                "inputText": json.dumps({
+                                    "repo": output_repo, "token": output_token,
+                                    "directory": output_directory, "filename": "consolidated.md",
+                                }),
+                                "commitMessage": f"ASVS {level or 'full'} audit: consolidated report (redacted) [source: {source_id}]",
+                                "fileContents": redacted_consolidated,
+                            }
+                        )
+                        output_text = push_result.get("outputText", "") if isinstance(push_result, dict) else ""
+                        if not output_text or "\"content\"" not in output_text or "\"commit\"" not in output_text:
+                            err_msg = output_text[:300] if output_text else "(no outputText)"
+                            try:
+                                parsed = json.loads(output_text) if output_text else {}
+                                if isinstance(parsed, dict) and "message" in parsed:
+                                    err_msg = parsed["message"]
+                            except Exception:
+                                pass
+                            failures.append(f"redacted consolidated push to {output_repo}: {err_msg}")
+                            print(f"  Push redacted consolidated.md to {output_repo} FAILED: {err_msg}", flush=True)
+                        else:
+                            print(f"  Pushed redacted consolidated.md to {output_repo}", flush=True)
+                            consolidated_pushed = True
+                    except Exception as e:
+                        typed = type(e).__name__
+                        detail = str(e) or f"{typed} (no detail)"
+                        failures.append(f"redacted consolidated push: {detail}")
+                        print(f"  Push redacted consolidated.md FAILED: {detail}", flush=True)
 
             if issues_content:
                 redacted_issues, removed_count = redact_issues(issues_content)
@@ -1518,6 +2205,7 @@ async def run(input_dict, tools):
                         print(f"  Push redacted issues.md to {output_repo} FAILED: {err_msg}", flush=True)
                     else:
                         print(f"  Pushed redacted issues.md to {output_repo}", flush=True)
+                        issues_pushed = True
                 except Exception as e:
                     typed = type(e).__name__
                     detail = str(e) or f"{typed} (no detail)"
@@ -1532,7 +2220,21 @@ async def run(input_dict, tools):
             # redacted...") so the existence of redacted findings is still
             # disclosed without their content.
 
-            print(f"  Redacted consolidated and issues pushed to {output_repo}", flush=True)
+            # Truthful completion summary. The previous unconditional
+            # "Redacted consolidated and issues pushed" message hid the
+            # May 19 issues.md failure entirely; the WARNING three lines
+            # earlier was the only signal.
+            pushed_files = []
+            if consolidated_pushed:
+                pushed_files.append("consolidated.md")
+            if issues_pushed:
+                pushed_files.append("issues.md")
+            if pushed_files:
+                print(f"  Pushed redacted {' and '.join(pushed_files)} to {output_repo}", flush=True)
+            if consolidated_content and not consolidated_pushed:
+                print(f"  WARNING: consolidated.md NOT pushed to {output_repo} (see failures above)", flush=True)
+            if issues_content and not issues_pushed:
+                print(f"  WARNING: issues.md NOT pushed to {output_repo} (see failures above)", flush=True)
 
             if notify_email and critical_findings:
                 print(f"  Emailing {len(critical_findings)} critical findings to {notify_email}", flush=True)

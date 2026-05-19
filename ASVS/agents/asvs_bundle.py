@@ -165,10 +165,11 @@ async def run(input_dict, tools):
                 block = m.group(0)
                 found_sections[sid] = block
 
+            _bundle_label = asvs_sections[0] if asvs_sections else "?"
             for sid in asvs_sections:
                 section_body = found_sections.get(sid)
                 if section_body is None:
-                    print(f"    WARNING: No bundled output for section {sid} — emitting empty report", flush=True)
+                    print(f"[bundle {_bundle_label}] WARNING: no bundled output for section {sid} — emitting empty report", flush=True)
                     section_body = (
                         f"## ASVS-{sid}\n\n"
                         f"_No findings produced by the bundled analysis. This may indicate "
@@ -445,22 +446,23 @@ BATCH RESULTS TO CONSOLIDATE:
                 "error": "No ASVS sections specified. Provide `asvs_sections` as a list."
             })}
 
-        if len(asvs_sections) == 1:
-            print(f"WARNING: bundle agent called with 1 section ({asvs_sections[0]}). "
-                  f"For single-section audits prefer asvs_audit directly.", flush=True)
-
         repo_name = "unknown"
         for ns in namespaces:
             if ns.startswith("files:"):
                 repo_name = ns.replace("files:", "")
                 break
 
-        print(f"Namespaces: {namespaces}", flush=True)
-        print(f"ASVS sections (bundled): {asvs_sections}", flush=True)
-        if include_files:
-            print(f"File scope: {len(include_files)} patterns", flush=True)
-        if severity_threshold:
-            print(f"Severity threshold: {severity_threshold}", flush=True)
+        # Single identifier line per bundle — first section serves as a
+        # short label, and the full section list shows what's in flight.
+        # Other startup info (namespaces, file scope, severity threshold)
+        # are constant across all bundles in a run; the orchestrator
+        # already prints them once. Don't repeat per-bundle.
+        bundle_label = asvs_sections[0] if asvs_sections else "?"
+        print(f"[bundle {bundle_label}] sections: {asvs_sections}", flush=True)
+
+        if len(asvs_sections) == 1:
+            print(f"[bundle {bundle_label}] WARNING: called with 1 section. "
+                  f"For single-section audits prefer asvs_audit directly.", flush=True)
 
         # =============================================================
         # Model configuration
@@ -499,7 +501,6 @@ BATCH RESULTS TO CONSOLIDATE:
         # =============================================================
         # Step 0: Load ASVS context for ALL bundled sections
         # =============================================================
-        print("\n=== Step 0: Loading ASVS requirement context ===", flush=True)
         asvs_descriptions = {}  # section_id -> description string
         try:
             asvs_ns = data_store.use_namespace("asvs")
@@ -522,41 +523,106 @@ BATCH RESULTS TO CONSOLIDATE:
                 else:
                     asvs_descriptions[section_id] = f"ASVS Requirement {section_id}"
         except Exception as e:
-            print(f"  WARNING: Could not load ASVS requirements: {e}", flush=True)
+            print(f"[bundle {bundle_label}] WARNING: Could not load ASVS requirements: {e}", flush=True)
             for section_id in asvs_sections:
                 asvs_descriptions[section_id] = f"ASVS Requirement {section_id}"
 
         combined_asvs_description = "\n\n".join(
             f"### Requirement {sid}\n{desc}" for sid, desc in asvs_descriptions.items()
         )
-        print(f"  Loaded {len(asvs_descriptions)} ASVS requirements", flush=True)
 
         # =============================================================
         # Step 1: Read & filter files
         # =============================================================
-        print("\n=== Step 1: Reading files from data store ===", flush=True)
 
+        # The orchestrator's contract: namespaces[0] is the primary
+        # source-code namespace and is subject to include_files
+        # filtering. Subsequent namespaces (from supplementalData) are
+        # supplemental — guidance docs, threat models, vendored libs,
+        # config overlays, related-repo code — and should NOT be filtered
+        # by patterns that were generated for the source code. They load
+        # fully so the model sees them in every Opus call regardless of
+        # how discovery scoped the source files.
+        #
+        # Within supplemental namespaces we distinguish TWO kinds by
+        # namespace prefix:
+        #   - "audit_guidance:*" → AUTHORITATIVE GUIDANCE
+        #     Documents that calibrate which findings are real vs. by-
+        #     design (project AGENTS.md, security_model.rst, etc.).
+        #     Rendered later in a dedicated "Project Security Guidance
+        #     (Authoritative)" prompt section, NOT as source files.
+        #   - any other supplemental namespace → SUPPLEMENTAL CODE
+        #     Vendored libraries, config files, related-repo overlays.
+        #     Rendered as source code in the prompt and audited normally.
+        #
+        # Both kinds bypass the include_files / SKIP / relevance filters
+        # (operator opted them in explicitly). The distinction is purely
+        # how they appear in the final Opus prompt.
         all_files = {}
-        for ns in namespaces:
+        supplemental_keys = set()  # all non-primary keys (filter-exempt)
+        guidance_keys = set()       # subset of supplemental from audit_guidance:* namespaces
+        primary_file_count = 0
+        for idx, ns in enumerate(namespaces):
+            is_primary = (idx == 0)
+            is_guidance = (not is_primary) and ns.startswith("audit_guidance:")
             ns_store = data_store.use_namespace(ns)
             keys = ns_store.list_keys()
-            if include_files:
-                keys = [k for k in keys if any(
+            if is_primary and include_files:
+                pre_filter_count = len(keys)
+                filtered_keys = [k for k in keys if any(
                     fnmatch.fnmatch(k, pattern) for pattern in include_files
                 )]
-                print(f"Namespace '{ns}': {len(keys)} keys (scoped by includeFiles)", flush=True)
+                if not filtered_keys and pre_filter_count > 0:
+                    # Discovery emitted include_files patterns that match
+                    # zero keys in this namespace. Causes: hallucinated
+                    # paths from Sonnet, wrong path prefix, fnmatch's
+                    # `**` quirk, or repo-layout drift since discovery
+                    # last ran. Fall back to the unfiltered key list
+                    # rather than aborting with "No files found" and
+                    # emitting empty per-section stubs — the audit will
+                    # cost more tokens but actually produce findings.
+                    print(f"  [bundle] namespace '{ns}' (primary): "
+                          f"include_files matched 0 of {pre_filter_count} "
+                          f"keys — FALLING BACK to unfiltered. Bad "
+                          f"discovery patterns (first 5):", flush=True)
+                    for p in include_files[:5]:
+                        print(f"    - {p!r}", flush=True)
+                    # `keys` left as-is (unfiltered)
+                else:
+                    keys = filtered_keys
+                    print(f"  [bundle] namespace '{ns}' (primary): "
+                          f"{len(keys)} keys after include_files filter", flush=True)
             else:
-                print(f"Namespace '{ns}': {len(keys)} keys", flush=True)
+                if is_primary:
+                    scope = "primary"
+                elif is_guidance:
+                    scope = "supplemental-guidance"
+                else:
+                    scope = "supplemental-code"
+                print(f"  [bundle] namespace '{ns}' ({scope}): "
+                      f"{len(keys)} keys (no filter)", flush=True)
 
             file_contents = ns_store.get_many(keys) if keys else {}
             for k, v in file_contents.items():
                 if v is not None:
                     content = v if isinstance(v, str) else json.dumps(v, default=str) if v else ""
                     all_files[k] = content
+                    if is_primary:
+                        primary_file_count += 1
+                    else:
+                        supplemental_keys.add(k)
+                        if is_guidance:
+                            guidance_keys.add(k)
 
-        print(f"Total files loaded: {len(all_files)}", flush=True)
-
-        if not all_files:
+        # Guard checks the primary count specifically. An audit that
+        # has zero source files but loaded supplemental docs is still
+        # a degenerate case — the audit's job is to look at code, not
+        # documentation. Error out the same way as before.
+        # Error message text preserved verbatim so existing log/
+        # inspection tooling that pattern-matches on it (notably
+        # inspect_audit_findings.py looking for the "No files found
+        # in namespaces" substring) keeps working.
+        if primary_file_count == 0:
             return {"outputText": json.dumps({
                 "error": f"No files found in namespaces {namespaces}"
             })}
@@ -608,12 +674,18 @@ BATCH RESULTS TO CONSOLIDATE:
         filtered_files = {}
         skipped_count = 0
         for key, content in all_files.items():
+            # Supplemental files (from supplementalData namespaces) bypass
+            # the skip rules entirely. The user explicitly opted in to
+            # including them, and the SKIP_FILES list contains things
+            # like README.md and CONTRIBUTING.md that are legitimate
+            # guidance-doc names — they'd be dropped otherwise.
+            if key in supplemental_keys:
+                filtered_files[key] = content
+                continue
             if should_skip_file(key):
                 skipped_count += 1
                 continue
             filtered_files[key] = content
-
-        print(f"Filtered: {len(filtered_files)} files to analyze, {skipped_count} skipped", flush=True)
 
         if not filtered_files:
             return {"outputText": json.dumps({
@@ -630,20 +702,23 @@ BATCH RESULTS TO CONSOLIDATE:
         # Step 2: Relevance filtering (Haiku) [T9]
         # =============================================================
         if include_files:
-            print("\n=== Step 2: Relevance filtering SKIPPED (includeFiles provided) ===", flush=True)
             relevant_files = filtered_files
             relevance_scores = {path: 10 for path in filtered_files}
             sorted_relevant = sorted(relevant_files.keys())
         else:
-            print("\n=== Step 2: Relevance filtering (Haiku, parallel) ===", flush=True)
-
             cached_relevance = relevance_cache_ns.get("scores")
             if cached_relevance:
                 relevance_scores = cached_relevance
-                print(f"  Using cached relevance scores for {len(relevance_scores)} files", flush=True)
             else:
                 file_previews = {}
                 for path, content in filtered_files.items():
+                    # Supplemental files are out-of-scope for relevance
+                    # scoring — they're project guidance, not auditable
+                    # code. Don't waste Haiku tokens rating them and
+                    # don't let a low score drop them downstream; they
+                    # get force-included below regardless.
+                    if path in supplemental_keys:
+                        continue
                     lines = content.split('\n')
                     file_previews[path] = '\n'.join(lines[:200])
 
@@ -686,8 +761,6 @@ FILES TO EVALUATE:
                 if current_batch:
                     preview_batches.append(current_batch)
 
-                print(f"  Relevance filtering: {len(preview_batches)} batches", flush=True)
-
                 relevance_scores = {}
 
                 async def filter_batch(i, batch):
@@ -705,15 +778,14 @@ FILES TO EVALUATE:
                                 json_match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', content_resp, re.DOTALL)
                                 if json_match:
                                     scores = json.loads(json_match.group())
-                                    print(f"    Batch {i+1}: scored {len(scores)} files", flush=True)
                                     return scores
                             except Exception as e:
                                 if attempt == 0:
-                                    print(f"    Batch {i+1} attempt 1 failed ({type(e).__name__}), retrying...", flush=True)
+                                    print(f"[bundle {bundle_label}] relevance batch {i+1} attempt 1 failed ({type(e).__name__}), retrying...", flush=True)
                                     await asyncio.sleep(5)
                                 else:
-                                    print(f"    Batch {i+1} FAILED: {e}", flush=True)
-                        print(f"    WARNING: Batch {i+1} defaulting {len(batch)} files to score=5", flush=True)
+                                    print(f"[bundle {bundle_label}] relevance batch {i+1} FAILED: {e}", flush=True)
+                        print(f"[bundle {bundle_label}] WARNING: relevance batch {i+1} defaulting {len(batch)} files to score=5", flush=True)
                         return {path: 5 for path in batch}
 
                 batch_results = await asyncio.gather(*[
@@ -727,12 +799,20 @@ FILES TO EVALUATE:
 
             relevant_files = {}
             for path, content in filtered_files.items():
+                # Supplemental files always pass the relevance gate.
+                # They weren't scored by Haiku (see exclusion above)
+                # and represent intentionally included context.
+                if path in supplemental_keys:
+                    relevant_files[path] = content
+                    continue
                 score = relevance_scores.get(path, 5)
                 if isinstance(score, (int, float)) and score >= 4:
                     relevant_files[path] = content
 
             if len(relevant_files) < 3 and filtered_files:
                 for path, content in filtered_files.items():
+                    if path in supplemental_keys:
+                        continue  # already included above
                     score = relevance_scores.get(path, 5)
                     if isinstance(score, (int, float)) and score >= 2:
                         relevant_files[path] = content
@@ -740,8 +820,6 @@ FILES TO EVALUATE:
             sorted_relevant = sorted(relevant_files.keys(),
                                      key=lambda p: relevance_scores.get(p, 0),
                                      reverse=True)
-
-        print(f"  Relevant files: {len(relevant_files)} (from {len(filtered_files)})", flush=True)
 
         if not relevant_files:
             return {"outputText": json.dumps({
@@ -762,12 +840,9 @@ FILES TO EVALUATE:
         # =============================================================
         # Step 3: Code inventory (Sonnet, file-set-hash cached) [T5]
         # =============================================================
-        print("\n=== Step 3: Code inventory (Sonnet, parallel) ===", flush=True)
-
         cached_inventory = inventory_cache_ns.get("result")
         if cached_inventory:
             code_inventory = cached_inventory
-            print(f"  Using cached inventory ({len(code_inventory)} chars) [file-set hash hit]", flush=True)
         else:
             inventory_prompt_template = """You are a security code analyst. Extract a structured code inventory from each file below.
 
@@ -811,8 +886,6 @@ FILES:
             if current_batch:
                 inv_batches.append(current_batch)
 
-            print(f"  Code inventory: {len(inv_batches)} batches", flush=True)
-
             async def inventory_batch(i, batch):
                 async with sonnet_semaphore:
                     entries_text = "".join(batch.values())
@@ -834,7 +907,7 @@ FILES:
                                 )
                                 results.append(resp)
                             except Exception as e:
-                                print(f"    Inventory sub-batch failed: {e}", flush=True)
+                                print(f"[bundle {bundle_label}] inventory sub-batch failed: {e}", flush=True)
                         return "\n\n".join(results)
 
                     for attempt in range(2):
@@ -844,14 +917,13 @@ FILES:
                                 messages=messages, parameters=SONNET_PARAMS,
                                 timeout=300,
                             )
-                            print(f"    Inventory batch {i+1} complete", flush=True)
                             return resp
                         except Exception as e:
                             if attempt == 0:
-                                print(f"    Inventory batch {i+1} attempt 1 failed ({type(e).__name__}), retrying...", flush=True)
+                                print(f"[bundle {bundle_label}] inventory batch {i+1} attempt 1 failed ({type(e).__name__}), retrying...", flush=True)
                                 await asyncio.sleep(5)
                             else:
-                                print(f"    Inventory batch {i+1} FAILED: {e}", flush=True)
+                                print(f"[bundle {bundle_label}] inventory batch {i+1} FAILED: {e}", flush=True)
                                 return ""
 
             inventory_results = await asyncio.gather(*[
@@ -861,12 +933,9 @@ FILES:
             code_inventory = "\n\n---\n\n".join([r for r in inventory_results if r])
             inventory_cache_ns.set("result", code_inventory)
 
-        print(f"  Inventory total: {len(code_inventory)} chars", flush=True)
-
         # =============================================================
         # Step 4: Bundled deep analysis (Opus)
         # =============================================================
-        print(f"\n=== Step 4: Bundled deep analysis (Opus, {OPUS_CONCURRENCY}-way) ===", flush=True)
 
         requirements_block = "\n\n".join(
             f"### ASVS Requirement {sid}\n{desc}"
@@ -895,10 +964,85 @@ You are auditing the code below against ALL of the following requirements. For E
             guidance_text = "\n".join(f"- {g}" for g in false_positive_guidance)
             analysis_system_prompt += f"\n## Known False Positive Patterns (DO NOT FLAG)\nThe following patterns are intentional design decisions in this codebase. Do not report them as vulnerabilities:\n{guidance_text}\n"
 
+        # Wire AUDIT GUIDANCE files (from audit_guidance:* namespaces) into
+        # the prompt as authoritative project guidance — NOT as source code
+        # to audit. This is the final stage of the audit_guidance pipeline:
+        #
+        #   asvs_guidance_ingest    →  CouchDB audit_guidance:{repo}
+        #   orchestrator namespaces →  bundle loads with filter exemption
+        #   THIS BLOCK              →  inject as guidance, remove from source scope
+        #
+        # Other supplemental files (non-audit_guidance:* namespaces — vendored
+        # libraries, related-repo overlays, config files) stay in
+        # relevant_files and get rendered as source code below. They share the
+        # filter exemptions but not the "authoritative, do not flag" framing.
+        #
+        # Without this, AGENTS.md and similar docs would reach the prompt but
+        # Opus would audit them as if they were source code (flagging the
+        # existence of AGENTS.md itself as a security issue, ignoring its
+        # "What is NOT considered a vulnerability" section, etc.).
+        if guidance_keys:
+            guidance_parts = []
+            for k in sorted(guidance_keys):
+                if k in relevant_files:
+                    guidance_parts.append(f"### {k}\n\n{relevant_files[k]}")
+            if guidance_parts:
+                guidance_block = "\n\n".join(guidance_parts)
+                analysis_system_prompt += (
+                    "\n## Project Security Guidance (Authoritative)\n"
+                    "The following documents are provided by the project's own maintainers "
+                    "as guidance on what this codebase considers a vulnerability versus a "
+                    "documented design decision, known limitation, or deployment-manager "
+                    "responsibility. Treat this content as AUTHORITATIVE: when a potential "
+                    "finding aligns with content marked here as \"by design\", \"not a "
+                    "vulnerability\", \"documented limitation\", \"known limitation\", or "
+                    "\"deployment-manager responsibility\", do NOT report it as a finding. "
+                    "Note it under positive controls instead, or omit it.\n\n"
+                    "Do NOT audit these guidance documents themselves as if they were source "
+                    "code. Their existence in the repository is not a finding; their purpose "
+                    "is to calibrate which source-code findings are real versus false "
+                    "positives.\n\n"
+                    f"{guidance_block}\n"
+                )
+
+            # Remove guidance keys from source scope so they aren't also
+            # rendered as code-fenced files-to-audit below. Their content is
+            # already present in the guidance section above.
+            for k in list(guidance_keys):
+                relevant_files.pop(k, None)
+            sorted_relevant = [k for k in sorted_relevant if k not in guidance_keys]
+
         analysis_system_prompt += """
 ## Audit Instructions
 
 Follow ALL of these analysis requirements:
+
+### Scope Check — do this FIRST for EACH requirement, before generating findings
+
+Bundle audits cover multiple ASVS requirements simultaneously. Some
+target SPECIFIC architectural patterns and apply only to systems that
+exhibit those patterns. Per requirement: verify the audited codebase
+actually uses the targeted pattern. If not, produce a single N/A
+finding for that requirement explaining why, and move on.
+
+Concrete examples (not exhaustive):
+- **Requirements about REFERENCE tokens** (e.g. 7.2.3) apply only to
+  systems issuing opaque reference tokens looked up server-side.
+  Systems using self-contained tokens (JWT, signed cookies, PASETO)
+  are OUT OF SCOPE — their security is governed by signing/algorithm
+  requirements in V9. DO NOT apply reference-token requirements to
+  JWT signing keys.
+- **OAuth Authorization Server requirements** (V10.4.x) apply only to
+  systems acting as an OAuth provider. OAuth clients are out of scope.
+- **WebSocket requirements** (4.4.x) apply only when WebSocket is used.
+- **XML parser requirements** (1.5.1) apply only when XML is parsed.
+- **File-upload requirements** (V5.2.x) apply only when user file
+  uploads are accepted.
+
+If the codebase does not exhibit the targeted pattern for a given
+requirement, return a single N/A finding for THAT requirement (not all)
+with a clear explanation of WHY it is not in scope. Do NOT stretch a
+requirement to fit some loosely related aspect of the code.
 
 ### Core Principle: Existence ≠ Application
 For each security control found:
@@ -992,7 +1136,7 @@ Be thorough but precise. If something is done correctly, acknowledge it as a pos
 
         max_inv_tokens = int(SAFE_OPUS_LIMIT * 0.15)
         if inventory_tokens > max_inv_tokens:
-            print(f"  Truncating inventory from {inventory_tokens} to {max_inv_tokens} tokens", flush=True)
+            print(f"[bundle {bundle_label}] truncating inventory from {inventory_tokens} to {max_inv_tokens} tokens", flush=True)
             inv_lines = code_inventory.split('\n')
             truncated_inv = ""
             for line in inv_lines:
@@ -1004,8 +1148,6 @@ Be thorough but precise. If something is done correctly, acknowledge it as a pos
             inventory_tokens = count_tokens(inventory_section, OPUS_PROVIDER, OPUS_MODEL)
 
         opus_content_budget = SAFE_OPUS_LIMIT - system_tokens - inventory_tokens - user_template_tokens
-
-        print(f"  Opus content budget: {opus_content_budget} tokens (bundled mode)", flush=True)
 
         opus_batches = []
         current_batch = {}
@@ -1030,13 +1172,13 @@ Be thorough but precise. If something is done correctly, acknowledge it as a pos
         if current_batch:
             opus_batches.append(current_batch)
 
-        print(f"  Bundled deep analysis: {len(opus_batches)} batches", flush=True)
+        print(f"[bundle {bundle_label}] Opus: {len(opus_batches)} batch(es)", flush=True)
 
         async def analyze_batch(i, batch):
             cache_key = f"batch-{i}"
             cached = analysis_cache_ns.get(cache_key)
             if cached:
-                print(f"    Opus batch {i+1}: cached", flush=True)
+                print(f"[bundle {bundle_label}] Opus batch {i+1}: cached", flush=True)
                 return cached
 
             async with opus_semaphore:
@@ -1048,7 +1190,7 @@ Be thorough but precise. If something is done correctly, acknowledge it as a pos
 
                 msg_tokens = count_message_tokens(messages, OPUS_PROVIDER, OPUS_MODEL)
                 limit = int(OPUS_CONTEXT * 0.80)
-                print(f"    Opus batch {i+1}/{len(opus_batches)}: {msg_tokens} tokens, {len(batch)} files", flush=True)
+                print(f"[bundle {bundle_label}] Opus batch {i+1}/{len(opus_batches)}: {msg_tokens} tokens, {len(batch)} files", flush=True)
 
                 if msg_tokens > limit:
                     items = list(batch.items())
@@ -1067,15 +1209,15 @@ Be thorough but precise. If something is done correctly, acknowledge it as a pos
                                         timeout=1800,
                                     )
                                     results.append(resp)
-                                    print(f"      Sub-batch {half_label} complete", flush=True)
+                                    print(f"[bundle {bundle_label}] Opus batch {i+1} sub-{half_label} complete", flush=True)
                                     break
                                 except Exception as e:
                                     if attempt < 2:
                                         wait = 15 * (attempt + 1)
-                                        print(f"      Sub-batch {half_label} attempt {attempt+1} failed ({type(e).__name__}), retrying in {wait}s...", flush=True)
+                                        print(f"[bundle {bundle_label}] Opus batch {i+1} sub-{half_label} attempt {attempt+1} failed ({type(e).__name__}), retrying in {wait}s...", flush=True)
                                         await asyncio.sleep(wait)
                                     else:
-                                        print(f"      Sub-batch {half_label} FAILED: {e}", flush=True)
+                                        print(f"[bundle {bundle_label}] Opus batch {i+1} sub-{half_label} FAILED: {e}", flush=True)
                                         results.append(f"[Analysis failed for sub-batch {i+1}{half_label}: {str(e)[:200]}]")
                         combined = "\n\n---\n\n".join(results)
                         analysis_cache_ns.set(cache_key, combined)
@@ -1095,7 +1237,7 @@ Be thorough but precise. If something is done correctly, acknowledge it as a pos
                             except Exception as e:
                                 if attempt < 2:
                                     wait = 15 * (attempt + 1)
-                                    print(f"      Single file attempt {attempt+1} failed ({type(e).__name__}), retrying in {wait}s...", flush=True)
+                                    print(f"[bundle {bundle_label}] Opus batch {i+1} single-file attempt {attempt+1} failed ({type(e).__name__}), retrying in {wait}s...", flush=True)
                                     await asyncio.sleep(wait)
                                 else:
                                     return f"[Analysis failed for {key}: {str(e)[:200]}]"
@@ -1108,15 +1250,15 @@ Be thorough but precise. If something is done correctly, acknowledge it as a pos
                             timeout=1800,
                         )
                         analysis_cache_ns.set(cache_key, resp)
-                        print(f"    Opus batch {i+1} complete", flush=True)
+                        print(f"[bundle {bundle_label}] Opus batch {i+1} complete", flush=True)
                         return resp
                     except Exception as e:
                         if attempt < 2:
                             wait = 15 * (attempt + 1)
-                            print(f"    Opus batch {i+1} attempt {attempt+1} failed ({type(e).__name__}), retrying in {wait}s...", flush=True)
+                            print(f"[bundle {bundle_label}] Opus batch {i+1} attempt {attempt+1} failed ({type(e).__name__}), retrying in {wait}s...", flush=True)
                             await asyncio.sleep(wait)
                         else:
-                            print(f"    Opus batch {i+1} FAILED: {e}", flush=True)
+                            print(f"[bundle {bundle_label}] Opus batch {i+1} FAILED: {e}", flush=True)
                             return f"[Analysis failed for batch {i+1}: {str(e)[:200]}]"
 
         analysis_results = await asyncio.gather(*[
@@ -1125,7 +1267,6 @@ Be thorough but precise. If something is done correctly, acknowledge it as a pos
         ])
 
         analysis_results = [r for r in analysis_results if r and not r.startswith("[Analysis failed")]
-        print(f"  Analysis complete: {len(analysis_results)} results", flush=True)
 
         if not analysis_results:
             return {"outputText": json.dumps({
@@ -1138,15 +1279,14 @@ Be thorough but precise. If something is done correctly, acknowledge it as a pos
         # =============================================================
         if len(analysis_results) == 1:
             consolidated_analysis = analysis_results[0]
-            print(f"\n=== Step 5: Consolidation skipped (1 result) ===", flush=True)
         elif len(analysis_results) <= 4:
-            print(f"\n=== Step 5: Single-pass consolidation ({len(analysis_results)} results) ===", flush=True)
+            print(f"[bundle {bundle_label}] consolidating {len(analysis_results)} results (single-pass)", flush=True)
             consolidated_analysis = await _single_pass_consolidate(
                 analysis_results, combined_asvs_description,
                 SONNET_PROVIDER, SONNET_MODEL, SONNET_PARAMS,
             )
         else:
-            print(f"\n=== Step 5: Multi-round consolidation ({len(analysis_results)} results) ===", flush=True)
+            print(f"[bundle {bundle_label}] consolidating {len(analysis_results)} results (multi-round)", flush=True)
             consolidated_analysis = await _multi_round_consolidate(
                 analysis_results, combined_asvs_description,
                 SONNET_PROVIDER, SONNET_MODEL, SONNET_PARAMS, SONNET_CONTEXT,
@@ -1155,7 +1295,6 @@ Be thorough but precise. If something is done correctly, acknowledge it as a pos
         # =============================================================
         # Step 6: Split bundled output per section
         # =============================================================
-        print(f"\n=== Step 6: Splitting bundled output per section ===", flush=True)
         per_section = _split_bundled_output(
             consolidated_analysis, asvs_sections, asvs_descriptions,
             repo_name, audit_date,
@@ -1195,7 +1334,7 @@ Be thorough but precise. If something is done correctly, acknowledge it as a pos
         total_findings = sum(
             sum(s["findings"].values()) for s in per_section.values()
         )
-        print(f"\n=== Done: {len(asvs_sections)} sections, {total_findings} total findings ===", flush=True)
+        print(f"[bundle {bundle_label}] done: {len(asvs_sections)} sections, {total_findings} findings", flush=True)
         return {"outputText": json.dumps(envelope, default=str)}
 
     finally:

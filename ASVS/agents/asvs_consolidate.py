@@ -1040,8 +1040,25 @@ If no duplicates: {"merges": []}"""
             sev = f.get("severity", "Informational")
             severity_counts[sev] = severity_counts.get(sev, 0) + 1
 
+        # n_actionable excludes Informational findings — those are recorded in
+        # the consolidated report but deliberately not turned into issues.md
+        # entries (they don't warrant GitHub tickets). Defined here so the
+        # executive-summary metadata table, the deterministic cross-ref
+        # footer, and the issues.md preamble can all reference the same
+        # value without recomputing.
+        n_actionable = len(all_findings) - severity_counts.get("Informational", 0)
+
+        # The commit hash lives in `output_directory`, by convention as the
+        # trailing path segment (e.g. "ASVS/reports/airflow/task-sdk/6431cd1").
+        # The previous code searched `directories[0]`, but that's a discovered
+        # domain name like "sentry_integration", not a path — so commit_info
+        # always fell through to "N/A". We scan output_directory in reverse so
+        # the trailing hash-shaped segment wins; a path component would have
+        # to be entirely hex and 7+ chars to false-positive, which the usual
+        # repo/component names (airflow-core, task-sdk, etc.) can't satisfy
+        # because they contain hyphens or non-hex letters.
         commit_info = "N/A"
-        for part in directories[0].split("/"):
+        for part in reversed(output_directory.split("/")):
             if len(part) >= 7 and re.match(r'^[0-9a-f]+$', part):
                 commit_info = part
                 break
@@ -1054,12 +1071,23 @@ If no duplicates: {"merges": []}"""
         print(f"Generating executive summary...")
         severity_scope = f"Severity threshold: {severity_threshold} and above" if severity_threshold else "Severity threshold: none (all findings included)"
 
+        # Build the display identifier for the audited source. `source_id`
+        # from the orchestrator looks like "owner/repo[/path] @ commit_hash";
+        # for the Repository field we want just the path (the commit hash
+        # is rendered as its own Commit field). Fall back to owner/repo —
+        # the PUBLISHING target — only when source_id wasn't passed, which
+        # is the legacy / direct-invoke case. The previous behaviour
+        # unconditionally used owner/repo, which produced report titles
+        # naming the wrong project (the output runbooks repo instead of
+        # the audited code).
+        source_display = source_id.split(" @ ", 1)[0] if source_id else f"{owner}/{repo}"
+
         exec_summary_prompt = f"""Generate the opening sections of a security audit consolidated report in Markdown.
 
 Audit scope: up to {level}
 {severity_scope}
 
-Repository: {owner}/{repo}
+Repository: {source_display}
 Directories: {', '.join(directories)}
 ASVS Level: {level}
 {severity_scope}
@@ -1068,6 +1096,7 @@ Date: {audit_date}
 Auditor: Tooling Agents
 Source reports: {total_reports}
 Total findings: {len(all_findings)}
+Actionable issues: {n_actionable}
 
 Severity: Critical={severity_counts.get('Critical',0)}, High={severity_counts.get('High',0)}, Medium={severity_counts.get('Medium',0)}, Low={severity_counts.get('Low',0)}, Info={severity_counts.get('Informational',0)}
 
@@ -1081,8 +1110,17 @@ Finding titles:
 Positive controls: {json.dumps(all_positive_controls[:50], indent=2, default=str)}
 
 Generate ONLY:
-1. Report Metadata table (Repository, ASVS Level, Severity Threshold, Commit, Date, Auditor, Source Reports, Total Findings)
-2. Executive Summary with severity distribution, level coverage, top 5 risks, positive controls
+1. The report title as a single H1 line in this EXACT form (do not paraphrase,
+   add subtitles, alternative phrasings, or any taglines):
+   `# Security Audit Consolidated Report — {source_display}`
+2. Report Metadata table with these rows in this exact order:
+   Repository, ASVS Level, Severity Threshold, Commit, Date, Auditor,
+   Source Reports, Total Findings{", Actionable Issues" if n_actionable != len(all_findings) else ""}.
+   Use `{source_display}` for the Repository cell.
+   Use exactly `{len(all_findings)}` for the Total Findings cell.
+   {"Use exactly `" + str(n_actionable) + "` for the Actionable Issues cell." if n_actionable != len(all_findings) else ""}
+   {"Below the metadata table, add one italicised line: *Informational findings are recorded in this report but not opened as GitHub issues — see issues.md for the " + str(n_actionable) + " actionable items.*" if n_actionable != len(all_findings) else ""}
+3. Executive Summary with severity distribution, level coverage, top 5 risks, positive controls
 
 End with ---."""
 
@@ -1119,16 +1157,196 @@ For multi-value table cells (Files, Source Reports, etc.): use ", " (comma-space
                         if attempt < 2:
                             await asyncio.sleep(5)
 
-        # Tail sections (Sonnet)
-        tail_prompt = f"""Generate final sections:\n## 4. Positive Security Controls (table)\n## 5. ASVS Compliance Summary (table with status)\n## 6. Cross-Reference Matrix\n\nPositive controls: {json.dumps(all_positive_controls[:100], indent=2, default=str)}\nASVS statuses: {json.dumps(all_asvs_statuses, indent=2, default=str)}\nFindings: {json.dumps([{"id": f["global_id"], "sev": f["severity"], "title": f["title"], "asvs": f.get("asvs_sections",[])} for f in all_findings], indent=2, default=str)}"""
+        # ============================================================
+        # Tail sections (deterministic — no LLM)
+        # ============================================================
+        # Sections 4, 5, 6 used to be LLM-generated from a minimal data
+        # summary, which produced four distinct hallucination classes:
+        #
+        # 1. Cross-Reference Matrix "Affected Components" column was
+        #    invented. The data summary fed to the LLM didn't include
+        #    finding.affected_files, so the model filled the cell with
+        #    plausible-sounding paths (e.g. FAB provider files cited
+        #    for SimpleAuthManager findings, www/ paths cited for
+        #    api_fastapi findings). Reader trusted them and they were
+        #    wrong.
+        # 2. ASVS Compliance Summary chapter headers used ASVS v4 names
+        #    paired with v5 section numbers ("V7: Error Handling and
+        #    Logging" labelling rows for 7.2.x Session Management).
+        #    The model defaulted to training-data chapter titles
+        #    rather than the actual chapter_name values loaded into
+        #    chapters_cache during PHASE-load.
+        # 3. Total Unique Findings footer was off by one ("7 Low, 2
+        #    Medium" when the actual count was 8 Low + 2 Medium = 10).
+        #    The LLM was re-counting from a partial JSON instead of
+        #    reading severity_counts which is exact.
+        # 4. Per-requirement "Notes" cells contained prose like "Jinja2
+        #    auto-escaping enabled" with no evidence anywhere in the
+        #    extracted audit data — the extraction schema doesn't
+        #    capture per-section reasoning, so any prose there was
+        #    fabricated.
+        #
+        # Everything below now reads from data we already have:
+        #   - asvs_context[req_id]: req_description, section_name,
+        #     chapter_name, level — loaded from the 'asvs' namespace
+        #     at the start of this phase.
+        #   - all_findings: full finding objects including
+        #     affected_files, related_findings, asvs_sections.
+        #   - all_asvs_statuses: per-requirement Pass/Partial/N/A/Fail
+        #     status from the per-section extracted reports.
+        #   - all_positive_controls: per-domain control list from the
+        #     per-section extracted reports.
+        #   - severity_counts: exact counts already computed above.
+        #
+        # The Notes column shows ONLY "See FINDING-XXX" cross-references
+        # when a finding maps to the requirement. We don't synthesize
+        # any other prose: the per-section reports in
+        # audit-reports-filtered:* are the source of audit reasoning
+        # and the reader can consult them directly.
 
-        try:
-            tail_result, _ = await call_llm(provider=FAST_PROVIDER, model=FAST_MODEL,
-                messages=[{"role": "user", "content": tail_prompt}],
-                parameters={**FAST_PARAMS, "max_tokens": 64000}, timeout=900)
-            tail_result = sanitize_md_html(tail_result)
-        except:
-            tail_result = "\n*Tail sections generation failed.*\n"
+        tail_lines = []
+
+        # --- Section 4: Positive Security Controls ---
+        tail_lines.append("# 4. Positive Security Controls")
+        tail_lines.append("")
+        if all_positive_controls:
+            tail_lines.append("| Domain | Control | Evidence Source | Supporting Files |")
+            tail_lines.append("|--------|---------|-----------------|------------------|")
+            for ctrl in all_positive_controls:
+                d_raw = ctrl.get("_domain", "") or ""
+                d_disp = d_raw.replace("_", " ").title() if d_raw else "—"
+                control = (ctrl.get("control") or "").replace("|", "\\|").replace("\n", " ").strip()
+                evidence = (ctrl.get("evidence") or "").replace("|", "\\|").replace("\n", " ").strip()
+                files_raw = ctrl.get("files", []) or []
+                files_str = ", ".join(str(f).replace("|", "\\|") for f in files_raw if str(f).strip()) or "—"
+                tail_lines.append(f"| {d_disp} | {control or '—'} | {evidence or '—'} | {files_str} |")
+        else:
+            tail_lines.append("*No positive controls recorded for this audit.*")
+        tail_lines.append("")
+        tail_lines.append("---")
+        tail_lines.append("")
+
+        # --- Section 5: ASVS Compliance Summary ---
+        # Iterate audited requirement IDs in numeric order; group rows
+        # under chapter headers pulled from asvs_context['chapter_name'].
+        tail_lines.append("# 5. ASVS Compliance Summary")
+        tail_lines.append("")
+        tail_lines.append("| ASVS ID | Requirement Title | Status | Notes |")
+        tail_lines.append("|---------|-------------------|--------|-------|")
+
+        def _req_sort_key(rid):
+            try:
+                return tuple(int(p) for p in rid.split("."))
+            except ValueError:
+                # Malformed ids sort to the end rather than crashing.
+                return (10**6,)
+
+        # Reverse index: requirement id -> list of finding IDs that
+        # reference it. Used only to fill the "Notes" column with
+        # "See FINDING-..." references; never as a basis for prose.
+        req_to_findings = {}
+        for f in all_findings:
+            for s in f.get("asvs_sections", []) or []:
+                req_to_findings.setdefault(s, []).append(f["global_id"])
+
+        audited_reqs = sorted(all_asvs_statuses.keys(), key=_req_sort_key)
+        current_chapter = None
+        for rid in audited_reqs:
+            ctx = asvs_context.get(rid, {}) or {}
+            chapter_id = rid.split(".", 1)[0] if "." in rid else rid
+            if chapter_id != current_chapter:
+                ch_name = ctx.get("chapter_name", "")
+                header = f"**V{chapter_id}: {ch_name}**" if ch_name else f"**V{chapter_id}**"
+                tail_lines.append(f"| {header} | | | |")
+                current_chapter = chapter_id
+
+            entry = all_asvs_statuses[rid] or {}
+            status_raw = entry.get("status", "Unknown")
+            status_display = f"**{status_raw}**"
+            title = (ctx.get("req_description") or entry.get("title") or "").replace("|", "\\|").replace("\n", " ").strip()
+            finding_refs = req_to_findings.get(rid, [])
+            notes = ("See " + ", ".join(finding_refs)) if finding_refs else ""
+            tail_lines.append(f"| {rid} | {title} | {status_display} | {notes} |")
+
+        # Status counts — deterministic.
+        n_pass = sum(1 for v in all_asvs_statuses.values() if (v or {}).get("status") == "Pass")
+        n_partial = sum(1 for v in all_asvs_statuses.values() if (v or {}).get("status") == "Partial")
+        n_na = sum(1 for v in all_asvs_statuses.values() if (v or {}).get("status") in ("N/A", "Not Applicable"))
+        n_fail = sum(1 for v in all_asvs_statuses.values() if (v or {}).get("status") in ("Fail", "Failed", "Open"))
+        n_total = len(all_asvs_statuses)
+        n_other = n_total - n_pass - n_partial - n_na - n_fail
+
+        tail_lines.append("")
+        tail_lines.append("**Summary Statistics:**")
+        if n_total > 0:
+            tail_lines.append(f"- **Pass**: {n_pass} requirements ({n_pass * 100 / n_total:.1f}%)")
+            tail_lines.append(f"- **Partial**: {n_partial} requirements ({n_partial * 100 / n_total:.1f}%)")
+            tail_lines.append(f"- **N/A**: {n_na} requirements ({n_na * 100 / n_total:.1f}%)")
+            tail_lines.append(f"- **Fail**: {n_fail} requirements ({n_fail * 100 / n_total:.1f}%)")
+            if n_other > 0:
+                tail_lines.append(f"- **Other / Unknown**: {n_other} requirements ({n_other * 100 / n_total:.1f}%)")
+        else:
+            tail_lines.append("- *No audited requirements.*")
+        tail_lines.append("")
+        tail_lines.append("---")
+        tail_lines.append("")
+
+        # --- Section 6: Cross-Reference Matrix ---
+        # One row per finding. "Affected Components" is rendered
+        # VERBATIM from finding.affected_files — no model in the loop.
+        tail_lines.append("# 6. Cross-Reference Matrix")
+        tail_lines.append("")
+        if all_findings:
+            tail_lines.append("| Finding ID | Severity | ASVS Requirements | Related Findings | Affected Components |")
+            tail_lines.append("|------------|----------|-------------------|------------------|---------------------|")
+            for f in all_findings:
+                gid = f["global_id"]
+                sev = f.get("severity", "Unknown")
+                asvs_reqs = ", ".join(f.get("asvs_sections", []) or []) or "—"
+                related = ", ".join(f.get("related_findings", []) or []) or "—"
+                # affected_files entries are dicts {"file": "path:line"}
+                # in the normal path and bare strings in older / fallback
+                # paths — handle both.
+                affected = []
+                for af in (f.get("affected_files") or []):
+                    val = af.get("file", "") if isinstance(af, dict) else str(af)
+                    val = (val or "").strip()
+                    if val:
+                        affected.append(val.replace("|", "\\|"))
+                affected_str = ", ".join(affected) or "—"
+                tail_lines.append(f"| {gid} | {sev} | {asvs_reqs} | {related} | {affected_str} |")
+        else:
+            tail_lines.append("*No findings to cross-reference.*")
+
+        # Severity totals footer — sourced from severity_counts which
+        # was computed by iterating all_findings, so it's tautologically
+        # consistent with the rows above. Previously the LLM re-counted
+        # from its own partial summary and got it wrong by one.
+        crit = severity_counts.get("Critical", 0)
+        high = severity_counts.get("High", 0)
+        med = severity_counts.get("Medium", 0)
+        low = severity_counts.get("Low", 0)
+        info = severity_counts.get("Informational", 0)
+        n_findings_total = crit + high + med + low + info
+        tail_lines.append("")
+        tail_lines.append(
+            f"**Total Unique Findings**: {n_findings_total} "
+            f"({crit} Critical, {high} High, {med} Medium, {low} Low, {info} Info)"
+        )
+        # When there are Informational findings, surface the actionable
+        # count here so a reader who notices the consolidated.md total
+        # doesn't match issues.md isn't left wondering. Suppressed when
+        # info == 0 to keep the output clean for the common case.
+        if info > 0:
+            n_act = n_findings_total - info
+            tail_lines.append("")
+            tail_lines.append(
+                f"*{n_act} of {n_findings_total} are actionable. "
+                f"Informational findings are recorded here but not opened "
+                f"as GitHub issues; see issues.md for the {n_act} actionable items.*"
+            )
+
+        tail_result = "\n".join(tail_lines)
 
         # Assemble
         consolidated_md = exec_result.rstrip() + "\n\n## 3. Findings\n\n" + "\n\n".join(findings_md_parts) + "\n\n---\n\n" + tail_result
@@ -1168,11 +1386,30 @@ For multi-value table cells (Files, Source Reports, etc.): use ", " (comma-space
 
         ISSUE_FMT = """---\n## Issue: FINDING-NNN - Title\n**Labels:** bug, security, priority:sev\n**Description:**\n### Summary\n### Details\n### Remediation\n### Acceptance Criteria\n- [ ] Fixed\n- [ ] Test added\n### References\n### Priority"""
 
+        # Deterministic preamble. The LLM used to emit "# Security Issues"
+        # for the first batch and "Continue. No header." for the rest, which
+        # meant the file had no way to surface the actionable-vs-total
+        # split. Writing the header here, including the explanatory line
+        # when there are Informational findings, lets a reader who sees
+        # "Total Findings: N" in consolidated.md but only K issues here
+        # understand why without having to find the run log.
         issues_parts = []
+        n_info = len(all_findings) - len(actionable)
+        if n_info > 0:
+            issues_parts.append(
+                "# Security Issues\n\n"
+                f"*{len(actionable)} actionable finding(s). {n_info} informational "
+                f"finding(s) from the consolidated report are not opened as issues — "
+                f"see consolidated.md for those.*"
+            )
+        else:
+            issues_parts.append("# Security Issues")
+
         for bi in range(0, len(actionable), 40):
             batch = actionable[bi:bi+40]
-            is_first = (bi == 0)
-            prompt = f"""Generate GitHub issues for {len(batch)} findings.\n{ISSUE_FMT}\n{"Start with: # Security Issues" if is_first else "Continue. No header."}\n\n{json.dumps(batch, indent=2, default=str)}"""
+            # Header is now written above deterministically — tell the LLM
+            # to start straight from the first finding's separator.
+            prompt = f"""Generate GitHub issues for {len(batch)} findings.\n{ISSUE_FMT}\nDo not include a top-level heading. Start directly with the first finding's `---` separator.\n\n{json.dumps(batch, indent=2, default=str)}"""
             for attempt in range(3):
                 try:
                     result, _ = await call_llm(provider=FAST_PROVIDER, model=FAST_MODEL,
@@ -1270,6 +1507,26 @@ For multi-value table cells (Files, Source Reports, etc.): use ", " (comma-space
         _src_suffix = f" [source: {source_id}]" if source_id else ""
         await push_file(f"{output_directory}/{consolidated_filename}", consolidated_md, f"Add consolidated audit report ({level}){_src_suffix}")
         await push_file(f"{output_directory}/{issues_filename}", issues_md, f"Add security issues ({level}){_src_suffix}")
+
+        # Mirror final outputs into the consolidation namespace so
+        # downstream steps (the orchestrator's redactor) can read them
+        # without round-tripping through GitHub. The GitHub contents API
+        # is eventually consistent: reading consolidated.md or issues.md
+        # back immediately after pushing them 404s reliably enough that
+        # it broke the redactor's issues.md fetch on the May 19 run.
+        # The namespace is strongly consistent. Keys are prefixed with
+        # "final:" so they're trivial to distinguish from the intermediate
+        # consolidation state that already lives in this namespace.
+        try:
+            consolidation_ns.set("final:consolidated.md", consolidated_md)
+            consolidation_ns.set("final:issues.md", issues_md)
+            print(f"  Mirrored final outputs to namespace consolidation:{owner}/{repo}/{dirs_key}", flush=True)
+        except Exception as _mirror_e:
+            # Don't fail consolidation if the namespace write fails — the
+            # GitHub copy is still the source of truth. Just warn loudly
+            # so the redactor's eventual failure has a breadcrumb.
+            print(f"  WARNING: namespace mirror of final outputs FAILED: "
+                  f"{type(_mirror_e).__name__}: {_mirror_e}", flush=True)
 
         print(f"\n=== Done ===")
         print(f"Total findings: {len(all_findings)}, Actionable issues: {len(actionable)}")
