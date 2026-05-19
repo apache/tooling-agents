@@ -325,7 +325,7 @@ async def run(input_dict, tools):
                 lines.append("")
             return "\n".join(lines)
 
-        async def _build_suggested_guidance_md(entries, min_cluster=3):
+        async def _build_suggested_guidance_md(entries, min_cluster=3, known_guidance_filenames=None):
             """Cluster drop reasons by underlying policy via LLM, then
             format the recurring patterns into actionable AGENTS.md /
             SECURITY.md suggestions.
@@ -362,17 +362,36 @@ async def run(input_dict, tools):
             # inferred ones; surface the cited ones in a separate
             # diagnostic section so the operator can confirm existing
             # guidance is doing work.
-            citation_re = re.compile(r"audit_guidance:[^:]+::[\w_.\-]+\.md")
+            #
+            # The triage LLM writes citations in two forms:
+            #   (a) full namespace: audit_guidance:airflow::foo.md
+            #   (b) bare filename:  foo.md
+            # The explicit form is unambiguous. The bare form is
+            # ambiguous (could mention any .md file), so we only treat
+            # it as a citation when the basename is in
+            # known_guidance_filenames — i.e. it's actually one of the
+            # uploaded guidance docs in Phase 1's policy doc set.
+            citation_re = re.compile(r"audit_guidance:[^:]+::([\w_.\-]+\.md)")
+            known_filenames = set(known_guidance_filenames or ())
+            bare_filename_re = None
+            if known_filenames:
+                # word-bounded match on any known filename
+                escaped = "|".join(re.escape(n) for n in known_filenames)
+                bare_filename_re = re.compile(
+                    r"(?<![\w./:])(" + escaped + r")(?![\w])"
+                )
             cited_entries = []
             inferred_entries = []
             cited_by_file = {}
             for e in entries:
                 reason = e.get("reason") or ""
-                matches = citation_re.findall(reason)
-                if matches:
+                matched_files = set(citation_re.findall(reason))
+                if bare_filename_re is not None:
+                    matched_files.update(bare_filename_re.findall(reason))
+                if matched_files:
                     cited_entries.append(e)
-                    for path in matches:
-                        cited_by_file.setdefault(path, []).append(e)
+                    for fname in matched_files:
+                        cited_by_file.setdefault(fname, []).append(e)
                 else:
                     inferred_entries.append(e)
 
@@ -390,10 +409,10 @@ async def run(input_dict, tools):
                     "applied.*",
                     "",
                 ]
-                for path, drops in sorted(
+                for fname, drops in sorted(
                     cited_by_file.items(), key=lambda x: -len(x[1])
                 ):
-                    out.append(f"### {len(drops)}×: cited `{path}`")
+                    out.append(f"### {len(drops)}×: cited `{fname}`")
                     out.append("")
                     secs = sorted({d.get("section", "?") for d in drops})
                     if secs:
@@ -1195,7 +1214,19 @@ async def run(input_dict, tools):
                 print(f"[filter] WARN: failed to write {key}: {e}")
 
         drop_log_md = _build_drop_log_md(all_drop_entries, profile_hash)
-        suggested_md = await _build_suggested_guidance_md(all_drop_entries)
+        # Extract bare filenames of uploaded audit_guidance docs so the
+        # suggested-guidance builder can recognize paraphrased citations
+        # that drop the `audit_guidance:{ns}::` prefix (the LLM writes
+        # the citation either form when generating drop reasons).
+        known_guidance_filenames = {
+            label.split("::", 1)[1]
+            for label in policy_docs
+            if label.startswith("audit_guidance:") and "::" in label
+        }
+        suggested_md = await _build_suggested_guidance_md(
+            all_drop_entries,
+            known_guidance_filenames=known_guidance_filenames,
+        )
         review_md = _build_review_queue_md(all_drop_entries, profile_hash)
 
         artifacts = {
