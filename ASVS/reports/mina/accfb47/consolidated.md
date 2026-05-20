@@ -33,15 +33,15 @@ All 26 findings are actionable. The audit was conducted at ASVS Level 1, coverin
 
 This audit evaluated controls at **ASVS L1**, which represents the minimum assurance level suitable for all applications. All findings map to L1 verification requirements, confirming that foundational security controls require attention before progression to higher assurance levels.
 
-### Top 5 Risks
+### Top Risks
 
-2. **HTTP Response Splitting via Missing CRLF Sanitization (FINDING-004, High)** — The `HttpServerEncoder` does not sanitize header values for CR/LF characters, enabling HTTP response splitting attacks that can lead to cache poisoning, session hijacking, or cross-site scripting.
+1. **HTTP Response Splitting via Missing CRLF Sanitization (FINDING-004, High)** — The `HttpServerEncoder` does not sanitize header values for CR/LF characters, enabling HTTP response splitting attacks that can lead to cache poisoning, session hijacking, or cross-site scripting.
 
-3. **HTTP Request Smuggling via Missing CRLF Sanitization (FINDING-005, High)** — The `HttpClientEncoder` similarly lacks CRLF sanitization, opening the door to request smuggling attacks against downstream systems.
+2. **HTTP Request Smuggling via Missing CRLF Sanitization (FINDING-005, High)** — The `HttpClientEncoder` similarly lacks CRLF sanitization, opening the door to request smuggling attacks against downstream systems.
 
-4. **Unsanitized OGNL Expression Execution (FINDING-006, High)** — The `findAndProcessSessions` method processes user-influenced input as OGNL expressions without sanitization, creating a remote code execution vector through the JMX management interface.
+3. **Unsanitized OGNL Expression Execution (FINDING-006, High)** — The `findAndProcessSessions` method processes user-influenced input as OGNL expressions without sanitization, creating a remote code execution vector through the JMX management interface.
 
-5. **End-of-life Log4j 1.x Dependency (FINDING-008, High)** — The project declares a dependency on Log4j 1.x, which has reached end-of-life and contains known critical CVEs (including CVE-2019-17571), exposing deployments to deserialization-based remote code execution.
+4. **End-of-life Log4j 1.x Dependency (FINDING-008, High)** — The project declares a dependency on Log4j 1.x, which has reached end-of-life and contains known critical CVEs (including CVE-2019-17571), exposing deployments to deserialization-based remote code execution.
 
 ### Positive Controls Observed
 
