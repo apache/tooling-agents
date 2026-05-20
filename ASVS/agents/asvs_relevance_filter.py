@@ -1078,6 +1078,55 @@ async def run(input_dict, tools):
 
         print(f"[filter] {len(chapter_groups)} chapters → {len(batches)} batches")
 
+        # Safety net for the defense-in-depth escape hatch. The prompt
+        # forbids resurrecting a scope-carved-out finding as a Low
+        # "defense-in-depth gap"; this post-pass catches the pattern in
+        # case the LLM emits it anyway. Detection requires (a) the
+        # description acknowledges a profile carve-out applies AND
+        # (b) the description invokes defense-in-depth framing AND
+        # (c) the surviving severity is Low or Info. All three together
+        # are the exact escape-hatch shape we observed on the
+        # logging-log4net F-009 (Telnet bind) and F-010 (SMTP header)
+        # findings. Findings matching the pattern are moved from kept
+        # to dropped with confidence=medium so they land in the human
+        # review queue rather than being silently scrubbed.
+        def _is_did_escape_hatch(finding):
+            desc = (finding.get("description") or "").lower()
+            if not desc:
+                return False
+            sev = (finding.get("severity") or "").strip().lower()
+            if sev not in ("low", "info"):
+                return False
+            carve_phrases = (
+                "trust boundary",
+                "out of scope",
+                "delegated to",
+                "deployment concern",
+                "deployment manager",
+                "deployer's responsibility",
+                "deployer is responsible",
+                "administrator-controlled",
+                "administrator controlled",
+                "configuration-controlled",
+                "configuration controlled",
+                "dev-only",
+                "per profile",
+                "per the profile",
+                "downgraded from",
+                "documented design decision",
+                "profile delegates",
+            )
+            did_phrases = (
+                "defense-in-depth",
+                "defense in depth",
+                "as defense in",
+                "as a defense-in-depth",
+                "as a defense in depth",
+                "defense-in-depth gap",
+                "defense in depth gap",
+            )
+            return any(p in desc for p in carve_phrases) and any(p in desc for p in did_phrases)
+
         FILTER_PROMPT_TEMPLATE = (
             "You are a security audit triage reviewer.\n\n"
             "You have the project's own Security Profile (synthesized from the "
@@ -1085,13 +1134,42 @@ async def run(input_dict, tools):
             "reports. For each finding in each report, decide one of:\n\n"
             "- **KEEP**: real, in-scope finding for this project's threat model. "
             "Pass through unchanged.\n"
-            "- **DOWNGRADE**: real finding but severity overstated given the "
-            "project's threat model. Adjust severity and add a one-line note in "
-            "the description.\n"
+            "- **DOWNGRADE**: real finding whose root cause is in scope but whose "
+            "severity is overstated. Adjust severity and add a one-line note in "
+            "the description. Use DOWNGRADE only when the underlying threat is "
+            "real for this project — not as a way to keep a scope-carved-out "
+            "finding alive at lower severity.\n"
             "- **DROP**: explicitly out of scope per the profile (delegated to "
             "deployment manager, dev-only component, documented design decision, "
             "documentation already exists, ASVS category not applicable). Provide "
             "a one-line reason that cites the profile section.\n\n"
+            "**Distinguishing DROP from DOWNGRADE**: ask whether the profile "
+            "addresses the finding's ROOT CAUSE (the data flow, the trust "
+            "assumption, the threat-model premise) or only its severity. If "
+            "the profile makes the threat premise moot — for example, the "
+            "finding's exploit requires an untrusted data path that the "
+            "profile documents as not existing, or a trust boundary the "
+            "profile documents as not crossed — that is DROP. If the profile "
+            "reduces but does not eliminate the practical impact — for "
+            "example, the exploit requires authenticated access or a "
+            "deployer-controlled precondition that does not eliminate the "
+            "underlying defect — that is DOWNGRADE.\n\n"
+            "**Defense-in-depth is not an escape hatch.** When a finding's "
+            "premise is carved out by the profile (no untrusted data path "
+            "exists, the surface is configuration-only, the component is "
+            "dev-only, the concern is delegated to the deployer), the correct "
+            "action is DROP. Recasting such a finding as a Low 'defense-in-"
+            "depth gap' is forbidden. If you find yourself writing a "
+            "downgrade note of the shape \"profile says X is out of scope, "
+            "BUT as defense-in-depth...\" or \"trust boundary excludes this, "
+            "HOWEVER...\" or \"DOWNGRADED to Low because [profile carve-out], "
+            "but...\" — stop and use DROP instead. The finding's own "
+            "acknowledgement of the carve-out is itself evidence the carve-out "
+            "applies; do not then resurrect the finding at lower severity. "
+            "Library-improvement suggestions that would be nice to have but "
+            "are not vulnerabilities under the project's threat model belong "
+            "in DROP with a reason like 'feature request, not vulnerability "
+            "per profile carve-out', not in DOWNGRADE.\n\n"
             "For every DROP, also assign a CONFIDENCE level:\n"
             "- **high**: the profile EXPLICITLY addresses this finding type (e.g. "
             "the profile literally says 'TLS is deployment manager's responsibility' "
@@ -1251,6 +1329,37 @@ async def run(input_dict, tools):
             kept = rep.get("kept_findings", []) or []
             dropped = rep.get("dropped_findings", []) or []
             promoted = rep.get("promoted_positive_controls", []) or []
+
+            # Safety net: catch defense-in-depth escape-hatch downgrades the
+            # prompt rule missed. These get moved from kept to dropped with
+            # confidence=medium so a human reviewer can see them in the
+            # review queue and confirm the post-pass got it right.
+            escape_hatch_drops = []
+            survivors = []
+            for f in kept:
+                if _is_did_escape_hatch(f):
+                    escape_hatch_drops.append(f)
+                else:
+                    survivors.append(f)
+            if escape_hatch_drops:
+                kept = survivors
+                for f in escape_hatch_drops:
+                    dropped.append({
+                        "original_id": f.get("finding_id") or f.get("id") or "?",
+                        "title": f.get("title", "?"),
+                        "severity": f.get("severity", "?"),
+                        "reason": (
+                            "defense-in-depth escape hatch: finding "
+                            "acknowledges a profile carve-out applies but was "
+                            "kept at Low with DiD framing. Filter prompt rule "
+                            "requires DROP in this case; post-pass corrected. "
+                            "Queued for review."
+                        ),
+                        "confidence": "medium",
+                    })
+                print(f"[filter] {key}: post-pass dropped "
+                      f"{len(escape_hatch_drops)} defense-in-depth escape-hatch "
+                      f"finding(s)")
 
             total_kept += len(kept)
             total_dropped += len(dropped)
