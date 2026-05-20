@@ -2453,6 +2453,53 @@ If `triage_type` is `question`, `discussion`, `unrelated`, or `unclear`: set `cl
                 raise RuntimeError(f"GET {url} -> {r.status_code}: {r.text[:500]}")
             return r
 
+        async def _fetch_all_comments(comments_url):
+            """Paginate through all comments on an issue. GitHub's
+            /issues/{N}/comments endpoint defaults to 30 per page and
+            caps at 100; long-running issues (#233 had 40+ comments
+            across 8+ months) push older content — including the bot's
+            prior triages — onto page 2+. Without pagination, the
+            sentinel-check sees only the first page and the agent
+            re-triages on every run.
+
+            We pull per_page=100 up front and then follow the Link
+            header for rel='next' until exhausted. Returns the combined
+            list of comment dicts in the same order GitHub returns them
+            (chronological, oldest first).
+            """
+            import re as _re_link
+            all_comments = []
+            # Tack per_page onto the base URL. comments_url comes back
+            # from GitHub without query string in the issues payload.
+            sep = "&" if "?" in comments_url else "?"
+            url = f"{comments_url}{sep}per_page=100"
+            # Bound iterations defensively so a misbehaving Link header
+            # can't loop us forever. 50 pages * 100 = 5000 comments
+            # which is comfortably beyond any real issue.
+            for _ in range(50):
+                if not url:
+                    break
+                r = await gh_get(url)
+                all_comments.extend(r.json())
+                # Parse Link header for rel='next'. Format is
+                #   <url1>; rel="next", <url2>; rel="last"
+                link_header = (
+                    r.headers.get("link")
+                    or r.headers.get("Link")
+                    or ""
+                )
+                next_url = None
+                for part in link_header.split(","):
+                    part = part.strip()
+                    if 'rel="next"' not in part:
+                        continue
+                    m = _re_link.match(r"<([^>]+)>", part)
+                    if m:
+                        next_url = m.group(1)
+                    break
+                url = next_url
+            return all_comments
+
         async def gh_post(path, *, json_body=None):
             url = path if path.startswith("http") else f"https://api.github.com{path}"
             r = await http_client.post(url, headers=gh_headers, json=json_body)
@@ -2695,6 +2742,43 @@ If `triage_type` is `question`, `discussion`, `unrelated`, or `unclear`: set `cl
         if max_issues:
             issues = issues[:max_issues]
 
+        # ---------- 5.5. label-based fast-path filter ----------
+        # When labeling is enabled and skip_already_triaged is set
+        # (default), skip issues that already carry our label without
+        # bothering to fetch their comments for the sentinel check.
+        # The label is applied on every processing path (full triage,
+        # pr_in_progress skip, sentinel skip), so its presence is a
+        # reliable proxy for "we've already seen this issue". This
+        # saves one paginated GET per labeled issue — material on
+        # long-thread issues like ATR #233 that need multiple pages.
+        #
+        # The comment-sentinel check downstream still runs on the
+        # remaining (un-labeled) issues, as a safety net for the case
+        # where the label was manually stripped but the v2 sentinel is
+        # still in the comments.
+        prefiltered_labeled = []
+        if skip_already_triaged and label:
+            keep = []
+            for it in issues:
+                labels_on_issue = it.get("labels") or []
+                has_our_label = any(
+                    (lbl.get("name") or "") == label
+                    for lbl in labels_on_issue
+                )
+                if has_our_label:
+                    prefiltered_labeled.append(it)
+                else:
+                    keep.append(it)
+            if prefiltered_labeled:
+                print(
+                    f"Label fast-path: {len(prefiltered_labeled)} of "
+                    f"{len(issues)} issues already carry the '{label}' "
+                    f"label; skipping comment-fetch on those. "
+                    f"Processing {len(keep)} remaining.",
+                    flush=True,
+                )
+            issues = keep
+
         # ---------- 6. cross-issue context: open PRs + duplicate/related clusters ----------
         # Both run once for the whole batch and feed every issue's
         # decision-making in step 7. Cheap relative to the per-issue
@@ -2768,10 +2852,16 @@ If `triage_type` is `question`, `discussion`, `unrelated`, or `unclear`: set `cl
 
             try:
                 # 7a. fetch existing comments once for sentinel checks
+                # AND for the prior-discussion ingestion downstream.
+                # Paginates because long-running issues exceed GitHub's
+                # 30-per-page default; without this, the bot's prior
+                # triages stay invisible to the sentinel check and the
+                # agent re-triages on every run.
                 existing_comments = []
                 if comments_url:
-                    cr = await gh_get(comments_url)
-                    existing_comments = cr.json()
+                    existing_comments = await _fetch_all_comments(
+                        comments_url
+                    )
                 already_triaged = any(
                     SENTINEL_TRIAGE in (c.get("body") or "")
                     for c in existing_comments
@@ -3028,13 +3118,38 @@ If `triage_type` is `question`, `discussion`, `unrelated`, or `unclear`: set `cl
                     )
                 )
 
+        # Surface label-prefiltered issues in results and counts so
+        # the user can see them as skipped (with a distinguishing
+        # summary), rather than mysteriously vanishing from the
+        # output. Count them in issues_skipped and issues_processed,
+        # since they DID enter consideration — we just shortcut the
+        # comment fetch via the label fast-path.
+        for it in prefiltered_labeled:
+            results.append(
+                _result_row(
+                    it.get("number"),
+                    it.get("title") or "",
+                    "skipped",
+                    (
+                        f"Already labeled '{label}'; skipping. "
+                        f"Strip the label or set "
+                        f"skip_already_triaged=false to force re-triage."
+                    ),
+                    [], "", "", False,
+                    linked_prs=[],
+                    related_issues=[],
+                )
+            )
+        skipped += len(prefiltered_labeled)
+        total_considered = len(issues) + len(prefiltered_labeled)
+
         # Human-readable summary for gofannon's outputText slot. The
         # structured fields are still returned alongside for programmatic
         # consumption (e.g. by downstream agents reading via
         # gofannon_client.call).
         output_text = (
             f"Triage of {repo} @ {branch}@{head_sha[:8]}\n"
-            f"Issues processed: {len(issues)}\n"
+            f"Issues processed: {total_considered}\n"
             f"Comments posted:  {posted}\n"
             f"Skipped:          {skipped}\n"
             f"Errors:           {len(errors)}\n"
@@ -3046,7 +3161,7 @@ If `triage_type` is `question`, `discussion`, `unrelated`, or `unclear`: set `cl
         return {
             "outputText": output_text,
             "repo": repo, "branch": branch, "head_sha": head_sha,
-            "issues_processed": len(issues),
+            "issues_processed": total_considered,
             "issues_commented": posted,
             "issues_skipped": skipped,
             "errors": errors,
