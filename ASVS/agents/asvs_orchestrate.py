@@ -713,6 +713,91 @@ async def run(input_dict, tools):
                         return '\n'.join(out)
                     redacted = _strip_critical_list_items(redacted)
 
+                    # 3c.1. Renumber the Top N Risks numbered list and update
+                    # its heading to match the surviving count. After 3c
+                    # drops Critical risks (e.g. item 1 of a Top 5 list),
+                    # the survivors keep their original numbers (2, 3, 4, 5)
+                    # and the heading still says "Top 5 Risks" — both visible
+                    # in the public report on the May 20 mina L1 run. This
+                    # pass renumbers survivors sequentially from 1 and
+                    # rewrites the heading to "Top {survivor_count} Risks".
+                    #
+                    # Scope: only the section under a heading matching
+                    # `^#{2,6} Top N Risks`. List renumbering does not apply
+                    # to numbered lists elsewhere in the document
+                    # (remediation steps, acceptance criteria, etc.) —
+                    # those should keep their original numbering even when
+                    # individual items happen to mention Critical findings.
+                    #
+                    # Safety: code-fenced regions are skipped exactly as in
+                    # 3a-3c. If no Top N Risks heading exists, this is a
+                    # no-op.
+                    def _renumber_top_risks(text):
+                        lines = text.split('\n')
+                        out = []
+                        in_fence = False
+                        top_heading_re = re.compile(
+                            r'^(#{2,6})\s+Top\s+(\d+)\s+Risks?\s*$',
+                            re.IGNORECASE,
+                        )
+                        boundary_re = re.compile(r'^#{1,6}(\s|$)')
+                        # Only match top-level list items (no leading
+                        # indent). Sub-bullets inside a risk's description
+                        # — common pattern when a finding's narrative
+                        # includes its own numbered breakdown — should
+                        # keep their original numbering.
+                        list_item_re = re.compile(r'^\d+\.\s')
+                        i = 0
+                        while i < len(lines):
+                            line = lines[i]
+                            stripped = line.lstrip()
+                            if stripped.startswith('```'):
+                                in_fence = not in_fence
+                                out.append(line)
+                                i += 1
+                                continue
+                            if in_fence:
+                                out.append(line)
+                                i += 1
+                                continue
+                            m = top_heading_re.match(line)
+                            if not m:
+                                out.append(line)
+                                i += 1
+                                continue
+                            # Found Top N Risks heading. Park a placeholder
+                            # in the output; rewrite it after counting the
+                            # surviving items in the section below.
+                            heading_prefix = m.group(1)
+                            heading_idx = len(out)
+                            out.append(line)  # placeholder
+                            i += 1
+                            survivor_count = 0
+                            while i < len(lines):
+                                nxt = lines[i]
+                                nxt_stripped = nxt.lstrip()
+                                if nxt_stripped.startswith('```'):
+                                    in_fence = not in_fence
+                                    out.append(nxt)
+                                    i += 1
+                                    continue
+                                if (not in_fence) and boundary_re.match(nxt_stripped):
+                                    break  # next heading; stop scanning
+                                if (not in_fence) and list_item_re.match(nxt):
+                                    survivor_count += 1
+                                    n = survivor_count  # bind for closure
+                                    nxt = list_item_re.sub(
+                                        lambda mm, n=n: f"{n}. ",
+                                        nxt,
+                                        count=1,
+                                    )
+                                out.append(nxt)
+                                i += 1
+                            if survivor_count > 0:
+                                out[heading_idx] = f"{heading_prefix} Top {survivor_count} Risks"
+                        return '\n'.join(out)
+                    redacted = _renumber_top_risks(redacted)
+
                     sorted_ids = sorted(redacted_ids,
                                          key=lambda s: int(re.search(r'(\d+)', s).group(1)) if re.search(r'(\d+)', s) else 0)
 
