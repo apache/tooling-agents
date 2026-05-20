@@ -239,6 +239,7 @@ async def run(input_dict, tools):
         sections_raw = ""
         source_id = ""
         reports_namespace_arg = ""
+        branch = ""
         for line in lines:
             line = line.strip()
             if not line:
@@ -261,6 +262,8 @@ async def run(input_dict, tools):
                     source_id = value
                 elif key in ("reports_namespace", "reportsnamespace", "report_namespace"):
                     reports_namespace_arg = value
+                elif key == "branch":
+                    branch = value
 
         directories = [d.strip().strip("/") for d in directories_raw.split(",") if d.strip()]
         # Optional: list of section IDs (e.g. "1.2.1, 1.2.2, 2.1.1") that
@@ -1114,9 +1117,10 @@ Generate ONLY:
    add subtitles, alternative phrasings, or any taglines):
    `# Security Audit Consolidated Report — {source_display}`
 2. Report Metadata table with these rows in this exact order:
-   Repository, ASVS Level, Severity Threshold, Commit, Date, Auditor,
+   Repository, {"Branch, " if branch else ""}ASVS Level, Severity Threshold, Commit, Date, Auditor,
    Source Reports, Total Findings{", Actionable Issues" if n_actionable != len(all_findings) else ""}.
    Use `{source_display}` for the Repository cell.
+   {"Use exactly `" + branch + "` for the Branch cell." if branch else ""}
    Use exactly `{len(all_findings)}` for the Total Findings cell.
    {"Use exactly `" + str(n_actionable) + "` for the Actionable Issues cell." if n_actionable != len(all_findings) else ""}
    {"Below the metadata table, add one italicised line: *Informational findings are recorded in this report but not opened as GitHub issues — see issues.md for the " + str(n_actionable) + " actionable items.*" if n_actionable != len(all_findings) else ""}

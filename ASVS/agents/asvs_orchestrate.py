@@ -180,6 +180,11 @@ async def run(input_dict, tools):
         # =============================================================
         source_repo = input_dict.get("sourceRepo", "")
         source_token = input_dict.get("sourceToken", "")
+        # branch: optional, empty string means use the repo's default branch.
+        # Useful for projects like apache/mina where master/trunk is abandoned
+        # and active development lives on a version branch (e.g. 2.2.X).
+        # Auditing the wrong branch wastes the entire run.
+        branch = input_dict.get("branch", "").strip()
         supplemental_data = input_dict.get("supplementalData", "")
         output_repo = input_dict.get("outputRepo", "")
         output_token = input_dict.get("outputToken", "")
@@ -251,17 +256,24 @@ async def run(input_dict, tools):
                 if ns and ns not in namespaces:
                     namespaces.append(ns)
 
-        # Fetch latest commit hash
+        # Fetch latest commit hash. If branch is specified, query that branch's
+        # HEAD via ?sha={branch}; otherwise GitHub returns the default branch's
+        # HEAD. Branch is logged either way so the run record shows which line
+        # of the project was audited.
         source_headers = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}
         if source_token:
             source_headers["Authorization"] = f"Bearer {source_token}"
         try:
-            commits_resp = await http_client.get(
-                f"https://api.github.com/repos/{repo_owner_name}/commits?per_page=1",
-                headers=source_headers,
-            )
+            commits_url = f"https://api.github.com/repos/{repo_owner_name}/commits?per_page=1"
+            if branch:
+                commits_url += f"&sha={branch}"
+            commits_resp = await http_client.get(commits_url, headers=source_headers)
             commits_data = commits_resp.json()
             commit_hash = commits_data[0]["sha"][:7]
+            if branch:
+                print(f"  Source branch: {branch} @ {commit_hash}", flush=True)
+            else:
+                print(f"  Source branch: (default) @ {commit_hash}", flush=True)
         except Exception as e:
             print(f"  WARNING: Could not fetch commit hash ({e}), using 'latest'", flush=True)
             commit_hash = "latest"
@@ -1398,6 +1410,11 @@ async def run(input_dict, tools):
             download_input = download_source
             if source_token:
                 download_input += f"\n{source_token}"
+            # branch line is parsed by asvs_download_repo; absent line means
+            # use the repo default. Format is "branch: NAME" so it can't
+            # collide with the repo or token line shapes.
+            if branch:
+                download_input += f"\nbranch: {branch}"
 
             try:
                 download_result = await gofannon_client.call(
@@ -1963,18 +1980,21 @@ async def run(input_dict, tools):
                 pass_prefixes.append(d.rsplit("/", 1)[-1])
 
             try:
+                consolidate_input_lines = [
+                    f"repo: {push_repo}",
+                    f"pat: {push_token}",
+                    f"directories: {', '.join(pass_prefixes)}",
+                    f"output: {push_directory}",
+                    f"sections: {sections_arg}",
+                    f"source: {source_id}",
+                    f"reports_namespace: {filtered_reports_namespace}",
+                ]
+                if branch:
+                    consolidate_input_lines.append(f"branch: {branch}")
                 consolidate_result = await gofannon_client.call(
                     agent_name="asvs_consolidate",
                     input_dict={
-                        "inputText": "\n".join([
-                            f"repo: {push_repo}",
-                            f"pat: {push_token}",
-                            f"directories: {', '.join(pass_prefixes)}",
-                            f"output: {push_directory}",
-                            f"sections: {sections_arg}",
-                            f"source: {source_id}",
-                            f"reports_namespace: {filtered_reports_namespace}",
-                        ]),
+                        "inputText": "\n".join(consolidate_input_lines),
                         "domainGroups": json.dumps(domain_groups),
                         "level": level or "L3",
                         "severityThreshold": severity_threshold,

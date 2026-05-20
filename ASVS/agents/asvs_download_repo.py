@@ -31,12 +31,15 @@ async def run(input_dict, tools):
         repo = None
         token = None
         path_prefix = ""
+        branch_override = ""
 
         for line in lines:
             line = line.strip()
             if not line:
                 continue
-            if line.startswith("ghp_") or line.startswith("github_pat_") or (len(line) > 30 and line.isalnum()):
+            if line.startswith("branch:"):
+                branch_override = line.split(":", 1)[1].strip()
+            elif line.startswith("ghp_") or line.startswith("github_pat_") or (len(line) > 30 and line.isalnum()):
                 token = line
             elif "/" in line and repo is None:
                 raw = line.split()[0].strip("/")
@@ -63,10 +66,19 @@ async def run(input_dict, tools):
             return {"outputText": f"Error fetching repo info: {response.status_code} - repo='{repo}' token_present={token is not None} - {response.text}"}
         repo_info = response.json()
         default_branch = repo_info.get("default_branch", "main")
+        # branch_override (passed by orchestrator) wins when set; otherwise
+        # fall back to the repo's default branch. Projects with abandoned
+        # master/trunk (e.g. apache/mina active development is on 2.2.X)
+        # must override or the audit runs against dead code.
+        target_branch = branch_override or default_branch
 
         # ----- Download tarball (single HTTP call) -----
         # GitHub redirects this to a CodeLoad URL — follow_redirects must be on.
-        tarball_url = f"https://api.github.com/repos/{repo}/tarball/{default_branch}"
+        tarball_url = f"https://api.github.com/repos/{repo}/tarball/{target_branch}"
+        if branch_override:
+            print(f"Branch: {target_branch} (override; default is {default_branch})", flush=True)
+        else:
+            print(f"Branch: {target_branch} (default)", flush=True)
         if path_prefix:
             print(f"Downloading tarball: {tarball_url}", flush=True)
             print(f"  (will filter to subdirectory: {path_prefix}/)", flush=True)
@@ -165,7 +177,8 @@ async def run(input_dict, tools):
 
         summary_lines = [
             f"Repository: {repo}",
-            f"Default branch: {default_branch}",
+            f"Branch audited: {target_branch}"
+            + (f" (override; default is {default_branch})" if branch_override else " (default)"),
         ]
         if path_prefix:
             summary_lines.append(f"Path prefix: {path_prefix}")
