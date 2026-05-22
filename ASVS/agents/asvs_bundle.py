@@ -96,11 +96,11 @@ async def run(input_dict, tools):
               - `**Severity:** Medium` / `**Severity**: High`
             """
             import re
-            counts = {"Critical": 0, "High": 0, "Medium": 0, "Low": 0}
+            counts = {"Critical": 0, "High": 0, "Medium": 0, "Low": 0, "Info": 0}
 
             # Primary: count Finding IDs and classify each by its severity token
             finding_ids = re.findall(
-                r'ASVS-\d+-(CRIT(?:ICAL)?|HIGH|MED(?:IUM)?|LOW)-\d+',
+                r'ASVS-\d+-(CRIT(?:ICAL)?|HIGH|MED(?:IUM)?|LOW|INFO(?:RMATIONAL)?)-\d+',
                 content, re.IGNORECASE,
             )
             for sev_token in finding_ids:
@@ -113,13 +113,16 @@ async def run(input_dict, tools):
                     counts["Medium"] += 1
                 elif token_upper == "LOW":
                     counts["Low"] += 1
+                elif token_upper.startswith("INFO"):
+                    counts["Info"] += 1
 
             if sum(counts.values()) > 0:
                 return counts
 
             # Fallback 1: severity headings at any heading depth, with or without brackets
             for sev_name, key in [("critical", "Critical"), ("high", "High"),
-                                   ("medium", "Medium"), ("low", "Low")]:
+                                   ("medium", "Medium"), ("low", "Low"),
+                                   ("info", "Info"), ("informational", "Info")]:
                 pattern = rf'(?im)^#{{1,6}}\s*\[?\s*{sev_name}\s*\]?\s*$'
                 counts[key] += len(re.findall(pattern, content))
 
@@ -131,6 +134,7 @@ async def run(input_dict, tools):
             counts["High"] += len(re.findall(r'\*\*Severity:?\*\*:?\s*High', content, re.IGNORECASE))
             counts["Medium"] += len(re.findall(r'\*\*Severity:?\*\*:?\s*Medium', content, re.IGNORECASE))
             counts["Low"] += len(re.findall(r'\*\*Severity:?\*\*:?\s*Low', content, re.IGNORECASE))
+            counts["Info"] += len(re.findall(r'\*\*Severity:?\*\*:?\s*Info(?:rmational)?', content, re.IGNORECASE))
             return counts
 
         def _split_bundled_output(consolidated_analysis, asvs_sections, asvs_descriptions,
@@ -954,10 +958,12 @@ You are auditing the code below against ALL of the following requirements. For E
             analysis_system_prompt += f"\n## Domain Context\n{domain_context}\n"
 
         if severity_threshold:
-            severity_levels = {"CRITICAL": 4, "HIGH": 3, "MEDIUM": 2, "LOW": 1}
+            severity_levels = {"CRITICAL": 5, "HIGH": 4, "MEDIUM": 3, "LOW": 2, "INFO": 1, "INFORMATIONAL": 1}
             threshold_val = severity_levels.get(severity_threshold.upper(), 0)
             if threshold_val > 0:
-                included = [k for k, v in severity_levels.items() if v >= threshold_val]
+                included_set = {k for k, v in severity_levels.items() if v >= threshold_val}
+                included_set.discard("INFORMATIONAL")
+                included = sorted(included_set, key=lambda k: -severity_levels[k])
                 analysis_system_prompt += f"\n## Severity Threshold\nOnly report findings at these severity levels: {', '.join(included)}.\nDo not include findings below {severity_threshold.upper()} severity.\n"
 
         if false_positive_guidance:
@@ -1066,15 +1072,75 @@ For each security control found:
 - Document where it's DEFINED
 - Map ALL entry points that should use it
 - Verify it's actually CALLED at each entry point
-- Flag coverage gaps (control exists but not applied = CRITICAL)
+- Flag coverage gaps where the control exists but is not applied
 
-### Gap Type Classification
-| Gap Type | Description | Severity |
-|----------|-------------|----------|
-| Type A | Entry point with NO control | Standard vulnerability |
-| Type B | Control EXISTS but NOT CALLED | CRITICAL (false confidence) |
-| Type C | Control CALLED but RESULT IGNORED | CRITICAL |
-| Type D | Control CALLED but AFTER sensitive operation | CRITICAL |
+### Severity Calibration — Apache Software Foundation criteria
+
+Severity follows the ASF Security Team's published criteria for ASF projects.
+These override any default tendency to rate findings by CWE category, ASVS
+section, or gap shape alone.
+
+- **Critical** — easily exploited by a remote unauthenticated attacker,
+  leads to RCE or full system compromise, no user interaction. NOT
+  Critical if exploitation requires authentication, local/physical access,
+  unusual configuration, user interaction, or prior compromise.
+- **High** (ASF Important) — easily compromises C/I/A under realistic
+  conditions: local/auth user gains privileges, unauth remote user views
+  authentication-protected resources, auth remote user achieves RCE,
+  remote user causes DoS. Requires both a real attacker capability AND
+  a real C/I/A impact.
+- **Medium** (ASF Moderate) — could compromise C/I/A under certain
+  circumstances: more difficult to exploit, unlikely configuration,
+  limited scope, or control bypass that requires application-layer
+  cooperation to cause real harm. Foot-guns and easy-to-misuse defaults
+  belong here.
+- **Low** — security-relevant but minimal consequences or unlikely
+  circumstances: defense-in-depth gaps where another layer prevents
+  exploitation, documentation deficiencies that don't enable exploit,
+  dead dependency pins, hardening recommendations without a concrete
+  exploit path, nice-to-have library improvements.
+- **Informational** — observations with security relevance that do not
+  constitute vulnerabilities. Documentation gaps governed by
+  foundation-level processes (e.g., ASF Security Team for ASF projects)
+  rate Informational.
+
+### Severity calibration — apply per finding
+
+For every finding, answer three questions before assigning severity:
+1. **Attacker capability required** — remote unauth (Critical/High) /
+   authenticated (High/Medium) / privileged or local (Medium/Low) /
+   specific unusual configuration (Medium/Low).
+2. **What success achieves** — RCE (Critical/High) / priv esc (High) /
+   data access (High/Medium) / DoS (High/Medium) / info disclosure
+   (varies by sensitivity) / control bypass with no direct C/I/A impact
+   (Medium/Low).
+3. **Exploitability in default deployment** — trivially exploitable in
+   default config pushes up; requires app-layer cooperation or unusual
+   conditions pushes down.
+
+If the answers do not justify Critical or High under ASF criteria, the
+severity is lower — even when the finding's shape looks like a control-
+flow gap.
+
+### Gap Type Classification — pattern detection, not severity assignment
+
+These shapes help recognize what KIND of finding you have. They do NOT
+by themselves determine severity. After classifying the shape, apply the
+calibration questions above.
+
+| Gap Type | Description |
+|----------|-------------|
+| Type A | Entry point with NO control |
+| Type B | Control EXISTS but NOT CALLED at this entry point |
+| Type C | Control CALLED but RESULT IGNORED |
+| Type D | Control CALLED but AFTER the sensitive operation |
+
+Gap shape sets a ceiling on plausibility, not a floor on severity. A
+Type B/C/D gap rates Critical only when the calibration questions yield
+"remote unauthenticated RCE in default configuration." A Type B/C/D gap
+that requires authenticated access and yields only control bypass without
+direct C/I/A impact rates Medium at most. Do not auto-elevate gap-shape
+findings to Critical without verifying the calibration supports it.
 
 ### Related Function Analysis
 When you find a vulnerability, IMMEDIATELY search for:
@@ -1133,13 +1199,14 @@ After ALL per-requirement sections, end with two cross-cutting sections:
 ```
 
 For each finding within a section, provide:
-- Severity level: CRITICAL, HIGH, MEDIUM, or LOW (in a `### [SEVERITY]` header)
-- Finding ID: ASVS-{section_no_dots}-SEV-NNN (e.g. ASVS-512-CRIT-001)
+- Severity level: CRITICAL, HIGH, MEDIUM, LOW, or INFO (in a `### [SEVERITY]` header) — assigned per the ASF Severity Calibration above
+- Finding ID: ASVS-{section_no_dots}-SEV-NNN (e.g. ASVS-512-CRIT-001; SEV token is one of CRIT, HIGH, MED, LOW, INFO matching the assigned severity)
 - Exact file location and function name with line numbers
 - Vulnerable code quote (a fenced code block)
 - Data flow: source → sink → missing control
-- Proof of concept: a specific malicious request or input
-- Impact description
+- Attacker capability required (answer to calibration question 1)
+- Impact on success (answer to calibration question 2)
+- Proof of concept: a specific malicious request or input — required for Critical and High; if you cannot construct one consistent with the stated attacker capability, downgrade
 - Remediation with code example
 
 Be thorough but precise. If something is done correctly, acknowledge it as a positive pattern — don't invent issues."""
