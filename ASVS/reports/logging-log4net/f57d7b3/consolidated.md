@@ -8,7 +8,7 @@
 | ASVS Level | L3 |
 | Severity Threshold | None (all findings included) |
 | Commit | f57d7b3 |
-| Date | May 21, 2026 |
+| Date | May 22, 2026 |
 | Auditor | Tooling Agents |
 | Source Reports | 345 |
 | Total Findings | 3 |
@@ -21,37 +21,36 @@
 |----------|------|--------|-----|------|
 | 0 | 0 | 0 | 3 | 0 |
 
-The audit produced **3 actionable findings**, all rated **Low** severity. No Critical, High, or Medium issues were identified across 345 source reports covering 33 audit domains. This result reflects a mature, narrowly-scoped library with a well-defined trust boundary and minimal attack surface.
+All three findings are rated **Low** severity. No Critical, High, or Medium issues were identified across the entire audit scope. This indicates a mature codebase with minimal exploitable security weaknesses at the application-library level.
 
 ### ASVS Level Coverage
 
-All three ASVS levels were evaluated:
-
-- **L1**: 1 finding (FINDING-003 — third-party component vulnerability management documentation)
-- **L2**: 1 finding (FINDING-002 — credential exposure in error logging)
-- **L3**: 1 finding (FINDING-001 — finalizer exception safety)
-
-The progression from L1 through L3 findings reflects appropriate escalation in rigor, with the L3 finding addressing a low-probability but high-consequence runtime safety concern.
+This audit was conducted at **ASVS Level 3** (the highest assurance level), covering 25 security domains including general input validation, authentication/session management, authorization/access control, cryptography, data protection, serialization, network appenders, file path handling, XML configuration loading, and more. The scope encompasses the full breadth of the log4net library's attack surface.
 
 ### Top 5 Risks
 
-1. **Finalizer exception safety (FINDING-001)**: An unhandled exception in `OnClose()` during finalization could terminate the entire application process, as finalizer exceptions are unrecoverable in .NET.
-2. **Credential leakage in error diagnostics (FINDING-002)**: Connection strings containing credentials may be written to internal error logs without redaction, potentially exposing secrets in diagnostic output.
-3. **Absence of documented remediation SLAs (FINDING-003)**: No documented risk-based timeframes exist for addressing third-party component vulnerabilities, creating governance gaps for downstream consumers.
-4. **Network appender transport confidentiality**: While mitigated by delegation to deployment infrastructure (TLS proxies, VPNs), the library itself does not enforce encrypted transport for network-bound log data.
-5. **Synchronous blocking in appenders**: Blocking I/O in appenders could contribute to thread starvation under load, though this is an acknowledged architectural property mitigated at the deployment layer.
+1. **Thread-safety gap in filter chain modification** (FINDING-001) — Filter chain modification methods lack synchronization with `FilterEvent`, creating a potential race condition under active logging that could lead to skipped or duplicated log filtering decisions in concurrent environments.
+
+2. **Mutex resource leak on null file stream** (FINDING-002) — The `InterProcessLock` implementation does not release the acquired Mutex when the underlying file stream is null, potentially causing indefinite lock retention in edge-case failure scenarios.
+
+3. **Unprotected finalizer risking process termination** (FINDING-003) — A finalizer path lacks exception protection, which under .NET runtime semantics could escalate an unhandled exception to process termination rather than graceful degradation.
+
+4. **No additional risks identified** — The remaining audit domains passed without actionable findings.
+
+5. **No additional risks identified** — The library's overall security posture is strong relative to its role as a logging framework.
 
 ### Positive Controls
 
-The audit identified **48 positive security controls** across the codebase, demonstrating a strong security posture for an in-process logging library:
+The audit identified **21 validated positive security controls** across the codebase, demonstrating defense-in-depth practices:
 
-- **Least-privilege by default**: `SecurityContextProvider` returns `NullSecurityContext` (no elevation) unless explicitly configured by an administrator. The impersonation mechanism requires both configuration-level opt-in and OS-level privilege (`SeImpersonatePrivilege`).
-- **Defense-in-depth for Windows impersonation**: Multiple protective layers including CAS demands (`[SecurityPermission(SecurityAction.Demand, UnmanagedCode = true)]`), token handle cleanup on all paths, `IDisposable`-based revert guarantees, and write-only password properties.
-- **Well-defined trust boundary**: The library explicitly documents that in-process callers are trusted and delegates access control to OS process boundaries. No remote configuration endpoints or token-forwarding mechanisms exist.
-- **Credential externalization**: SMTP and ADO.NET appenders support `ConnectionStringName`/`AppSettingsKey` patterns and credential-less authentication (NTLM), allowing secrets to be managed entirely outside the library.
-- **Configuration integrity**: Repository redefinition prevention, alias immutability, idempotent repository creation, and thread-safe synchronization ensure configuration cannot be corrupted by concurrent or repeated operations.
-- **File system safety**: `ExclusiveLock` mode uses `FileShare.Read` by default, preventing external modification of active log files.
-- **Platform-aware compilation**: Conditional compilation (`#if NET462_OR_GREATER`) and runtime platform detection ensure security-sensitive code paths execute only on appropriate platforms.
+- **Input/Output Encoding**: Input decoding, canonicalization, and context-appropriate output encoding are properly implemented across pattern layout components, preventing log injection attacks (ASVS 1.1.1, 1.1.2, 1.2.1, 16.4.1).
+- **Memory Safety**: Memory-safe string operations are consistently used, preventing buffer overflow conditions (ASVS 1.4.1). Integer overflow prevention controls are in place (ASVS 1.4.2).
+- **Cryptographic Delegation**: All TLS and cryptographic operations are delegated to .NET platform libraries with no hardcoded protocol versions, no custom cipher suite selection, and no certificate validation bypasses. SmtpAppender preserves runtime default certificate validation when TLS is enabled.
+- **Secrets Handling**: Write-only password properties prevent programmatic credential read-back. Connection string indirection supports deployment-time vault integration. Token-based delegation avoids repeated password use after initialization.
+- **Log Integrity**: Logs are protected from unauthorized access/modification and can be securely transmitted to separate analysis systems (ASVS 16.4.2, 16.4.3).
+- **Extensibility for Data Protection**: Architecture provides IObjectRenderer, filters, and custom pattern converters enabling application-layer sensitive data masking.
+- **Input Trust Boundaries**: Regex patterns in filters are sourced exclusively from trusted administrator configuration, not user input.
+- **Resilience Patterns**: AsyncAppender wrapper available as deployment-level mitigation for thread starvation; ReconnectOnError provides reconnection capability on credential or connection failures.
 
 ---
 
@@ -59,69 +58,69 @@ The audit identified **48 positive security controls** across the codebase, demo
 
 ### 3.4 Low
 
-#### FINDING-001: Finalizer lacks exception protection, allowing OnClose() failures to terminate the application process
+#### FINDING-001: Filter chain modification methods lack synchronization, creating potential race with FilterEvent under active logging
 
 | Attribute | Value |
 |-----------|-------|
-| **Severity** | 🔵 Low |
-| **ASVS Level(s)** | L3 |
-| **CWE** | CWE-755 |
-| **ASVS Section(s)** | 16.5.4 |
-| **File(s)** | src/log4net/Appender/AppenderSkeleton.cs |
-| **Source Report(s)** | 16.5.4.md |
-| **Related** | None |
+| Severity | 🔵 Low |
+| ASVS Level(s) | L3 |
+| CWE | CWE-362 |
+| ASVS sections | 15.4.1 |
+| Files | src/log4net/Appender/AppenderSkeleton.cs |
+| Source Reports | 15.4.1.md |
+| Related | None |
 
 **Description:**
 
-The ~AppenderSkeleton() finalizer calls Close() which calls OnClose() without any try-catch protection. If a subclass OnClose() throws (e.g., I/O failure during flush), the unhandled exception on the finalizer thread terminates the entire application process.
+Filter chain modification methods (`AddFilter`/`ClearFilters`) lack synchronization, creating potential race with `FilterEvent` under active logging. Data flow: `AddFilter` (no lock) → modifies `FilterHead`/`_tailFilter`/`filter.Next` ← `FilterEvent` (under `LockObj` in `DoAppend`) reads `FilterHead` and traverses `f.Next`. Attacker capability required: In-process code (within trust boundary) calling `AddFilter`/`ClearFilters` concurrently with active logging — e.g., during dynamic reconfiguration while the appender is receiving log events. Impact: Inconsistent filter chain state during traversal in `FilterEvent`. Could result in: a filter being skipped, a NullReferenceException, or lost filter entries.
 
 **Remediation:**
 
-Wrap the finalizer body in a try-catch to absorb exceptions from OnClose(): catch (Exception ex) when (!ex.IsFatal()) and log via LogLog.Error.
+Add `lock(LockObj)` to `AddFilter` and `ClearFilters` methods to synchronize with the `DoAppend` hot path.
 
 ---
 
-#### FINDING-002: Connection string containing credentials logged in error handler without redaction
+#### FINDING-002: InterProcessLock Mutex Not Released When Underlying File Stream Is Null
 
 | Attribute | Value |
 |-----------|-------|
-| **Severity** | 🔵 Low |
-| **ASVS Level(s)** | L2 |
-| **CWE** | CWE-532 |
-| **ASVS Section(s)** | 14.2.4 |
-| **File(s)** | src/log4net/Appender/AdoNetAppender.cs |
-| **Source Report(s)** | 14.2.4.md |
-| **Related** | None |
+| Severity | 🔵 Low |
+| ASVS Level(s) | L2 |
+| CWE | CWE-772 |
+| ASVS sections | 1.4.3 |
+| Files | src/log4net/Appender/FileAppender.cs |
+| Source Reports | 1.4.3.md |
+| Related | None |
 
 **Description:**
 
-In AdoNetAppender.InitializeDatabaseConnection(), the resolved connection string (which may contain Password=...) is passed to ErrorHandler.Error() without redaction. The error output may flow to trace listeners, console output, or diagnostic logs with potentially broader access than the original configuration file. This violates controls around sensitive data logging requirements.
+When `InterProcessLock.AcquireLock()` is called and `_stream` is null (due to a prior file open failure), the named Mutex is acquired via `_mutex.WaitOne()` and `_recursiveWatch` is incremented, but the method returns null without releasing the mutex. The caller (`FileAppender.Append`) does not enter the try/finally block, so `ReleaseLock()` is never called. The named system Mutex remains held indefinitely, blocking other processes using InterProcessLock on the same file. Not directly exploitable by an external attacker — requires environmental file open failure. This represents a resource leak where dynamically allocated synchronization resources are not properly released, leading to potential deadlock or resource exhaustion.
 
 **Remediation:**
 
-Redact known sensitive keywords (Password, Pwd, Secret) from connection strings before including them in error messages passed to ErrorHandler.Error(). Implement a sanitization function that uses regex to identify and mask sensitive key-value pairs in connection strings before logging.
+Release the named Mutex immediately when `AcquireLock()` detects that `_stream` is null: decrement `_recursiveWatch` and call `_mutex.ReleaseMutex()` before returning null. Ensure that all code paths that acquire the mutex properly release it, even in error conditions.
 
 ---
 
-#### FINDING-003: No documented risk-based remediation timeframes for third-party component vulnerabilities
+#### FINDING-003: Finalizer path lacks exception protection, risking process termination
 
 | Attribute | Value |
 |-----------|-------|
-| **Severity** | 🔵 Low |
-| **ASVS Level(s)** | L1 |
-| **CWE** | N/A |
-| **ASVS Section(s)** | 15.1.1 |
-| **File(s)** | src/Directory.Build.props, src/site/antora/modules/ROOT/pages/versioning.adoc |
-| **Source Report(s)** | 15.1.1.md |
-| **Related** | None |
+| Severity | 🔵 Low |
+| ASVS Level(s) | L3 |
+| CWE | CWE-755 |
+| ASVS sections | 16.5.4 |
+| Files | src/log4net/Appender/AppenderSkeleton.cs |
+| Source Reports | 16.5.4.md |
+| Related | None |
 
 **Description:**
 
-ASVS 15.1.1 requires that application documentation defines risk-based remediation timeframes for addressing vulnerabilities in third-party components and for updating libraries generally. The provided source code, configuration files, and documentation do not contain or reference a dependency management policy that specifies severity-based SLAs for patching vulnerable dependencies, a defined update cadence, or criteria for classifying dependencies as risky. Note: The policy may exist in ASF-level governance artifacts not included in this audit scope.
+The ~AppenderSkeleton() finalizer calls Close() which calls OnClose() without try-catch protection. An unhandled exception on the finalizer thread terminates the entire process in .NET Framework 2.0+ and .NET Core/5+. Data flow: GC finalizer thread → ~AppenderSkeleton() → Close() → OnClose() (subclass implementation) → unhandled exception → process termination.
 
 **Remediation:**
 
-Create or reference a document (e.g., SECURITY.md in the repository root or Antora page) specifying maximum remediation windows by severity, periodic dependency review cadence, and criteria for identifying risky components. Reference Apache Security Team processes if applicable.
+Wrap the finalizer's call to Close() in a try-catch with `catch (Exception ex) when (!ex.IsFatal())` to prevent process termination. Additionally, consider protecting Close() itself and setting _isClosed in a finally block.
 
 ---
 
@@ -129,56 +128,28 @@ Create or reference a document (e.g., SECURITY.md in the repository root or Anto
 
 | Domain | Control | Evidence Source | Supporting Files |
 |--------|---------|-----------------|------------------|
-| Network Appenders Unencrypted | TLS protocol version selection delegated to .NET runtime and deployment infrastructure; no TLS code exists in network appenders | Report self-assessment from 12.1.1 | — |
-| Smtp Credential Handling | Credential management delegated to deployment layer; library supports externalization via ConnectionStringName/AppSettingsKey and credential-less auth (NTLM) | Library design allows credentials to be managed outside the codebase through configuration externalization mechanisms | — |
-| Smtp Credential Handling | Credential rotation is a deployment concern; library reads Password property on each send allowing external config reload to take effect | Dynamic credential reading on each operation enables external rotation without code changes | — |
-| Smtp Credential Handling | Data classification and protection level enforcement delegated to application/deployment layer by design | Library architecture delegates sensitive data classification and protection to consuming applications | — |
-| File System Access | RollingFileAppender provides configurable size-based retention via MaxSizeRollBackups with automatic deletion of oldest files | No finding — reported as N/A with documented deployment delegation | — |
-| Windows Security Context | Trust boundary documentation | Project guidance defines in-process callers as trusted | — |
-| Windows Security Context | SecurityContext abstraction | Defines pattern for accessing protected resources | SecurityContext.cs |
-| Windows Security Context | SecurityContextProvider default | Returns NullSecurityContext (no privilege) by default | SecurityContextProvider.cs |
-| Windows Security Context | WindowsSecurityContext credential mode | Restricts impersonation to administrator-configured credentials | WindowsSecurityContext.cs |
-| Windows Security Context | Least-privilege default | SecurityContextProvider.CreateSecurityContext() returns NullSecurityContext.Instance by default, meaning no elevated privileges are granted unless explicitly configured by an administrator | SecurityContextProvider.cs |
-| Windows Security Context | Write-only password property | The Password property in WindowsSecurityContext is deliberately write-only, preventing credential readback through the property interface | WindowsSecurityContext.cs |
-| Windows Security Context | Security demand on LogonUser | The LogonUser method requires UnmanagedCode permission via [SecurityPermission(SecurityAction.Demand, UnmanagedCode = true)] | WindowsSecurityContext.cs |
-| Windows Security Context | Clear separation of concerns | Environmental data captured in LoggingEvent (UserName, Identity, TimeStamp) is explicitly for audit/logging output, not for making access control decisions within the library itself | — |
-| Windows Security Context | Consistent security architecture | The SecurityContext hierarchy (SecurityContext → NullSecurityContext / WindowsSecurityContext) provides a clean separation between the security decision (configured by administrators) and the security enforcement (delegated to the OS kernel) | — |
-| Windows Security Context | Defense-in-depth layering | Multiple layers protect the impersonation mechanism including configuration trust, CAS demands, OS-level privilege requirements (SeImpersonatePrivilege), token handle cleanup, and IDisposable revert pattern | — |
-| Windows Security Context | Platform-aware design | The code uses conditional compilation (#if NET462_OR_GREATER) for WindowsSecurityContext and runtime platform detection (RuntimeInformation.IsOSPlatform) for Windows identity access in LoggingEvent | WindowsSecurityContext.cs, LoggingEvent.cs |
-| Windows Security Context | Appropriate trust model for library context | The codebase correctly identifies that an in-process library cannot meaningfully restrict access from its own host process. The trust boundary is at the process level | — |
-| Windows Security Context | Simple, deterministic security model | The impersonation mechanism is binary (configured or not), avoiding the complexity of contextual decision-making that would require extensive documentation and testing | — |
-| Windows Security Context | CAS demand on LogonUser | [SecurityPermission(SecurityAction.Demand, UnmanagedCode = true)] attribute on LogonUser method | WindowsSecurityContext.cs |
-| Windows Security Context | SecurityCritical on GetObjectData | [SecurityCritical] with SecurityPermission(SerializationFormatter = true) on GetObjectData method | LoggingEvent.cs |
-| Windows Security Context | Process-level isolation | Library delegates access control to OS process boundaries by architectural design | — |
-| Windows Security Context | Token handle cleanup | WindowsSecurityContext.LogonUser() properly closes both original and duplicated token handles even on error paths | WindowsSecurityContext.cs |
-| Windows Security Context | Win32 LogonUser - Credential validation via Windows kernel | WindowsSecurityContext.cs:LogonUser() | WindowsSecurityContext.cs |
-| Windows Security Context | Win32 DuplicateToken - Token duplication for impersonation | WindowsSecurityContext.cs:LogonUser() | WindowsSecurityContext.cs |
-| Windows Security Context | WindowsIdentity.Impersonate - CLR-managed impersonation | WindowsSecurityContext.cs:Impersonate() | WindowsSecurityContext.cs |
-| Windows Security Context | WindowsImpersonationContext.Undo - Reverts impersonation at kernel level | DisposableImpersonationContext.Dispose() | WindowsSecurityContext.cs |
-| Windows Security Context | NullSecurityContext (no-op) - Returns null, no elevation occurs | NullSecurityContext.cs:Impersonate() | NullSecurityContext.cs |
-| Windows Security Context | IDisposable pattern ensures revert | Guaranteed impersonation revert via Dispose in DisposableImpersonationContext class implementation | WindowsSecurityContext.cs |
-| Windows Security Context | All security decisions delegated to OS kernel | No custom credential validation - Reliance on Windows LogonUser/DuplicateToken/Impersonate kernel calls | WindowsSecurityContext.cs |
-| Windows Security Context | No client-side authorization logic | Server-side library with no browser interaction - Compiled CLR assemblies with no JavaScript or client-side components | — |
-| Windows Security Context | Proper error handling prevents partial privilege states | Returns null if identity is invalid - WindowsSecurityContext.cs:Impersonate() method null checks | WindowsSecurityContext.cs |
-| Buffering Resource Limits | Synchronous blocking behavior is an expected, documented architectural property; availability mitigation delegated to AsyncAppender wrappers at deployment level | ASVS 15.2.2 review - Dropped finding ASVS-1522-LOW-001 | — |
-| Buffering Resource Limits | Thread starvation prevention delegated to deployment via AsyncAppender wrappers, network isolation, or access controls | ASVS 15.4.4 review - Dropped finding ASVS-1544-LOW-001 | — |
-| Logging Event Capture | FixFlags provides granular opt-in/opt-out control over identity metadata capture; sensitive data redaction is application responsibility by design | Dropped finding ASVS-1625-LOW-001 from 16.2.5 audit | — |
-| Logger Hierarchy In Process | Repository names are validated with null checks before lookup | DefaultRepositorySelector.GetRepository(string) | — |
-| Logger Hierarchy In Process | Repository creation is idempotent for assembly-based lookups (returns existing rather than creating duplicates) | DefaultRepositorySelector.CreateRepository(Assembly, ...) | — |
-| Logger Hierarchy In Process | Repository redefinition prevention with explicit LogException | CreateRepository(string, Type) prevents repository redefinition, providing configuration integrity within the trust boundary | CreateRepository:233 |
-| Logger Hierarchy In Process | Thread safety with synchronization primitives | _syncRoot in DefaultRepositorySelector, ReaderWriterLock in Logger - ensures thread-safe repository creation/lookup and concurrent access to shared state is properly serialized | DefaultRepositorySelector, Logger.cs |
-| Logger Hierarchy In Process | Logger level changes take immediate effect | Logger.Level setter is immediately visible to subsequent IsEnabledFor() calls without caching delay | — |
-| Logger Hierarchy In Process | Configuration reset takes immediate effect | ResetConfiguration takes immediate effect on all loggers in the hierarchy | — |
-| Logger Hierarchy In Process | No token forwarding or credential delegation mechanism | The library does not implement any token forwarding or credential delegation mechanism that could accidentally substitute service credentials for user credentials | — |
-| Logger Hierarchy In Process | In-process trust boundary model | log4net operates entirely within an in-process trust boundary with no service-to-service authorization delegation | — |
-| Logger Hierarchy In Process | Repository name separation | DefaultRepositorySelector._name2Repository provides namespace isolation | DefaultRepositorySelector._name2Repository |
-| Logger Hierarchy In Process | Assembly-to-repository mapping | DefaultRepositorySelector._assembly2Repository associates default repository per assembly | DefaultRepositorySelector._assembly2Repository |
-| Logger Hierarchy In Process | Alias immutability | AliasRepository() throws on redefinition attempt, prevents alias reassignment | AliasRepository |
-| Logger Hierarchy In Process | Configuration loaded only from administrator-controlled sources | Configuration is loaded only from administrator-controlled sources (local files, assembly attributes, AppSettings) | — |
-| Logger Hierarchy In Process | No remote configuration endpoint | No remote configuration endpoint exists that would require authentication or identity verification | — |
-| Logger Hierarchy In Process | Trusted configuration sources | The ConfigureRepository method reads config file paths from AppSettings (trusted configuration), not from network input | — |
-| Ch16 General | Default ExclusiveLock uses FileShare.Read preventing modification by other processes; alternative locking models are administrator's explicit choice | Promoted from dropped finding ASVS-1642-LOW-001 | — |
-| Ch16 General | Transport encryption for network appenders is delegated to deployment infrastructure (TLS proxies, VPNs, network segmentation) | source: Dropped finding ASVS-1643-LOW-001 | — |
+| Pattern Layout Injection | Input decoding and canonicalization is performed appropriately | ASVS 1.1.1 passed - no issues with decoding/unescaping into canonical form | — |
+| Pattern Layout Injection | Output encoding is performed as a final step before interpreter use | ASVS 1.1.2 passed - output encoding and escaping properly implemented | — |
+| Pattern Layout Injection | Context-appropriate output encoding for HTTP responses and HTML documents | ASVS 1.2.1 passed - proper encoding for HTML elements, attributes, comments, CSS, and HTTP headers | — |
+| Pattern Layout Injection | Memory-safe string operations prevent buffer overflows | ASVS 1.4.1 passed - memory-safe string and pointer operations in use | — |
+| Pattern Layout Injection | Logging components properly encode data to prevent log injection | ASVS 16.4.1 passed - all logging components appropriately encode data | — |
+| Network Appenders | TLS protocol version selection delegated to .NET runtime; no hardcoded versions | source: Report positive patterns | — |
+| Network Appenders | Cipher suite selection delegated to .NET runtime/OS crypto provider | source: Report positive patterns | — |
+| Network Appenders | No custom RemoteCertificateValidationCallback; runtime default certificate validation preserved | Report positive patterns | — |
+| Network Appenders | SmtpAppender does not override ServerCertificateValidationCallback; default validation applies when EnableSsl=true | Report positive patterns | — |
+| Network Appenders | SmtpAppender with EnableSsl=true does not fall back to unencrypted communication on TLS failure | source: Report positive patterns | — |
+| Network Appenders | SmtpAppender delegates TLS certificate validation to .NET runtime defaults with no bypass callbacks | Report positive patterns | — |
+| Network Appenders | SmtpAppender uses system trust store for certificate validation; no custom X509Certificate overrides | Report positive patterns | — |
+| Windows Security Context | Write-only Password property with private field prevents API-level credential read-back; token-based delegation avoids repeated password use after initialization | Observed in secret management implementation (source: Dropped finding ASVS-1331-LOW-001) | — |
+| Logging Event Api | Extensibility points (IObjectRenderer, filters, custom pattern converters) enable applications to implement sensitive data masking at their layer | Architecture provides mechanisms for application-layer sensitive data protection in logging | — |
+| Buffering And Rate Limiting | AsyncAppender wrapper available as deployment-level mitigation for thread starvation from synchronous I/O under lock | source: Dropped finding ASVS-1544-LOW-001 | — |
+| Eventlog Appender | Logs are protected from unauthorized access and modification | ASVS 16.4.2 passed audit | — |
+| Eventlog Appender | Logs are securely transmitted to a logically separate system for analysis | ASVS 16.4.3 passed audit | — |
+| General Input Validation | Regex patterns in StringMatchFilter sourced exclusively from trusted administrator configuration | Dropped finding ASVS-1312-LOW-001 | — |
+| General Input Validation | Integer overflow prevention controls appear to be in place | ASVS section 1.4.2 marked as Pass | — |
+| Cryptography | Library delegates all TLS/cryptographic operations to .NET platform libraries; no cryptographic primitive selection exists in codebase | Audit positive pattern 11.2.3 | — |
+| Secrets Management | Write-only password properties prevent programmatic read-back; connection string indirection supports deployment-time vault integration | source: Dropped finding ASVS-1333-LOW-001 | — |
+| Secrets Management | ReconnectOnError provides reconnection on credential failure; ActivateOptions() supports reconfiguration for credential refresh | Promoted from dropped finding ASVS-1334-LOW-001 | — |
 
 ---
 
@@ -187,9 +158,9 @@ Create or reference a document (e.g., SECURITY.md in the repository root or Anto
 | ASVS ID | Requirement Title | Status | Notes |
 |---------|-------------------|--------|-------|
 | **V1: Encoding and Sanitization** | | | |
-| 1.1.1 | Verify that input is decoded or unescaped into a canonical form only once, it is only decoded when encoded data in that form is expected, and that this is done before processing the input further, for example it is not performed after input validation or sanitization. | **N/A** |  |
+| 1.1.1 | Verify that input is decoded or unescaped into a canonical form only once, it is only decoded when encoded data in that form is expected, and that this is done before processing the input further, for example it is not performed after input validation or sanitization. | **Pass** |  |
 | 1.1.2 | Verify that the application performs output encoding and escaping either as a final step before being used by the interpreter for which it is intended or by the interpreter itself. | **Pass** |  |
-| 1.2.1 | Verify that output encoding for an HTTP response, HTML document, or XML document is relevant for the context required, such as encoding the relevant characters for HTML elements, HTML attributes, HTML comments, CSS, or HTTP header fields, to avoid changing the message or document structure. | **N/A** |  |
+| 1.2.1 | Verify that output encoding for an HTTP response, HTML document, or XML document is relevant for the context required, such as encoding the relevant characters for HTML elements, HTML attributes, HTML comments, CSS, or HTTP header fields, to avoid changing the message or document structure. | **Pass** |  |
 | 1.2.2 | Verify that when dynamically building URLs, untrusted data is encoded according to its context (e.g., URL encoding or base64url encoding for query or path parameters). Ensure that only safe URL protocols are permitted (e.g., disallow javascript: or data:). | **N/A** |  |
 | 1.2.3 | Verify that output encoding or escaping is used when dynamically building JavaScript content (including JSON), to avoid changing the message or document structure (to avoid JavaScript and JSON injection). | **N/A** |  |
 | 1.2.4 | Verify that data selection or database queries (e.g., SQL, HQL, NoSQL, Cypher) use parameterized queries, ORMs, entity frameworks, or are otherwise protected from SQL Injection and other database injection attacks. This is also relevant when writing stored procedures. | **Pass** |  |
@@ -200,20 +171,20 @@ Create or reference a document (e.g., SECURITY.md in the repository root or Anto
 | 1.2.9 | Verify that the application escapes special characters in regular expressions (typically using a backslash) to prevent them from being misinterpreted as metacharacters. | **N/A** |  |
 | 1.2.10 | Verify that the application is protected against CSV and Formula Injection. The application must follow the escaping rules defined in RFC 4180 sections 2.6 and 2.7 when exporting CSV content. Additionally, when exporting to CSV or other spreadsheet formats (such as XLS, XLSX, or ODF), special characters (including '=', '+', '-', '@', '\t' (tab), and '\0' (null character)) must be escaped with a single quote if they appear as the first character in a field value. | **N/A** |  |
 | 1.3.1 | Verify that all untrusted HTML input from WYSIWYG editors or similar is sanitized using a well-known and secure HTML sanitization library or framework feature. | **N/A** |  |
-| 1.3.2 | Verify that the application avoids the use of eval() or other dynamic code execution features such as Spring Expression Language (SpEL). Where there is no alternative, any user input being included must be sanitized before being executed. | **Pass** |  |
+| 1.3.2 | Verify that the application avoids the use of eval() or other dynamic code execution features such as Spring Expression Language (SpEL). Where there is no alternative, any user input being included must be sanitized before being executed. | **N/A** |  |
 | 1.3.3 | Verify that data being passed to a potentially dangerous context is sanitized beforehand to enforce safety measures, such as only allowing characters which are safe for this context and trimming input which is too long. | **Pass** |  |
 | 1.3.4 | Verify that user-supplied Scalable Vector Graphics (SVG) scriptable content is validated or sanitized to contain only tags and attributes (such as draw graphics) that are safe for the application, e.g., do not contain scripts and foreignObject. | **N/A** |  |
-| 1.3.5 | Verify that the application sanitizes or disables user-supplied scriptable or expression template language content, such as Markdown, CSS or XSL stylesheets, BBCode, or similar. | **Pass** |  |
+| 1.3.5 | Verify that the application sanitizes or disables user-supplied scriptable or expression template language content, such as Markdown, CSS or XSL stylesheets, BBCode, or similar. | **N/A** |  |
 | 1.3.6 | Verify that the application protects against Server-side Request Forgery (SSRF) attacks, by validating untrusted data against an allowlist of protocols, domains, paths and ports and sanitizing potentially dangerous characters before using the data to call another service. | **N/A** |  |
 | 1.3.7 | Verify that the application protects against template injection attacks by not allowing templates to be built based on untrusted input. Where there is no alternative, any untrusted input being included dynamically during template creation must be sanitized or strictly validated. | **Pass** |  |
 | 1.3.8 | Verify that the application appropriately sanitizes untrusted input before use in Java Naming and Directory Interface (JNDI) queries and that JNDI is configured securely to prevent JNDI injection attacks. | **N/A** |  |
 | 1.3.9 | Verify that the application sanitizes content before it is sent to memcache to prevent injection attacks. | **N/A** |  |
 | 1.3.10 | Verify that format strings which might resolve in an unexpected or malicious way when used are sanitized before being processed. | **Pass** |  |
-| 1.3.11 | Verify that the application sanitizes user input before passing to mail systems to protect against SMTP or IMAP injection. | **N/A** |  |
+| 1.3.11 | Verify that the application sanitizes user input before passing to mail systems to protect against SMTP or IMAP injection. | **Pass** |  |
 | 1.3.12 | Verify that regular expressions are free from elements causing exponential backtracking, and ensure untrusted input is sanitized to mitigate ReDoS or Runaway Regex attacks. | **N/A** |  |
-| 1.4.1 | Verify that the application uses memory-safe string, safer memory copy and pointer arithmetic to detect or prevent stack, buffer, or heap overflows. | **N/A** |  |
-| 1.4.2 | Verify that sign, range, and input validation techniques are used to prevent integer overflows. | **N/A** |  |
-| 1.4.3 | Verify that dynamically allocated memory and resources are released, and that references or pointers to freed memory are removed or set to null to prevent dangling pointers and use-after-free vulnerabilities. | **N/A** |  |
+| 1.4.1 | Verify that the application uses memory-safe string, safer memory copy and pointer arithmetic to detect or prevent stack, buffer, or heap overflows. | **Pass** |  |
+| 1.4.2 | Verify that sign, range, and input validation techniques are used to prevent integer overflows. | **Pass** |  |
+| 1.4.3 | Verify that dynamically allocated memory and resources are released, and that references or pointers to freed memory are removed or set to null to prevent dangling pointers and use-after-free vulnerabilities. | **Partial** | See FINDING-002 |
 | 1.5.1 | Verify that the application configures XML parsers to use a restrictive configuration and that unsafe features such as resolving external entities are disabled to prevent XML eXternal Entity (XXE) attacks. | **Pass** |  |
 | 1.5.2 | Verify that deserialization of untrusted data enforces safe input handling, such as using an allowlist of object types or restricting client-defined object types, to prevent deserialization attacks. Deserialization mechanisms that are explicitly defined as insecure must not be used with untrusted input. | **Pass** |  |
 | 1.5.3 | Verify that different parsers used in the application for the same data type (e.g., JSON parsers, XML parsers, URL parsers), perform parsing in a consistent way and use the same character encoding mechanism to avoid issues such as JSON Interoperability vulnerabilities or different URI or file parsing behavior being exploited in Remote File Inclusion (RFI) or Server-side Request Forgery (SSRF) attacks. | **Pass** |  |
@@ -225,7 +196,7 @@ Create or reference a document (e.g., SECURITY.md in the repository root or Anto
 | 2.2.2 | Verify that the application is designed to enforce input validation at a trusted service layer. While client-side validation improves usability and should be encouraged, it must not be relied upon as a security control. | **N/A** |  |
 | 2.2.3 | Verify that the application ensures that combinations of related data items are reasonable according to the pre-defined rules. | **N/A** |  |
 | 2.3.1 | Verify that the application will only process business logic flows for the same user in the expected sequential step order and without skipping steps. | **N/A** |  |
-| 2.3.2 | Verify that business logic limits are implemented per the application's documentation to avoid business logic flaws being exploited. | **N/A** |  |
+| 2.3.2 | Verify that business logic limits are implemented per the application's documentation to avoid business logic flaws being exploited. | **Pass** |  |
 | 2.3.3 | Verify that transactions are being used at the business logic level such that either a business logic operation succeeds in its entirety or it is rolled back to the previous correct state. | **N/A** |  |
 | 2.3.4 | Verify that business logic level locking mechanisms are used to ensure that limited quantity resources (such as theater seats or delivery slots) cannot be double-booked by manipulating the application's logic. | **N/A** |  |
 | 2.3.5 | Verify that high-value business logic flows require multi-user approval to prevent unauthorized or accidental actions. This could include but is not limited to large monetary transfers, contract approvals, access to classified information, or safety overrides in manufacturing. | **N/A** |  |
@@ -289,7 +260,7 @@ Create or reference a document (e.g., SECURITY.md in the repository root or Anto
 | 5.2.5 | Verify that the application does not allow uploading compressed files containing symlinks unless this is specifically required (in which case it will be necessary to enforce an allowlist of the files that can be symlinked to). | **N/A** |  |
 | 5.2.6 | Verify that the application rejects uploaded images with a pixel size larger than the maximum allowed, to prevent pixel flood attacks. | **N/A** |  |
 | 5.3.1 | Verify that files uploaded or generated by untrusted input and stored in a public folder, are not executed as server-side program code when accessed directly with an HTTP request. | **N/A** |  |
-| 5.3.2 | Verify that when the application creates file paths for file operations, instead of user-submitted filenames, it uses internally generated or trusted data, or if user-submitted filenames or file metadata must be used, strict validation and sanitization must be applied. This is to protect against path traversal, local or remote file inclusion (LFI, RFI), and server-side request forgery (SSRF) attacks. | **N/A** |  |
+| 5.3.2 | Verify that when the application creates file paths for file operations, instead of user-submitted filenames, it uses internally generated or trusted data, or if user-submitted filenames or file metadata must be used, strict validation and sanitization must be applied. This is to protect against path traversal, local or remote file inclusion (LFI, RFI), and server-side request forgery (SSRF) attacks. | **Pass** |  |
 | 5.3.3 | Verify that server-side file processing, such as file decompression, ignores user-provided path information to prevent vulnerabilities such as zip slip. | **N/A** |  |
 | 5.4.1 | Verify that the application validates or ignores user-submitted filenames, including in a JSON, JSONP, or URL parameter and specifies a filename in the Content-Disposition header field in the response. | **N/A** |  |
 | 5.4.2 | Verify that file names served (e.g., in HTTP response header fields or email attachments) are encoded or sanitized (e.g., following RFC 6266) to preserve document structure and prevent injection attacks. | **N/A** |  |
@@ -363,7 +334,7 @@ Create or reference a document (e.g., SECURITY.md in the repository root or Anto
 | 7.6.1 | Verify that session lifetime and termination between Relying Parties (RPs) and Identity Providers (IdPs) behave as documented, requiring re-authentication as necessary such as when the maximum time between IdP authentication events is reached. | **N/A** |  |
 | 7.6.2 | Verify that creation of a session requires either the user's consent or an explicit action, preventing the creation of new application sessions without user interaction. | **N/A** |  |
 | **V8: Authorization** | | | |
-| 8.1.1 | Verify that authorization documentation defines rules for restricting function-level and data-specific access based on consumer permissions and resource attributes. | **Pass** |  |
+| 8.1.1 | Verify that authorization documentation defines rules for restricting function-level and data-specific access based on consumer permissions and resource attributes. | **N/A** |  |
 | 8.1.2 | Verify that authorization documentation defines rules for field-level access restrictions (both read and write) based on consumer permissions and resource attributes. Note that these rules might depend on other attribute values of the relevant data object, such as state or status. | **N/A** |  |
 | 8.1.3 | Verify that the application's documentation defines the environmental and contextual attributes (including but not limited to, time of day, user location, IP address, or device) that are used in the application to make security decisions, including those pertaining to authentication and authorization. | **N/A** |  |
 | 8.1.4 | Verify that authentication and authorization documentation defines how environmental and contextual factors are used in decision-making, in addition to function-level, data-specific, and field-level authorization. This should include the attributes evaluated, thresholds for risk, and actions taken (e.g., allow, challenge, deny, step-up authentication). | **N/A** |  |
@@ -371,7 +342,7 @@ Create or reference a document (e.g., SECURITY.md in the repository root or Anto
 | 8.2.2 | Verify that the application ensures that data-specific access is restricted to consumers with explicit permissions to specific data items to mitigate insecure direct object reference (IDOR) and broken object level authorization (BOLA). | **N/A** |  |
 | 8.2.3 | Verify that the application ensures that field-level access is restricted to consumers with explicit permissions to specific fields to mitigate broken object property level authorization (BOPLA). | **N/A** |  |
 | 8.2.4 | Verify that adaptive security controls based on a consumer's environmental and contextual attributes (such as time of day, location, IP address, or device) are implemented for authentication and authorization decisions, as defined in the application's documentation. These controls must be applied when the consumer tries to start a new session and also during an existing session. | **N/A** |  |
-| 8.3.1 | Verify that the application enforces authorization rules at a trusted service layer and doesn't rely on controls that an untrusted consumer could manipulate, such as client-side JavaScript. | **Pass** |  |
+| 8.3.1 | Verify that the application enforces authorization rules at a trusted service layer and doesn't rely on controls that an untrusted consumer could manipulate, such as client-side JavaScript. | **N/A** |  |
 | 8.3.2 | Verify that changes to values on which authorization decisions are made are applied immediately. Where changes cannot be applied immediately, (such as when relying on data in self-contained tokens), there must be mitigating controls to alert when a consumer performs an action when they are no longer authorized to do so and revert the change. Note that this alternative would not mitigate information leakage. | **N/A** |  |
 | 8.3.3 | Verify that access to an object is based on the originating subject's (e.g. consumer's) permissions, not on the permissions of any intermediary or service acting on their behalf. For example, if a consumer calls a web service using a self-contained token for authentication, and the service then requests data from a different service, the second service will use the consumer's token, rather than a machine-to-machine token from the first service, to make permission decisions. | **N/A** |  |
 | 8.4.1 | Verify that multi-tenant applications use cross-tenant controls to ensure consumer operations will never affect tenants with which they do not have permissions to interact. | **N/A** |  |
@@ -455,23 +426,23 @@ Create or reference a document (e.g., SECURITY.md in the repository root or Anto
 | 12.2.1 | Verify that TLS is used for all connectivity between a client and external facing, HTTP-based services, and does not fall back to insecure or unencrypted communications. | **N/A** |  |
 | 12.2.2 | Verify that external facing services use publicly trusted TLS certificates. | **N/A** |  |
 | 12.3.1 | Verify that an encrypted protocol such as TLS is used for all inbound and outbound connections to and from the application, including monitoring systems, management tools, remote access and SSH, middleware, databases, mainframes, partner systems, or external APIs. The server must not fall back to insecure or unencrypted protocols. | **N/A** |  |
-| 12.3.2 | Verify that TLS clients validate certificates received before communicating with a TLS server. | **N/A** |  |
+| 12.3.2 | Verify that TLS clients validate certificates received before communicating with a TLS server. | **Pass** |  |
 | 12.3.3 | Verify that TLS or another appropriate transport encryption mechanism used for all connectivity between internal, HTTP-based services within the application, and does not fall back to insecure or unencrypted communications. | **N/A** |  |
 | 12.3.4 | Verify that TLS connections between internal services use trusted certificates. Where internally generated or self-signed certificates are used, the consuming service must be configured to only trust specific internal CAs and specific self-signed certificates. | **N/A** |  |
 | 12.3.5 | Verify that services communicating internally within a system (intra-service communications) use strong authentication to ensure that each endpoint is verified. Strong authentication methods, such as TLS client authentication, must be employed to ensure identity, using public-key infrastructure and mechanisms that are resistant to replay attacks. For microservice architectures, consider using a service mesh to simplify certificate management and enhance security. | **N/A** |  |
 | **V13: Configuration** | | | |
-| 13.1.1 | Verify that all communication needs for the application are documented. This must include external services which the application relies upon and cases where an end user might be able to provide an external location to which the application will then connect. | **Pass** |  |
+| 13.1.1 | Verify that all communication needs for the application are documented. This must include external services which the application relies upon and cases where an end user might be able to provide an external location to which the application will then connect. | **N/A** |  |
 | 13.1.2 | Verify that for each service the application uses, the documentation defines the maximum number of concurrent connections (e.g., connection pool limits) and how the application behaves when that limit is reached, including any fallback or recovery mechanisms, to prevent denial of service conditions. | **N/A** |  |
 | 13.1.3 | Verify that the application documentation defines resource‑management strategies for every external system or service it uses (e.g., databases, file handles, threads, HTTP connections). This should include resource‑release procedures, timeout settings, failure handling, and where retry logic is implemented, specifying retry limits, delays, and back‑off algorithms. For synchronous HTTP request–response operations it should mandate short timeouts and either disable retries or strictly limit retries to prevent cascading delays and resource exhaustion. | **N/A** |  |
-| 13.1.4 | Verify that the application's documentation defines the secrets that are critical for the security of the application and a schedule for rotating them, based on the organization's threat model and business requirements. | **Pass** |  |
-| 13.2.1 | Verify that communications between backend application components that don't support the application's standard user session mechanism, including APIs, middleware, and data layers, are authenticated. Authentication must use individual service accounts, short-term tokens, or certificate-based authentication and not unchanging credentials such as passwords, API keys, or shared accounts with privileged access. | **Pass** |  |
+| 13.1.4 | Verify that the application's documentation defines the secrets that are critical for the security of the application and a schedule for rotating them, based on the organization's threat model and business requirements. | **N/A** |  |
+| 13.2.1 | Verify that communications between backend application components that don't support the application's standard user session mechanism, including APIs, middleware, and data layers, are authenticated. Authentication must use individual service accounts, short-term tokens, or certificate-based authentication and not unchanging credentials such as passwords, API keys, or shared accounts with privileged access. | **N/A** |  |
 | 13.2.2 | Verify that communications between backend application components, including local or operating system services, APIs, middleware, and data layers, are performed with accounts assigned the least necessary privileges. | **N/A** |  |
 | 13.2.3 | Verify that if a credential has to be used for service authentication, the credential being used by the consumer is not a default credential (e.g., root/root or admin/admin). | **Pass** |  |
 | 13.2.4 | Verify that an allowlist is used to define the external resources or systems with which the application is permitted to communicate (e.g., for outbound requests, data loads, or file access). This allowlist can be implemented at the application layer, web server, firewall, or a combination of different layers. | **N/A** |  |
 | 13.2.5 | Verify that the web or application server is configured with an allowlist of resources or systems to which the server can send requests or load data or files from. | **N/A** |  |
 | 13.2.6 | Verify that where the application connects to separate services, it follows the documented configuration for each connection, such as maximum parallel connections, behavior when maximum allowed connections is reached, connection timeouts, and retry strategies. | **N/A** |  |
 | 13.3.1 | Verify that a secrets management solution, such as a key vault, is used to securely create, store, control access to, and destroy backend secrets. These could include passwords, key material, integrations with databases and third-party systems, keys and seeds for time-based tokens, other internal secrets, and API keys. Secrets must not be included in application source code or included in build artifacts. For an L3 application, this must involve a hardware-backed solution such as an HSM. | **N/A** |  |
-| 13.3.2 | Verify that access to secret assets adheres to the principle of least privilege. | **N/A** |  |
+| 13.3.2 | Verify that access to secret assets adheres to the principle of least privilege. | **Pass** |  |
 | 13.3.3 | Verify that all cryptographic operations are performed using an isolated security module (such as a vault or hardware security module) to securely manage and protect key material from exposure outside of the security module. | **N/A** |  |
 | 13.3.4 | Verify that secrets are configured to expire and be rotated based on the application's documentation. | **N/A** |  |
 | 13.4.1 | Verify that the application is deployed either without any source control metadata, including the .git or .svn folders, or in a way that these folders are inaccessible both externally and to the application itself. | **N/A** |  |
@@ -479,7 +450,7 @@ Create or reference a document (e.g., SECURITY.md in the repository root or Anto
 | 13.4.3 | Verify that web servers do not expose directory listings to clients unless explicitly intended. | **N/A** |  |
 | 13.4.4 | Verify that using the HTTP TRACE method is not supported in production environments, to avoid potential information leakage. | **N/A** |  |
 | 13.4.5 | Verify that documentation (such as for internal APIs) and monitoring endpoints are not exposed unless explicitly intended. | **N/A** |  |
-| 13.4.6 | Verify that the application does not expose detailed version information of backend components. | **Pass** |  |
+| 13.4.6 | Verify that the application does not expose detailed version information of backend components. | **N/A** |  |
 | 13.4.7 | Verify that the web tier is configured to only serve files with specific file extensions to prevent unintentional information, configuration, and source code leakage. | **N/A** |  |
 | **V14: Data Protection** | | | |
 | 14.1.1 | Verify that all sensitive data created and processed by the application has been identified and classified into protection levels. This includes data that is only encoded and therefore easily decoded, such as Base64 strings or the plaintext payload inside a JWT. Protection levels need to take into account any data protection and privacy regulations and standards which the application is required to comply with. | **N/A** |  |
@@ -487,7 +458,7 @@ Create or reference a document (e.g., SECURITY.md in the repository root or Anto
 | 14.2.1 | Verify that sensitive data is only sent to the server in the HTTP message body or header fields, and that the URL and query string do not contain sensitive information, such as an API key or session token. | **N/A** |  |
 | 14.2.2 | Verify that the application prevents sensitive data from being cached in server components, such as load balancers and application caches, or ensures that the data is securely purged after use. | **N/A** |  |
 | 14.2.3 | Verify that defined sensitive data is not sent to untrusted parties (e.g., user trackers) to prevent unwanted collection of data outside of the application's control. | **N/A** |  |
-| 14.2.4 | Verify that controls around sensitive data related to encryption, integrity verification, retention, how the data is to be logged, access controls around sensitive data in logs, privacy and privacy-enhancing technologies, are implemented as defined in the documentation for the specific data's protection level. | **Partial** | See FINDING-002 |
+| 14.2.4 | Verify that controls around sensitive data related to encryption, integrity verification, retention, how the data is to be logged, access controls around sensitive data in logs, privacy and privacy-enhancing technologies, are implemented as defined in the documentation for the specific data's protection level. | **N/A** |  |
 | 14.2.5 | Verify that caching mechanisms are configured to only cache responses which have the expected content type for that resource and do not contain sensitive, dynamic content. The web server should return a 404 or 302 response when a non-existent file is accessed rather than returning a different, valid file. This should prevent Web Cache Deception attacks. | **N/A** |  |
 | 14.2.6 | Verify that the application only returns the minimum required sensitive data for the application's functionality. For example, only returning some of the digits of a credit card number and not the full number. If the complete data is required, it should be masked in the user interface unless the user specifically views it. | **N/A** |  |
 | 14.2.7 | Verify that sensitive information is subject to data retention classification, ensuring that outdated or unnecessary data is deleted automatically, on a defined schedule, or as the situation requires. | **N/A** |  |
@@ -496,32 +467,32 @@ Create or reference a document (e.g., SECURITY.md in the repository root or Anto
 | 14.3.2 | Verify that the application sets sufficient anti-caching HTTP response header fields (i.e., Cache-Control: no-store) so that sensitive data is not cached in browsers. | **N/A** |  |
 | 14.3.3 | Verify that data stored in browser storage (such as localStorage, sessionStorage, IndexedDB, or cookies) does not contain sensitive data, with the exception of session tokens. | **N/A** |  |
 | **V15: Secure Coding and Architecture** | | | |
-| 15.1.1 | Verify that application documentation defines risk based remediation time frames for 3rd party component versions with vulnerabilities and for updating libraries in general, to minimize the risk from these components. | **Partial** | See FINDING-003 |
+| 15.1.1 | Verify that application documentation defines risk based remediation time frames for 3rd party component versions with vulnerabilities and for updating libraries in general, to minimize the risk from these components. | **N/A** |  |
 | 15.1.2 | Verify that an inventory catalog, such as software bill of materials (SBOM), is maintained of all third-party libraries in use, including verifying that components come from pre-defined, trusted, and continually maintained repositories. | **Pass** |  |
 | 15.1.3 | Verify that the application documentation identifies functionality which is time-consuming or resource-demanding. This must include how to prevent a loss of availability due to overusing this functionality and how to avoid a situation where building a response takes longer than the consumer's timeout. Potential defenses may include asynchronous processing, using queues, and limiting parallel processes per user and per application. | **Pass** |  |
-| 15.1.4 | Verify that application documentation highlights third-party libraries which are considered to be "risky components". | **Pass** |  |
-| 15.1.5 | Verify that application documentation highlights parts of the application where "dangerous functionality" is being used. | **Pass** |  |
+| 15.1.4 | Verify that application documentation highlights third-party libraries which are considered to be "risky components". | **N/A** |  |
+| 15.1.5 | Verify that application documentation highlights parts of the application where "dangerous functionality" is being used. | **N/A** |  |
 | 15.2.1 | Verify that the application only contains components which have not breached the documented update and remediation time frames. | **N/A** |  |
-| 15.2.2 | Verify that the application has implemented defenses against loss of availability due to functionality which is time-consuming or resource-demanding, based on the documented security decisions and strategies for this. | **N/A** |  |
+| 15.2.2 | Verify that the application has implemented defenses against loss of availability due to functionality which is time-consuming or resource-demanding, based on the documented security decisions and strategies for this. | **Pass** |  |
 | 15.2.3 | Verify that the production environment only includes functionality that is required for the application to function, and does not expose extraneous functionality such as test code, sample snippets, and development functionality. | **Pass** |  |
-| 15.2.4 | Verify that third-party components and all of their transitive dependencies are included from the expected repository, whether internally owned or an external source, and that there is no risk of a dependency confusion attack. | **Pass** |  |
-| 15.2.5 | Verify that the application implements additional protections around parts of the application which are documented as containing "dangerous functionality" or using third-party libraries considered to be "risky components". This could include techniques such as sandboxing, encapsulation, containerization or network level isolation to delay and deter attackers who compromise one part of an application from pivoting elsewhere in the application. | **Pass** |  |
+| 15.2.4 | Verify that third-party components and all of their transitive dependencies are included from the expected repository, whether internally owned or an external source, and that there is no risk of a dependency confusion attack. | **N/A** |  |
+| 15.2.5 | Verify that the application implements additional protections around parts of the application which are documented as containing "dangerous functionality" or using third-party libraries considered to be "risky components". This could include techniques such as sandboxing, encapsulation, containerization or network level isolation to delay and deter attackers who compromise one part of an application from pivoting elsewhere in the application. | **N/A** |  |
 | 15.3.1 | Verify that the application only returns the required subset of fields from a data object. For example, it should not return an entire data object, as some individual fields should not be accessible to users. | **N/A** |  |
 | 15.3.2 | Verify that where the application backend makes calls to external URLs, it is configured to not follow redirects unless it is intended functionality. | **N/A** |  |
 | 15.3.3 | Verify that the application has countermeasures to protect against mass assignment attacks by limiting allowed fields per controller and action, e.g., it is not possible to insert or update a field value when it was not intended to be part of that action. | **N/A** |  |
 | 15.3.4 | Verify that all proxying and middleware components transfer the user's original IP address correctly using trusted data fields that cannot be manipulated by the end user, and the application and web server use this correct value for logging and security decisions such as rate limiting, taking into account that even the original IP address may not be reliable due to dynamic IPs, VPNs, or corporate firewalls. | **N/A** |  |
-| 15.3.5 | Verify that the application explicitly ensures that variables are of the correct type and performs strict equality and comparator operations. This is to avoid type juggling or type confusion vulnerabilities caused by the application code making an assumption about a variable type. | **Pass** |  |
+| 15.3.5 | Verify that the application explicitly ensures that variables are of the correct type and performs strict equality and comparator operations. This is to avoid type juggling or type confusion vulnerabilities caused by the application code making an assumption about a variable type. | **N/A** |  |
 | 15.3.6 | Verify that JavaScript code is written in a way that prevents prototype pollution, for example, by using Set() or Map() instead of object literals. | **N/A** |  |
 | 15.3.7 | Verify that the application has defenses against HTTP parameter pollution attacks, particularly if the application framework makes no distinction about the source of request parameters (query string, body parameters, cookies, or header fields). | **N/A** |  |
-| 15.4.1 | Verify that shared objects in multi-threaded code (such as caches, files, or in-memory objects accessed by multiple threads) are accessed safely by using thread-safe types and synchronization mechanisms like locks or semaphores to avoid race conditions and data corruption. | **Pass** |  |
+| 15.4.1 | Verify that shared objects in multi-threaded code (such as caches, files, or in-memory objects accessed by multiple threads) are accessed safely by using thread-safe types and synchronization mechanisms like locks or semaphores to avoid race conditions and data corruption. | **Partial** | See FINDING-001 |
 | 15.4.2 | Verify that checks on a resource's state, such as its existence or permissions, and the actions that depend on them are performed as a single atomic operation to prevent time-of-check to time-of-use (TOCTOU) race conditions. For example, checking if a file exists before opening it, or verifying a user’s access before granting it. | **Pass** |  |
 | 15.4.3 | Verify that locks are used consistently to avoid threads getting stuck, whether by waiting on each other or retrying endlessly, and that locking logic stays within the code responsible for managing the resource to ensure locks cannot be inadvertently or maliciously modified by external classes or code. | **Pass** |  |
-| 15.4.4 | Verify that resource allocation policies prevent thread starvation by ensuring fair access to resources, such as by leveraging thread pools, allowing lower-priority threads to proceed within a reasonable timeframe. | **N/A** |  |
+| 15.4.4 | Verify that resource allocation policies prevent thread starvation by ensuring fair access to resources, such as by leveraging thread pools, allowing lower-priority threads to proceed within a reasonable timeframe. | **Partial** |  |
 | **V16: Security Logging and Error Handling** | | | |
 | 16.1.1 | Verify that an inventory exists documenting the logging performed at each layer of the application's technology stack, what events are being logged, log formats, where that logging is stored, how it is used, how access to it is controlled, and for how long logs are kept. | **N/A** |  |
 | 16.2.1 | Verify that each log entry includes necessary metadata (such as when, where, who, what) that would allow for a detailed investigation of the timeline when an event happens. | **Pass** |  |
 | 16.2.2 | Verify that time sources for all logging components are synchronized, and that timestamps in security event metadata use UTC or include an explicit time zone offset. UTC is recommended to ensure consistency across distributed systems and to prevent confusion during daylight saving time transitions. | **Pass** |  |
-| 16.2.3 | Verify that the application only stores or broadcasts logs to the files and services that are documented in the log inventory. | **N/A** |  |
+| 16.2.3 | Verify that the application only stores or broadcasts logs to the files and services that are documented in the log inventory. | **Pass** |  |
 | 16.2.4 | Verify that logs can be read and correlated by the log processor that is in use, preferably by using a common logging format. | **Pass** |  |
 | 16.2.5 | Verify that when logging sensitive data, the application enforces logging based on the data's protection level. For example, it may not be allowed to log certain data, such as credentials or payment details. Other data, such as session tokens, may only be logged by being hashed or masked, either in full or partially. | **N/A** |  |
 | 16.3.1 | Verify that all authentication operations are logged, including successful and unsuccessful attempts. Additional metadata, such as the type of authentication or factors used, should also be collected. | **N/A** |  |
@@ -529,12 +500,12 @@ Create or reference a document (e.g., SECURITY.md in the repository root or Anto
 | 16.3.3 | Verify that the application logs the security events that are defined in the documentation and also logs attempts to bypass the security controls, such as input validation, business logic, and anti-automation. | **N/A** |  |
 | 16.3.4 | Verify that the application logs unexpected errors and security control failures such as backend TLS failures. | **N/A** |  |
 | 16.4.1 | Verify that all logging components appropriately encode data to prevent log injection. | **Pass** |  |
-| 16.4.2 | Verify that logs are protected from unauthorized access and cannot be modified. | **N/A** |  |
-| 16.4.3 | Verify that logs are securely transmitted to a logically separate system for analysis, detection, alerting, and escalation. The aim is to ensure that if the application is breached, the logs are not compromised. | **N/A** |  |
+| 16.4.2 | Verify that logs are protected from unauthorized access and cannot be modified. | **Pass** |  |
+| 16.4.3 | Verify that logs are securely transmitted to a logically separate system for analysis, detection, alerting, and escalation. The aim is to ensure that if the application is breached, the logs are not compromised. | **Pass** |  |
 | 16.5.1 | Verify that a generic message is returned to the consumer when an unexpected or security-sensitive error occurs, ensuring no exposure of sensitive internal system data such as stack traces, queries, secret keys, and tokens. | **Pass** |  |
 | 16.5.2 | Verify that the application continues to operate securely when external resource access fails, for example, by using patterns such as circuit breakers or graceful degradation. | **Pass** |  |
 | 16.5.3 | Verify that the application fails gracefully and securely, including when an exception occurs, preventing fail-open conditions such as processing a transaction despite errors resulting from validation logic. | **Pass** |  |
-| 16.5.4 | Verify that a "last resort" error handler is defined which will catch all unhandled exceptions. This is both to avoid losing error details that must go to log files and to ensure that an error does not take down the entire application process, leading to a loss of availability. | **Partial** | See FINDING-001 |
+| 16.5.4 | Verify that a "last resort" error handler is defined which will catch all unhandled exceptions. This is both to avoid losing error details that must go to log files and to ensure that an error does not take down the entire application process, leading to a loss of availability. | **Partial** | See FINDING-003 |
 | **V17: WebRTC** | | | |
 | 17.1.1 | Verify that the Traversal Using Relays around NAT (TURN) service only allows access to IP addresses that are not reserved for special purposes (e.g., internal networks, broadcast, loopback). Note that this applies to both IPv4 and IPv6 addresses. | **N/A** |  |
 | 17.1.2 | Verify that the Traversal Using Relays around NAT (TURN) service is not susceptible to resource exhaustion when legitimate users attempt to open a large number of ports on the TURN server. | **N/A** |  |
@@ -550,8 +521,8 @@ Create or reference a document (e.g., SECURITY.md in the repository root or Anto
 | 17.3.2 | Verify that the signaling server is able to continue processing legitimate signaling messages when encountering malformed signaling message that could cause a denial of service condition. This could include implementing input validation, safely handling integer overflows, preventing buffer overflows, and employing other robust error-handling techniques. | **N/A** |  |
 
 **Summary Statistics:**
-- **Pass**: 35 requirements (10.1%)
-- **Partial**: 3 requirements (0.9%)
+- **Pass**: 34 requirements (9.9%)
+- **Partial**: 4 requirements (1.2%)
 - **N/A**: 307 requirements (89.0%)
 - **Fail**: 0 requirements (0.0%)
 
@@ -561,9 +532,9 @@ Create or reference a document (e.g., SECURITY.md in the repository root or Anto
 
 | Finding ID | Severity | ASVS Requirements | Related Findings | Affected Components |
 |------------|----------|-------------------|------------------|---------------------|
-| FINDING-001 | Low | 16.5.4 | — | src/log4net/Appender/AppenderSkeleton.cs |
-| FINDING-002 | Low | 14.2.4 | — | src/log4net/Appender/AdoNetAppender.cs |
-| FINDING-003 | Low | 15.1.1 | — | src/Directory.Build.props, src/site/antora/modules/ROOT/pages/versioning.adoc |
+| FINDING-001 | Low | 15.4.1 | — | src/log4net/Appender/AppenderSkeleton.cs |
+| FINDING-002 | Low | 1.4.3 | — | src/log4net/Appender/FileAppender.cs |
+| FINDING-003 | Low | 16.5.4 | — | src/log4net/Appender/AppenderSkeleton.cs |
 
 **Total Unique Findings**: 3 (0 Critical, 0 High, 0 Medium, 3 Low, 0 Info)
 
@@ -574,9 +545,9 @@ Create or reference a document (e.g., SECURITY.md in the repository root or Anto
 
 | Level | Sections Audited | Findings Found |
 |-------|-----------------|----------------|
-| L1 | 70 | 1 |
+| L1 | 70 | 0 |
 | L2 | 183 | 1 |
-| L3 | 92 | 1 |
+| L3 | 92 | 2 |
 
 **Total consolidated findings: 3**
 
