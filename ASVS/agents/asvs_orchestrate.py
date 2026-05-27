@@ -170,7 +170,7 @@ async def run(input_dict, tools):
         # =============================================================
         # Concurrency / bundling configuration
         # =============================================================
-        PASS_CONCURRENCY = int(os.environ.get("PASS_CONCURRENCY", "2"))
+        PASS_CONCURRENCY = int(os.environ.get("PASS_CONCURRENCY", "4"))
         BUNDLE_MAX_SECTIONS = int(os.environ.get("BUNDLE_MAX_SECTIONS", "6"))
         BUNDLE_MIN_SECTIONS = int(os.environ.get("BUNDLE_MIN_SECTIONS", "2"))
         TINY_REPO_LOC_THRESHOLD = int(os.environ.get("TINY_REPO_LOC_THRESHOLD", "30000"))
@@ -712,6 +712,224 @@ async def run(input_dict, tools):
                             out.append(line)
                         return '\n'.join(out)
                     redacted = _strip_critical_list_items(redacted)
+
+                    # 3c.0. SECTION-SCOPED Top N Risks redaction. The
+                    # global list-item stripper above (3c) has been
+                    # observed to miss items in real public reports
+                    # even when the per-line regex matches in
+                    # isolation. This redundant section-scoped pass
+                    # finds the "Top N Risks" heading, scans the
+                    # numbered list under it (until the next heading),
+                    # and drops any item whose body mentions Critical
+                    # severity in any recognizable form — including
+                    # forms 3c does not match. It also removes any
+                    # blank lines left by dropped items so the
+                    # surviving items pack cleanly for the renumber
+                    # pass that follows.
+                    #
+                    # Detection within an item's body:
+                    #   - (Critical) / (CRITICAL) / (Severity Critical) anywhere
+                    #   - [Critical] / [CRITICAL]
+                    #   - **Critical** / **CRITICAL**
+                    #   - 🔴 (Critical emoji marker)
+                    #   - "Severity: Critical" or "Severity Critical"
+                    #   - "ASVS-NNN-CRIT(ICAL)-NNN" finding-id token
+                    #
+                    # An item spans from its `N.` line to the next
+                    # `N.`-prefixed line or the next heading (#…).
+                    # Multi-paragraph items (rare in Top N Risks
+                    # output but possible) are dropped in full.
+                    def _strip_critical_items_in_top_risks(text):
+                        lines = text.split('\n')
+                        out = []
+                        in_fence = False
+                        top_heading_re = re.compile(
+                            r'^#{2,6}\s+Top\s+\d+\s+Risks?\s*$',
+                            re.IGNORECASE,
+                        )
+                        # Boundary: any next heading at any depth ends
+                        # the Top N Risks section.
+                        boundary_re = re.compile(r'^#{1,6}(\s|$)')
+                        list_start_re = re.compile(r'^\s*\d+\.\s')
+                        crit_token_re = re.compile(
+                            r'(?:'
+                            r'\(\s*(?:Severity\s+)?Critical\s*\)'
+                            r'|\[\s*Critical\s*\]'
+                            r'|\*\*\s*Critical\s*\*\*'
+                            r'|🔴'
+                            r'|Severity\s*:?\s*Critical\b'
+                            r'|ASVS-\d+-CRIT(?:ICAL)?-\d+'
+                            r')',
+                            re.IGNORECASE,
+                        )
+                        i = 0
+                        while i < len(lines):
+                            line = lines[i]
+                            stripped = line.lstrip()
+                            if stripped.startswith('```'):
+                                in_fence = not in_fence
+                                out.append(line)
+                                i += 1
+                                continue
+                            if in_fence:
+                                out.append(line)
+                                i += 1
+                                continue
+                            if not top_heading_re.match(line):
+                                out.append(line)
+                                i += 1
+                                continue
+                            # Enter Top N Risks section.
+                            out.append(line)
+                            i += 1
+                            # Process the list under this heading.
+                            while i < len(lines):
+                                nxt = lines[i]
+                                nxt_stripped = nxt.lstrip()
+                                if nxt_stripped.startswith('```'):
+                                    in_fence = not in_fence
+                                    out.append(nxt)
+                                    i += 1
+                                    continue
+                                if (not in_fence) and boundary_re.match(
+                                    nxt_stripped
+                                ):
+                                    break  # next heading ends the section
+                                if (not in_fence) and list_start_re.match(nxt):
+                                    # Found a top-level numbered item. Read
+                                    # its body up to the next top-level
+                                    # numbered item or the next heading.
+                                    item_lines = [nxt]
+                                    j = i + 1
+                                    while j < len(lines):
+                                        nn = lines[j]
+                                        nn_stripped = nn.lstrip()
+                                        if nn_stripped.startswith('```'):
+                                            in_fence = not in_fence
+                                        if (not in_fence) and (
+                                            boundary_re.match(nn_stripped)
+                                            or list_start_re.match(nn)
+                                        ):
+                                            break
+                                        item_lines.append(nn)
+                                        j += 1
+                                    body = '\n'.join(item_lines)
+                                    if crit_token_re.search(body):
+                                        # Drop the entire item.
+                                        i = j
+                                        continue
+                                    out.extend(item_lines)
+                                    i = j
+                                    continue
+                                out.append(nxt)
+                                i += 1
+                        return '\n'.join(out)
+                    redacted = _strip_critical_items_in_top_risks(redacted)
+
+                    # 3d. DEFENSIVE percentage-table normalization.
+                    # If the consolidator's executive summary slipped
+                    # into the vertical | Severity | Count | Percentage |
+                    # format anyway (older runs, prompt drift, model
+                    # nondeterminism), rewrite it in place to the
+                    # count-only | Severity | Count | shape. This
+                    # avoids two failure modes:
+                    #   - Percentages computed against the pre-redaction
+                    #     total that fail to sum to 100 after Critical
+                    #     is zeroed.
+                    #   - Percentages that DO sum to 100 (because the
+                    #     consolidator silently dropped Critical from
+                    #     the denominator) but create the false
+                    #     impression that "0.0% Critical" means the
+                    #     project has no critical findings.
+                    # The replacement is bytewise minimal: strip the
+                    # third column from the header, alignment, and
+                    # every severity-or-total data row that follows.
+                    def _normalize_severity_table(text):
+                        # Match the table block: header + alignment +
+                        # one or more rows whose first cell is a
+                        # severity label (or Total). Stop at the first
+                        # non-table line.
+                        header_re = re.compile(
+                            r'(\|\s*Severity\s*\|\s*Count\s*\|\s*Percentage\s*\|\s*\n'
+                            r'\|[\s:|\-]+\|[\s:|\-]+\|[\s:|\-]+\|\s*\n)'
+                            r'((?:\|[^\n]*\|\s*\n)+)',
+                            re.IGNORECASE,
+                        )
+                        def repl(m):
+                            new_header = (
+                                "| Severity | Count |\n"
+                                "|----------|-------|\n"
+                            )
+                            new_rows = []
+                            for row in m.group(2).splitlines():
+                                if not row.strip().startswith('|'):
+                                    new_rows.append(row)
+                                    continue
+                                cells = [c.strip() for c in row.split('|')]
+                                # cells = ['', sev, count, pct, ''] for a 3-col row
+                                if len(cells) >= 4:
+                                    sev = cells[1]
+                                    count = cells[2]
+                                    new_rows.append(f"| {sev} | {count} |")
+                                else:
+                                    new_rows.append(row)
+                            return new_header + '\n'.join(new_rows) + '\n'
+                        return header_re.sub(repl, text)
+                    redacted = _normalize_severity_table(redacted)
+
+                    # 3e. TRIPWIRE — fail loud rather than publish a
+                    # report with surviving Critical references. After
+                    # all redaction passes, scan the redacted output
+                    # for unambiguous Critical leak shapes. If any
+                    # survive, raise an error that aborts the public
+                    # push. The caller (in _redact_and_push) catches
+                    # exceptions and logs the failure; the public repo
+                    # is NOT updated in that case.
+                    #
+                    # Tripwire patterns (each on a single line):
+                    #   - A line with both a numbered/bulleted list
+                    #     marker AND a Critical token.
+                    #   - A heading line containing "Critical" alone
+                    #     (e.g., "### Critical Findings").
+                    #   - A severity field line "**Severity**: Critical".
+                    # Plain prose mentions of the word "critical"
+                    # elsewhere (e.g., "critical infrastructure",
+                    # "remediate within 48h for Critical") are
+                    # tolerated — they describe the redaction policy
+                    # rather than leak finding content.
+                    tripwire_patterns = [
+                        re.compile(
+                            r'^\s*(?:\d+\.|[-*])\s+.*?'
+                            r'(?:\(\s*Critical\s*\)|\[\s*Critical\s*\]'
+                            r'|\*\*\s*Critical\s*\*\*|🔴'
+                            r'|Severity\s*:?\s*Critical\b)',
+                            re.IGNORECASE | re.MULTILINE,
+                        ),
+                        re.compile(
+                            r'^#{1,6}\s+(?:\d+\.\d+\s+)?Critical\b',
+                            re.IGNORECASE | re.MULTILINE,
+                        ),
+                        re.compile(
+                            r'^\s*\*\*Severity\*\*\s*:?\s*Critical\b',
+                            re.IGNORECASE | re.MULTILINE,
+                        ),
+                    ]
+                    surviving_leaks = []
+                    for pat in tripwire_patterns:
+                        for m in pat.finditer(redacted):
+                            surviving_leaks.append(m.group(0)[:120])
+                    if surviving_leaks:
+                        # Aborting raises out of redact_consolidated;
+                        # the calling _redact_and_push wraps push in
+                        # try/except and will log the failure without
+                        # updating the public repo.
+                        msg = (
+                            f"REDACTION TRIPWIRE: {len(surviving_leaks)} "
+                            f"Critical leak(s) survived redaction. "
+                            f"Public push aborted. Samples: "
+                            f"{surviving_leaks[:3]}"
+                        )
+                        raise RuntimeError(msg)
 
                     # 3c.1. Renumber the Top N Risks numbered list and update
                     # its heading to match the surviving count. After 3c

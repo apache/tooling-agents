@@ -1124,7 +1124,33 @@ Generate ONLY:
    Use exactly `{len(all_findings)}` for the Total Findings cell.
    {"Use exactly `" + str(n_actionable) + "` for the Actionable Issues cell." if n_actionable != len(all_findings) else ""}
    {"Below the metadata table, add one italicised line: *Informational findings are recorded in this report but not opened as GitHub issues — see issues.md for the " + str(n_actionable) + " actionable items.*" if n_actionable != len(all_findings) else ""}
-3. Executive Summary with severity distribution, level coverage, top 5 risks, positive controls
+3. Executive Summary, in this exact structure:
+   - "### Severity Distribution" heading, followed by a count-only
+     table with EXACTLY these columns:
+         | Severity | Count |
+         |----------|-------|
+         | Critical | <n>   |
+         | High     | <n>   |
+         | Medium   | <n>   |
+         | Low      | <n>   |
+         | Info     | <n>   |
+     DO NOT include a Percentage column. DO NOT include a Total row.
+     DO NOT add percentages anywhere else in the executive summary.
+     Percentages of finding severities are not useful information
+     for the reader and create confusion when the public variant of
+     this report zeroes selected counts. Count-only is the only
+     supported shape.
+   - "### ASVS Level Coverage" heading with 1-2 sentences of prose.
+   - "### Top 5 Risks" heading, followed by a numbered list (1.
+     through 5.) of the highest-impact findings. For each item, use
+     EXACTLY this shape:
+         N. **<short title>** [<Severity>] — <one-sentence summary>
+     Severity goes in square brackets at the END of the bold title,
+     OUTSIDE any inline parentheticals. Do NOT embed severity inside
+     the title in parens (e.g., do not write "Title (Critical)") —
+     downstream redaction relies on the bracketed-suffix shape.
+   - "### Positive Controls Observed" heading with the bulleted list
+     or table of positive controls.
 
 End with ---."""
 
