@@ -21,29 +21,25 @@
 ### Severity Distribution
 
 
-| Severity | Count | Percentage |
-|----------|-------|------------|
-| Critical | 0 | 0.0% |
-| High     | 0 | 0.0% |
-| Medium   | 17 | 38.6% |
-| Low      | 26 | 59.1% |
-| Info     | 1 | 2.3% |
+| Severity | Count |
+|----------|-------|
+| Critical | 0 |
+| High     | 0 |
+| Medium   | 17 |
+| Low      | 26 |
+| Info     | 1 |
 
 ### ASVS Level Coverage
 
 This audit assessed 23 security domains against OWASP ASVS Level 1 requirements. Coverage spans authentication controls, authorization enforcement, input validation, session management, cryptographic implementation, API data minimization, file upload security, and additional domains. A total of 70 source reports were consolidated into 46 unique findings.
 
-### Top 5 Risks
+### Top Risks
 
-1. **SSH Tunnel Credentials Returned Without Masking (Critical)** — GET endpoints on the database API return SSH tunnel credentials (private keys, passwords) in plaintext, exposing secrets to any user with read access to database connection objects. This violates ASVS 15.3.1 (API data minimization).
+1. **AES-CBC Mode Without Authenticated Encryption (FINDING-004, Medium)** — The encrypted field implementation uses AES-CBC without an HMAC or authenticated encryption mode (e.g., AES-GCM), leaving stored secrets vulnerable to padding oracle attacks and ciphertext manipulation.
 
-2. **Query Endpoint Bypasses Field Restrictions (Critical)** — The `get_updated_since` endpoint in the queries API uses `to_dict()` serialization that bypasses the configured `list_columns` restrictions, potentially exposing sensitive query metadata including connection strings and internal identifiers.
+2. **Authentication Rate Limiting Not Active by Default (FINDING-012, Medium)** — No rate limiting is applied to authentication endpoints in the default configuration, leaving the application vulnerable to credential stuffing and brute-force attacks without operator intervention.
 
-3. **AES-CBC Mode Without Authenticated Encryption (FINDING-004, Medium)** — The encrypted field implementation uses AES-CBC without an HMAC or authenticated encryption mode (e.g., AES-GCM), leaving stored secrets vulnerable to padding oracle attacks and ciphertext manipulation.
-
-4. **Authentication Rate Limiting Not Active by Default (FINDING-012, Medium)** — No rate limiting is applied to authentication endpoints in the default configuration, leaving the application vulnerable to credential stuffing and brute-force attacks without operator intervention.
-
-5. **Async Query JWT Tokens Have No Expiration Claim (FINDING-019, Medium)** — JWT tokens issued for async query result retrieval lack an `exp` claim, meaning compromised tokens remain valid indefinitely and cannot be time-bounded without manual revocation.
+3. **Async Query JWT Tokens Have No Expiration Claim (FINDING-019, Medium)** — JWT tokens issued for async query result retrieval lack an `exp` claim, meaning compromised tokens remain valid indefinitely and cannot be time-bounded without manual revocation.
 
 ### Positive Controls Observed
 
