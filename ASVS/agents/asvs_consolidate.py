@@ -1150,16 +1150,16 @@ For multi-value table cells (Files, Source Reports, etc.): use ", " (comma-space
                 batch = sev_findings[sb_idx:sb_idx + MAX_PER_BATCH]
                 is_first = (sb_idx == 0)
                 prompt = f"""Format these {len(batch)} {sev} findings into Markdown.\n{FINDING_FORMAT}\n{"Start with: ### " + sev_section_names[sev] if is_first else "Continue. No header."}\n\n{json.dumps(batch, indent=2, default=str)}\n\nGenerate ALL {len(batch)} findings with full detail."""
-                for attempt in range(3):
-                    try:
-                        result, _ = await call_llm(provider=FAST_PROVIDER, model=FAST_MODEL,
-                            messages=[{"role": "user", "content": prompt}],
-                            parameters={**FAST_PARAMS, "max_tokens": 64000}, timeout=900)
-                        findings_md_parts.append(sanitize_md_html(result))
-                        break
-                    except Exception as e:
-                        if attempt < 2:
-                            await asyncio.sleep(5)
+                # Retries handled centrally in call_llm. On exhaustion the
+                # batch's findings_md_parts entry is skipped — the rest of
+                # the severity grouping still renders.
+                try:
+                    result, _ = await call_llm(provider=FAST_PROVIDER, model=FAST_MODEL,
+                        messages=[{"role": "user", "content": prompt}],
+                        parameters={**FAST_PARAMS, "max_tokens": 64000}, timeout=900)
+                    findings_md_parts.append(sanitize_md_html(result))
+                except Exception:
+                    pass
 
         # ============================================================
         # Tail sections (deterministic — no LLM)
@@ -1414,35 +1414,34 @@ For multi-value table cells (Files, Source Reports, etc.): use ", " (comma-space
             # Header is now written above deterministically — tell the LLM
             # to start straight from the first finding's separator.
             prompt = f"""Generate GitHub issues for {len(batch)} findings.\n{ISSUE_FMT}\nDo not include a top-level heading. Start directly with the first finding's `---` separator.\n\n{json.dumps(batch, indent=2, default=str)}"""
-            for attempt in range(3):
-                try:
-                    result, _ = await call_llm(provider=FAST_PROVIDER, model=FAST_MODEL,
-                        messages=[{"role": "user", "content": prompt}],
-                        parameters={**FAST_PARAMS, "max_tokens": 64000}, timeout=900)
-                    result = sanitize_md_html(result)
-                    # Count how many issues were generated
-                    generated_ids = set(re.findall(r'FINDING-(\d{3})', result))
-                    expected_ids = set(f["global_id"].replace("FINDING-", "") for f in batch if "global_id" in f)
-                    missing_ids = expected_ids - generated_ids
-                    issues_parts.append(result)
-                    if missing_ids:
-                        # Fill in missing issues with deterministic fallback
-                        missing_findings = [f for f in batch if f.get("global_id", "").replace("FINDING-", "") in missing_ids]
-                        fb = []
-                        for f in missing_findings:
-                            fb.append(f"---\n\n## Issue: {f['global_id']} - {sanitize_md_html(f.get('title',''))}\n\n**Labels:** bug, security, priority:{f.get('severity','Medium').lower()}\n\n**Description:**\n\n{sanitize_md_html(f.get('description',''))}\n\n**Remediation:** {sanitize_md_html(f.get('recommended_remediation',''))}\n\n**Priority:** {f.get('severity','Medium')}")
-                        issues_parts.append("\n\n".join(fb))
-                        print(f"    Filled {len(missing_findings)} missing issues from batch")
-                    break
-                except:
-                    if attempt < 2:
-                        await asyncio.sleep(5)
-                    else:
-                        # Full fallback
-                        fb = []
-                        for f in batch:
-                            fb.append(f"---\n\n## Issue: {f['global_id']} - {sanitize_md_html(f.get('title',''))}\n\n**Labels:** bug, security, priority:{f.get('severity','Medium').lower()}\n\n**Description:**\n\n{sanitize_md_html(f.get('description',''))}\n\n**Remediation:** {sanitize_md_html(f.get('recommended_remediation',''))}\n\n**Priority:** {f.get('severity','Medium')}")
-                        issues_parts.append("\n\n".join(fb))
+            # Retries handled centrally. On exhaustion, fall back to the
+            # deterministic per-finding format below so every issue still
+            # gets rendered, just without LLM polish.
+            try:
+                result, _ = await call_llm(provider=FAST_PROVIDER, model=FAST_MODEL,
+                    messages=[{"role": "user", "content": prompt}],
+                    parameters={**FAST_PARAMS, "max_tokens": 64000}, timeout=900)
+                result = sanitize_md_html(result)
+                # Count how many issues were generated
+                generated_ids = set(re.findall(r'FINDING-(\d{3})', result))
+                expected_ids = set(f["global_id"].replace("FINDING-", "") for f in batch if "global_id" in f)
+                missing_ids = expected_ids - generated_ids
+                issues_parts.append(result)
+                if missing_ids:
+                    # Fill in missing issues with deterministic fallback
+                    missing_findings = [f for f in batch if f.get("global_id", "").replace("FINDING-", "") in missing_ids]
+                    fb = []
+                    for f in missing_findings:
+                        fb.append(f"---\n\n## Issue: {f['global_id']} - {sanitize_md_html(f.get('title',''))}\n\n**Labels:** bug, security, priority:{f.get('severity','Medium').lower()}\n\n**Description:**\n\n{sanitize_md_html(f.get('description',''))}\n\n**Remediation:** {sanitize_md_html(f.get('recommended_remediation',''))}\n\n**Priority:** {f.get('severity','Medium')}")
+                    issues_parts.append("\n\n".join(fb))
+                    print(f"    Filled {len(missing_findings)} missing issues from batch")
+            except Exception:
+                # Full fallback: render every finding in the batch
+                # deterministically rather than losing it.
+                fb = []
+                for f in batch:
+                    fb.append(f"---\n\n## Issue: {f['global_id']} - {sanitize_md_html(f.get('title',''))}\n\n**Labels:** bug, security, priority:{f.get('severity','Medium').lower()}\n\n**Description:**\n\n{sanitize_md_html(f.get('description',''))}\n\n**Remediation:** {sanitize_md_html(f.get('recommended_remediation',''))}\n\n**Priority:** {f.get('severity','Medium')}")
+                issues_parts.append("\n\n".join(fb))
 
         issues_md = "\n\n".join(issues_parts)
 

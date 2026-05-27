@@ -69,11 +69,11 @@ async def run(input_dict, tools):
               - `**Severity:** Medium` / `**Severity**: High`
             """
             import re
-            counts = {"Critical": 0, "High": 0, "Medium": 0, "Low": 0, "Info": 0}
+            counts = {"Critical": 0, "High": 0, "Medium": 0, "Low": 0}
 
             # Primary: count Finding IDs and classify each by its severity token
             finding_ids = re.findall(
-                r'ASVS-\d+-(CRIT(?:ICAL)?|HIGH|MED(?:IUM)?|LOW|INFO(?:RMATIONAL)?)-\d+',
+                r'ASVS-\d+-(CRIT(?:ICAL)?|HIGH|MED(?:IUM)?|LOW)-\d+',
                 content, re.IGNORECASE,
             )
             for sev_token in finding_ids:
@@ -86,16 +86,13 @@ async def run(input_dict, tools):
                     counts["Medium"] += 1
                 elif token_upper == "LOW":
                     counts["Low"] += 1
-                elif token_upper.startswith("INFO"):
-                    counts["Info"] += 1
 
             if sum(counts.values()) > 0:
                 return counts
 
             # Fallback 1: severity headings at any heading depth, with or without brackets
             for sev_name, key in [("critical", "Critical"), ("high", "High"),
-                                   ("medium", "Medium"), ("low", "Low"),
-                                   ("info", "Info"), ("informational", "Info")]:
+                                   ("medium", "Medium"), ("low", "Low")]:
                 pattern = rf'(?im)^#{{1,6}}\s*\[?\s*{sev_name}\s*\]?\s*$'
                 counts[key] += len(re.findall(pattern, content))
 
@@ -107,7 +104,6 @@ async def run(input_dict, tools):
             counts["High"] += len(re.findall(r'\*\*Severity:?\*\*:?\s*High', content, re.IGNORECASE))
             counts["Medium"] += len(re.findall(r'\*\*Severity:?\*\*:?\s*Medium', content, re.IGNORECASE))
             counts["Low"] += len(re.findall(r'\*\*Severity:?\*\*:?\s*Low', content, re.IGNORECASE))
-            counts["Info"] += len(re.findall(r'\*\*Severity:?\*\*:?\s*Info(?:rmational)?', content, re.IGNORECASE))
             return counts
 
         async def _single_pass_consolidate(results, asvs, asvs_description, provider, model, params):
@@ -133,20 +129,17 @@ BATCH RESULTS TO CONSOLIDATE:
 
             messages = [{"role": "user", "content": prompt}]
             consolidation_params = {**params, "max_tokens": 32000}
-            for attempt in range(2):
-                try:
-                    resp, _ = await call_llm(
-                        provider=provider, model=model,
-                        messages=messages, parameters=consolidation_params, timeout=600,
-                    )
-                    return resp
-                except Exception as e:
-                    if attempt == 0:
-                        print(f"    Single-pass consolidation attempt 1 failed ({type(e).__name__}), retrying...", flush=True)
-                        await asyncio.sleep(5)
-                    else:
-                        print(f"    Single-pass consolidation failed, joining raw: {e}", flush=True)
-                        return "\n\n---\n\n".join(results)
+            try:
+                resp, _ = await call_llm(
+                    provider=provider, model=model,
+                    messages=messages, parameters=consolidation_params, timeout=600,
+                )
+                return resp
+            except Exception as e:
+                # call_llm has exhausted central retries. Fall back to
+                # raw-joining rather than losing the batch results.
+                print(f"    Single-pass consolidation failed, joining raw: {e}", flush=True)
+                return "\n\n---\n\n".join(results)
 
         async def _multi_round_consolidate(results, asvs, asvs_description, provider, model, params, context_window):
             """Original multi-round behavior; only kicks in for >4 batch results."""
@@ -217,18 +210,16 @@ BATCH RESULTS TO CONSOLIDATE:
 
         async def _try_consolidate(template, group, provider, model, params):
             prompt = template + "\n---\n".join(group)
-            for attempt in range(2):
-                try:
-                    resp, _ = await call_llm(
-                        provider=provider, model=model,
-                        messages=[{"role": "user", "content": prompt}],
-                        parameters=params, timeout=300,
-                    )
-                    return resp
-                except Exception:
-                    if attempt == 0:
-                        await asyncio.sleep(5)
-            return None
+            try:
+                resp, _ = await call_llm(
+                    provider=provider, model=model,
+                    messages=[{"role": "user", "content": prompt}],
+                    parameters=params, timeout=300,
+                )
+                return resp
+            except Exception:
+                # Returning None signals caller to fall back to raw-join.
+                return None
 
         def _zero_findings_template(asvs, asvs_description, repo_name, audit_date,
                                     n_relevant, n_total, skipped, file_list):
@@ -675,24 +666,23 @@ FILES TO EVALUATE:
                         entries_text = "".join(batch.values())
                         prompt = relevance_prompt_template + entries_text
                         messages = [{"role": "user", "content": prompt}]
-                        for attempt in range(2):
-                            try:
-                                content_resp, _ = await call_llm(
-                                    provider=HAIKU_PROVIDER, model=HAIKU_MODEL,
-                                    messages=messages, parameters=HAIKU_PARAMS,
-                                    timeout=120,
-                                )
-                                json_match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', content_resp, re.DOTALL)
-                                if json_match:
-                                    scores = json.loads(json_match.group())
-                                    print(f"    Batch {i+1}: scored {len(scores)} files", flush=True)
-                                    return scores
-                            except Exception as e:
-                                if attempt == 0:
-                                    print(f"    Batch {i+1} attempt 1 failed ({type(e).__name__}), retrying...", flush=True)
-                                    await asyncio.sleep(5)
-                                else:
-                                    print(f"    Batch {i+1} FAILED: {e}", flush=True)
+                        # call_llm handles central retries. On exhaustion,
+                        # fall back to score=5 for the whole batch — every
+                        # file passes through to analysis rather than being
+                        # silently dropped.
+                        try:
+                            content_resp, _ = await call_llm(
+                                provider=HAIKU_PROVIDER, model=HAIKU_MODEL,
+                                messages=messages, parameters=HAIKU_PARAMS,
+                                timeout=120,
+                            )
+                            json_match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', content_resp, re.DOTALL)
+                            if json_match:
+                                scores = json.loads(json_match.group())
+                                print(f"    Batch {i+1}: scored {len(scores)} files", flush=True)
+                                return scores
+                        except Exception as e:
+                            print(f"    Batch {i+1} FAILED: {e}", flush=True)
                         print(f"    WARNING: Batch {i+1} defaulting {len(batch)} files to score=5", flush=True)
                         return {path: 5 for path in batch}
 
@@ -808,22 +798,19 @@ FILES:
                                 print(f"    Inventory sub-batch failed: {e}", flush=True)
                         return "\n\n".join(results)
 
-                    for attempt in range(2):
-                        try:
-                            resp, _ = await call_llm(
-                                provider=SONNET_PROVIDER, model=SONNET_MODEL,
-                                messages=messages, parameters=SONNET_PARAMS,
-                                timeout=300,
-                            )
-                            print(f"    Inventory batch {i+1} complete", flush=True)
-                            return resp
-                        except Exception as e:
-                            if attempt == 0:
-                                print(f"    Inventory batch {i+1} attempt 1 failed ({type(e).__name__}), retrying...", flush=True)
-                                await asyncio.sleep(5)
-                            else:
-                                print(f"    Inventory batch {i+1} FAILED: {e}", flush=True)
-                                return ""
+                    # Retries handled centrally. On exhaustion the inventory
+                    # entry is dropped; the join filters empty results.
+                    try:
+                        resp, _ = await call_llm(
+                            provider=SONNET_PROVIDER, model=SONNET_MODEL,
+                            messages=messages, parameters=SONNET_PARAMS,
+                            timeout=300,
+                        )
+                        print(f"    Inventory batch {i+1} complete", flush=True)
+                        return resp
+                    except Exception as e:
+                        print(f"    Inventory batch {i+1} FAILED: {e}", flush=True)
+                        return ""
 
             inventory_results = await asyncio.gather(*[
                 inventory_batch(i, batch)
@@ -849,25 +836,11 @@ FILES:
             analysis_system_prompt += f"\n## Domain Context\n{domain_context}\n"
 
         if severity_threshold:
-            severity_levels = {"CRITICAL": 5, "HIGH": 4, "MEDIUM": 3, "LOW": 2, "INFO": 1, "INFORMATIONAL": 1}
+            severity_levels = {"CRITICAL": 4, "HIGH": 3, "MEDIUM": 2, "LOW": 1}
             threshold_val = severity_levels.get(severity_threshold.upper(), 0)
             if threshold_val > 0:
-                included_set = {k for k, v in severity_levels.items() if v >= threshold_val}
-                # Collapse INFO/INFORMATIONAL aliases for display
-                included_set.discard("INFORMATIONAL")
-                included = sorted(included_set, key=lambda k: -severity_levels[k])
-                analysis_system_prompt += (
-                    f"\n## Severity Threshold\n"
-                    f"Report findings at these severity levels and ONLY these: "
-                    f"{', '.join(included)}.\n"
-                    f"Findings below {severity_threshold.upper()} should be omitted entirely.\n"
-                    f"Do NOT bias toward {severity_threshold.upper()} as the default. "
-                    f"Every finding's severity is determined by the ASF Severity Calibration "
-                    f"below — assign Critical when the calibration supports Critical, assign "
-                    f"Low when the calibration supports Low. Severity follows the actual "
-                    f"exploit path and impact, never the gap shape, CWE category, or ASVS "
-                    f"section alone.\n"
-                )
+                included = [k for k, v in severity_levels.items() if v >= threshold_val]
+                analysis_system_prompt += f"\n## Severity Threshold\nReport findings at these severity levels and ONLY these: {', '.join(included)}.\nFindings at lower severities ({severity_threshold.upper()}-below) should be omitted entirely.\nDo NOT bias toward {severity_threshold.upper()} as the default — CRITICAL findings (Type B/C/D gaps per the rules below) are equally in scope and must be reported as CRITICAL when the gap-type rule applies.\n"
 
         if false_positive_guidance:
             guidance_text = "\n".join(f"- {g}" for g in false_positive_guidance)
@@ -965,143 +938,48 @@ For each security control found:
 - Document where it's DEFINED
 - Map ALL entry points that should use it
 - Verify it's actually CALLED at each entry point
-- Flag coverage gaps where the control exists but is not applied
+- Flag coverage gaps (control exists but not applied = CRITICAL)
 
-### Severity Calibration — Apache Software Foundation criteria
+### Gap Type Classification — severity is DETERMINED by gap type, not your judgment
 
-Severity follows the ASF Security Team's published criteria. These are the
-authoritative definitions for ASF projects and override any tendency to rate
-findings by CWE category, ASVS section, or gap shape alone.
-
-**Critical** — easily exploited by a remote unauthenticated attacker, leads
-to arbitrary code execution or full system compromise, requires no user
-interaction. A finding is NOT Critical if exploitation requires any of:
-authentication of any kind, local or physical access, an unlikely
-configuration, user interaction (clicking a link, opening a file), prior
-compromise of another component, or a specific runtime race window that is
-unlikely under normal load. Code execution only — "could lead to compromise"
-is not Critical.
-
-**High** (ASF "Important") — easily compromises confidentiality, integrity,
-or availability under realistic conditions. Includes:
-- Local or authenticated user gains additional privileges
-- Unauthenticated remote user views resources that should be
-  authentication-protected
-- Authenticated remote user achieves arbitrary code execution
-- Remote user causes denial of service
-A real attacker capability AND a real C/I/A impact must both be present.
-Control bypass or gap that does not itself compromise C/I/A is not High by
-default — see Medium.
-
-**Medium** (ASF "Moderate") — could compromise C/I/A under certain
-circumstances. Includes:
-- Findings that would be Critical or High but require more difficult
-  exploit conditions
-- Findings affecting unlikely configurations
-- Findings with limited scope of impact
-- Control bypass that requires application-layer cooperation to convert
-  into actual harm
-- Foot-guns: insecure defaults the operator can fix, documented but easy
-  to misuse, behaviors that surprise downstream consumers
-
-**Low** — security-relevant but minimal consequences or unlikely
-circumstances. Includes:
-- Defense-in-depth gaps where another layer prevents exploitation
-- Documentation deficiencies that do not themselves enable exploitation
-- Dead dependency pins (artifact pinned in dependencyManagement but not
-  on any classpath)
-- Hardening recommendations without a concrete current exploit path
-- Library-improvement suggestions that would be nice to have but are not
-  vulnerabilities
-
-**Informational** — observations with security relevance that do not
-constitute vulnerabilities. Documentation gaps governed by foundation-level
-processes (e.g., ASF Security Team handles vulnerability response for all
-ASF projects) typically rate Informational rather than Low. Also used for
-hardening suggestions and architectural observations the project may want
-to consider but is under no obligation to act on.
-
-### Severity calibration questions — answer these before assigning severity
-
-For every finding, answer these three questions explicitly. The answers
-determine severity per the ASF definitions above.
-
-1. **What attacker capability does this require?**
-   - Remote, unauthenticated, no prior access → Critical/High territory
-   - Authenticated user, any role → High/Medium
-   - Privileged user, administrator, or local/physical access → Medium/Low
-   - Specific unusual configuration the operator opted into → Medium/Low
-
-2. **What does successful exploitation achieve?**
-   - Arbitrary code execution or full system compromise → Critical/High
-   - Privilege escalation → High
-   - Unauthorized data read or modification → High/Medium depending on
-     scope and sensitivity
-   - Denial of service → High/Medium depending on conditions
-   - Information disclosure → High/Medium/Low depending on what is disclosed
-   - Control bypass with no direct C/I/A impact → Medium/Low (the bypass
-     itself is not the harm; if downstream harm requires application-layer
-     cooperation, this is Medium at most)
-
-3. **How easy is exploitation in default deployment?**
-   - Trivially exploitable in default configuration → push severity up
-   - Requires specific application-layer pattern or operator misconfiguration
-     → push severity down
-   - Requires unlikely runtime conditions or attacker preconditions
-     → push severity down
-
-If the answers do not justify Critical or High under the ASF criteria, the
-severity must be lower — even when the finding's *shape* looks like a Type
-B/C/D control-flow gap. Shape and impact are different questions.
-
-### Gap Type Classification — pattern detection, not severity assignment
-
-These patterns help recognize SHAPES of findings. They do NOT by themselves
-determine severity. After classifying the gap shape, apply the calibration
-questions above to assign severity per the ASF criteria.
+For EVERY finding you produce, first classify the gap type, then assign severity
+according to the rules below. You do not have discretion to override these.
 
 **Type A — Entry point with NO control**
-  Shape: input reaches a sensitive sink without going through any
-  validation, authorization, or encoding step.
-  Example: an endpoint accepts user input and concatenates it directly
-  into a shell command — no validation anywhere.
+  Severity: HIGH (or LOW/MEDIUM if impact is minor)
+  Finding ID format: `ASVS-{asvs.replace('.', '')}-HIGH-NNN`
+  Example: an endpoint accepts user input and concatenates it directly into a
+  shell command — no validation anywhere → Type A → HIGH.
 
 **Type B — Control EXISTS but is NOT CALLED at this entry point**
-  Shape: the codebase has the control defined; some other entry points use
-  it; this entry point does not. May produce false confidence — operators
-  believe they are protected; they are not.
-  Example: a login endpoint validates passwords, but a `try: ... except
-  JSONDecodeError: pass` block silently skips validation when the body is
-  malformed.
+  Severity: **CRITICAL** (false confidence — operators believe protected, aren't)
+  Finding ID format: `ASVS-{asvs.replace('.', '')}-CRIT-NNN`
+  Example: a login endpoint validates passwords, but a `try: ... except JSONDecodeError: pass`
+  block silently skips validation when the body is malformed → control exists,
+  not called → **CRITICAL, not High**.
+  Example: `is_authorized_pool` exists and works, but the auth check is wrapped in
+  `with suppress(JSONDecodeError):` so it's bypassed on parse failure → **CRITICAL**.
 
 **Type C — Control CALLED but RESULT IGNORED**
-  Shape: the control runs but its decision is discarded.
-  Example: authorization backend returns "access denied" but the caller
-  treats this identically to "not found" and falls through to the next
-  backend. Example: revocation list checked but the result is logged-only
-  and doesn't reject the request.
+  Severity: **CRITICAL** (work performed without consequence)
+  Finding ID format: `ASVS-{asvs.replace('.', '')}-CRIT-NNN`
+  Example: auth backend returns "access denied" but caller treats this identically
+  to "not found" and falls through to the next backend → **CRITICAL, not High**.
+  Example: token revocation list is checked but the result is logged-only and
+  doesn't actually reject the request → **CRITICAL**.
 
 **Type D — Control CALLED but AFTER the sensitive operation**
-  Shape: order of operations puts the sensitive sink before the control
-  that should have gated it.
-  Example: SQL query executed THEN the parameter validated. Example: file
-  written to disk, then path traversal check runs.
+  Severity: **CRITICAL** (control runs too late to prevent harm)
+  Finding ID format: `ASVS-{asvs.replace('.', '')}-CRIT-NNN`
+  Example: SQL query is executed and THEN the parameter is validated → **CRITICAL**.
+  Example: file is written to disk, then path traversal check runs → **CRITICAL**.
 
-**Gap shape sets a ceiling on plausibility, not a floor on severity.**
-A Type B/C/D gap can justify Critical when the calibration questions yield
-"remote, unauthenticated, default configuration, arbitrary code execution."
-A Type B/C/D gap that requires authenticated access and yields only control
-bypass without direct C/I/A impact rates Medium at most. A Type B/C/D gap
-where the bypass enables information disclosure of low-sensitivity data
-rates Low.
-
-**Hard rule:** severity follows the ASF Severity Calibration above, not
-the gap shape. Do not auto-elevate gap-shape findings to Critical without
-verifying the calibration supports it. The most common audit failure mode
-is rating control-flow gaps as Critical because the SHAPE looks severe,
-when the actual exploit path does not match ASF Critical criteria. Type
-B/C/D shape detection is useful evidence for analysis; it is not a
-severity rule.
+**Hard rule:** If your finding's description includes phrases like "control exists
+but not called", "control called but result ignored", "validation skipped",
+"check bypassed", "silently fails", "exception suppressed", or "Type B/C/D" —
+the Finding ID MUST use the `CRIT` token, NOT `HIGH`. There is no case where
+a Type B/C/D gap should be marked HIGH. This is the most common failure mode
+in audits and you must guard against it.
 
 ### Related Function Analysis
 When you find a vulnerability, IMMEDIATELY search for:
@@ -1128,69 +1006,31 @@ Do NOT report:
 
 ### Output Requirements
 For each finding, provide:
-- Severity level (CRITICAL/HIGH/MEDIUM/LOW/INFO) — assigned per the ASF
-  Severity Calibration above, applied to the answers from the calibration
-  questions. NOT determined by gap shape alone, CWE category, or ASVS
-  section.
-- Finding ID using ONE of these exact formats, where the token matches the
-  assigned severity:
-  - `ASVS-{asvs.replace('.', '')}-CRIT-NNN` for Critical
+- Severity level (CRITICAL/HIGH/MEDIUM/LOW) — determined by the Gap Type rules above, not your discretion
+- Finding ID using ONE of these exact formats based on severity:
+  - `ASVS-{asvs.replace('.', '')}-CRIT-NNN` for Critical (Type B/C/D gaps)
   - `ASVS-{asvs.replace('.', '')}-HIGH-NNN` for High
   - `ASVS-{asvs.replace('.', '')}-MED-NNN`  for Medium
   - `ASVS-{asvs.replace('.', '')}-LOW-NNN`  for Low
-  - `ASVS-{asvs.replace('.', '')}-INFO-NNN` for Informational
 - Exact file location and function name with line numbers
 - Vulnerable code quote
 - Data flow (source → sink → missing control)
-- Attacker capability required — the answer to calibration question 1
-  (e.g., "remote unauthenticated", "authenticated user", "local access",
-  "administrator with config access")
-- Impact on success — the answer to calibration question 2 (e.g., "RCE",
-  "data read", "DoS", "control bypass with no direct C/I/A impact")
-- Proof of concept (specific malicious request or trigger) — REQUIRED for
-  Critical and High findings; if you cannot construct one that matches
-  the stated attacker capability, the finding likely does not warrant
-  Critical or High under ASF criteria — downgrade
+- Proof of concept (specific malicious request)
+- Impact description
 - Remediation with code example
 
 ### Final Severity Pass — DO THIS BEFORE EMITTING OUTPUT
 
-After drafting all findings, walk back through them once more and verify
-the calibration on each:
+After you've drafted all findings, walk back through them once more:
+1. For each finding marked HIGH, re-read its own description.
+2. If the description says or implies the control exists somewhere but is not
+   reached, not called, bypassed, suppressed, called-but-ignored, or called-too-late —
+   that is a Type B/C/D gap. Change the severity to CRITICAL and the Finding ID
+   token from HIGH to CRIT.
+3. If the description says no such control exists at all — leave it as HIGH.
 
-1. For each finding marked Critical, confirm the exploit chain reaches
-   arbitrary code execution starting from a remote unauthenticated
-   attacker with no user interaction and a default configuration. If any
-   link in the chain requires authentication, local access, user
-   interaction, prior compromise, or unusual configuration, downgrade
-   the severity per the ASF criteria (most often to High or Medium).
-
-2. For each finding marked High, confirm a real attacker capability AND
-   a real C/I/A impact are BOTH present. A control bypass that requires
-   application-layer cooperation to cause actual harm is Medium, not
-   High. A finding rated High where you cannot construct a concrete PoC
-   for the claimed attacker capability is likely Medium or Low.
-
-3. For each finding marked Medium or Low, confirm the calibration
-   questions produced answers consistent with that tier. Don't be
-   cautious and rate higher than the calibration supports; don't be
-   conservative and rate lower than it supports.
-
-4. Documentation-gap findings (e.g., ASVS "documentation must define X"
-   requirements) rate Low or Informational, not Medium. If the
-   documentation gap is governed by a foundation-level process
-   (ASF Security Team for ASF projects), rate Informational.
-
-5. Dependency findings: if the vulnerable artifact is not actually on
-   any classpath at runtime (e.g., declared in dependencyManagement but
-   not pulled by any module), rate Low regardless of the CVE's CVSS
-   score. The CVE rates the vulnerable code; a dead pin doesn't run
-   the code.
-
-This pass exists because the most common audit failure is rating
-findings by their pattern (Type B/C/D shape, CWE class, ASVS section,
-CVE CVSS) rather than by their actual exploit path and impact. Apply
-the calibration; do not pattern-match.
+This pass is not optional. The most common audit failure is marking Type B/C/D
+gaps as HIGH out of caution. Your job is to apply the rule, not to be cautious.
 
 Also provide:
 - Security Controls Inventory with coverage analysis
@@ -1277,65 +1117,50 @@ Be thorough but precise. If something is done correctly, acknowledge it as a pos
                             half_text = "".join([v for _, v in half_items])
                             half_user = user_template + half_text + inventory_section
                             half_messages = [{"role": "user", "content": analysis_system_prompt + "\n\n" + half_user}]
-                            for attempt in range(3):
-                                try:
-                                    resp, _ = await call_llm(
-                                        provider=OPUS_PROVIDER, model=OPUS_MODEL,
-                                        messages=half_messages, parameters=OPUS_PARAMS,
-                                        timeout=1800,
-                                    )
-                                    results.append(resp)
-                                    print(f"      Sub-batch {half_label} complete", flush=True)
-                                    break
-                                except Exception as e:
-                                    if attempt < 2:
-                                        wait = 15 * (attempt + 1)
-                                        print(f"      Sub-batch {half_label} attempt {attempt+1} failed ({type(e).__name__}), retrying in {wait}s...", flush=True)
-                                        await asyncio.sleep(wait)
-                                    else:
-                                        print(f"      Sub-batch {half_label} FAILED: {e}", flush=True)
-                                        results.append(f"[Analysis failed for sub-batch {i+1}{half_label}: {str(e)[:200]}]")
+                            # Retries handled centrally. On exhaustion
+                            # emit a sentinel string so the surviving
+                            # half still produces output; the post-gather
+                            # filter strips these out.
+                            try:
+                                resp, _ = await call_llm(
+                                    provider=OPUS_PROVIDER, model=OPUS_MODEL,
+                                    messages=half_messages, parameters=OPUS_PARAMS,
+                                    timeout=1800,
+                                )
+                                results.append(resp)
+                                print(f"      Sub-batch {half_label} complete", flush=True)
+                            except Exception as e:
+                                print(f"      Sub-batch {half_label} FAILED: {e}", flush=True)
+                                results.append(f"[Analysis failed for sub-batch {i+1}{half_label}: {str(e)[:200]}]")
                         combined = "\n\n---\n\n".join(results)
                         analysis_cache_ns.set(cache_key, combined)
                         return combined
                     else:
                         key, entry_val = items[0]
                         slim_messages = [{"role": "user", "content": analysis_system_prompt + "\n\n" + user_template + entry_val}]
-                        for attempt in range(3):
-                            try:
-                                resp, _ = await call_llm(
-                                    provider=OPUS_PROVIDER, model=OPUS_MODEL,
-                                    messages=slim_messages, parameters=OPUS_PARAMS,
-                                    timeout=1800,
-                                )
-                                analysis_cache_ns.set(cache_key, resp)
-                                return resp
-                            except Exception as e:
-                                if attempt < 2:
-                                    wait = 15 * (attempt + 1)
-                                    print(f"      Single file attempt {attempt+1} failed ({type(e).__name__}), retrying in {wait}s...", flush=True)
-                                    await asyncio.sleep(wait)
-                                else:
-                                    return f"[Analysis failed for {key}: {str(e)[:200]}]"
+                        try:
+                            resp, _ = await call_llm(
+                                provider=OPUS_PROVIDER, model=OPUS_MODEL,
+                                messages=slim_messages, parameters=OPUS_PARAMS,
+                                timeout=1800,
+                            )
+                            analysis_cache_ns.set(cache_key, resp)
+                            return resp
+                        except Exception as e:
+                            return f"[Analysis failed for {key}: {str(e)[:200]}]"
 
-                for attempt in range(3):
-                    try:
-                        resp, _ = await call_llm(
-                            provider=OPUS_PROVIDER, model=OPUS_MODEL,
-                            messages=messages, parameters=OPUS_PARAMS,
-                            timeout=1800,
-                        )
-                        analysis_cache_ns.set(cache_key, resp)
-                        print(f"    Opus batch {i+1} complete", flush=True)
-                        return resp
-                    except Exception as e:
-                        if attempt < 2:
-                            wait = 15 * (attempt + 1)
-                            print(f"    Opus batch {i+1} attempt {attempt+1} failed ({type(e).__name__}), retrying in {wait}s...", flush=True)
-                            await asyncio.sleep(wait)
-                        else:
-                            print(f"    Opus batch {i+1} FAILED: {e}", flush=True)
-                            return f"[Analysis failed for batch {i+1}: {str(e)[:200]}]"
+                try:
+                    resp, _ = await call_llm(
+                        provider=OPUS_PROVIDER, model=OPUS_MODEL,
+                        messages=messages, parameters=OPUS_PARAMS,
+                        timeout=1800,
+                    )
+                    analysis_cache_ns.set(cache_key, resp)
+                    print(f"    Opus batch {i+1} complete", flush=True)
+                    return resp
+                except Exception as e:
+                    print(f"    Opus batch {i+1} FAILED: {e}", flush=True)
+                    return f"[Analysis failed for batch {i+1}: {str(e)[:200]}]"
 
         analysis_results = await asyncio.gather(*[
             analyze_batch(i, batch)
@@ -1435,20 +1260,17 @@ Finding counts detected: Critical={findings_count['Critical']}, High={findings_c
 
             if format_tokens <= sonnet_limit:
                 final_report = consolidated_analysis  # default if formatting fails
-                for attempt in range(2):
-                    try:
-                        final_report, _ = await call_llm(
-                            provider=SONNET_PROVIDER, model=SONNET_MODEL,
-                            messages=format_messages, parameters=SONNET_PARAMS,
-                            timeout=600,
-                        )
-                        break
-                    except Exception as e:
-                        if attempt == 0:
-                            print(f"  Formatting attempt 1 failed ({type(e).__name__}), retrying...", flush=True)
-                            await asyncio.sleep(5)
-                        else:
-                            print(f"  Formatting failed, using raw analysis: {e}", flush=True)
+                # Retries handled centrally. On exhaustion final_report
+                # stays as the raw consolidated_analysis from above —
+                # less polished but content-complete.
+                try:
+                    final_report, _ = await call_llm(
+                        provider=SONNET_PROVIDER, model=SONNET_MODEL,
+                        messages=format_messages, parameters=SONNET_PARAMS,
+                        timeout=600,
+                    )
+                except Exception as e:
+                    print(f"  Formatting failed, using raw analysis: {e}", flush=True)
             else:
                 print(f"  Format prompt too large, using header + raw", flush=True)
                 final_report = _fallback_header(

@@ -215,28 +215,27 @@ invent paths — downstream tooling uses these as cache and audit keys.
 
         async def classify_batch(i, entries):
             content = CLASSIFY_PROMPT + f"\n\nFILES (batch {i+1}/{len(arch_batches)}):\n" + "".join(entries)
-            for attempt in range(2):
-                try:
-                    result, _ = await call_llm(
-                        provider=PROVIDER, model=MODEL,
-                        messages=[{"role": "user", "content": content}],
-                        parameters=PARAMS,
-                        timeout=300,
-                    )
-                    json_match = re.search(r'\{[\s\S]*\}', result)
-                    if json_match:
-                        partial = json.loads(json_match.group())
-                        print(f"  Batch {i+1}: {len(partial.get('auth_systems', []))} auth, "
-                              f"{len(partial.get('api_layers', []))} api, "
-                              f"{len(partial.get('security_relevant_areas', []))} areas",
-                              flush=True)
-                        return partial
-                except Exception as e:
-                    if attempt == 0:
-                        print(f"  Batch {i+1} attempt 1 failed ({type(e).__name__}), retrying...", flush=True)
-                        await asyncio.sleep(5)
-                    else:
-                        print(f"  Batch {i+1} FAILED: {e}", flush=True)
+            # Retries are handled centrally in call_llm (rate-limit and
+            # timeout backoff). If call_llm exhausts retries the batch is
+            # dropped from the merge — the same behavior as before, just
+            # with proper backoff getting us there.
+            try:
+                result, _ = await call_llm(
+                    provider=PROVIDER, model=MODEL,
+                    messages=[{"role": "user", "content": content}],
+                    parameters=PARAMS,
+                    timeout=300,
+                )
+                json_match = re.search(r'\{[\s\S]*\}', result)
+                if json_match:
+                    partial = json.loads(json_match.group())
+                    print(f"  Batch {i+1}: {len(partial.get('auth_systems', []))} auth, "
+                          f"{len(partial.get('api_layers', []))} api, "
+                          f"{len(partial.get('security_relevant_areas', []))} areas",
+                          flush=True)
+                    return partial
+            except Exception as e:
+                print(f"  Batch {i+1} FAILED: {e}", flush=True)
             return None
 
         partial_architectures = await asyncio.gather(*[
@@ -417,23 +416,22 @@ Return ONLY a JSON array of strings:
 ]"""
 
         async def call_for_domains():
-            for attempt in range(2):
-                try:
-                    result, _ = await call_llm(
-                        provider=PROVIDER, model=MODEL,
-                        messages=[{"role": "user", "content": DOMAIN_PROMPT}],
-                        parameters={**PARAMS, "max_tokens": 32000},
-                        timeout=300,
-                    )
-                    json_match = re.search(r'\{[\s\S]*\}', result)
-                    if json_match:
-                        return json.loads(json_match.group())
-                except Exception as e:
-                    if attempt == 0:
-                        print(f"  Domains attempt 1 failed ({type(e).__name__}), retrying...", flush=True)
-                        await asyncio.sleep(5)
-                    else:
-                        print(f"  Domains FAILED: {e}", flush=True)
+            # Retries handled centrally in call_llm. On exhaustion the
+            # discover step returns an error envelope and the orchestrator
+            # aborts the audit — preferable to silently proceeding with
+            # bogus domain assignments.
+            try:
+                result, _ = await call_llm(
+                    provider=PROVIDER, model=MODEL,
+                    messages=[{"role": "user", "content": DOMAIN_PROMPT}],
+                    parameters={**PARAMS, "max_tokens": 32000},
+                    timeout=300,
+                )
+                json_match = re.search(r'\{[\s\S]*\}', result)
+                if json_match:
+                    return json.loads(json_match.group())
+            except Exception as e:
+                print(f"  Domains FAILED: {e}", flush=True)
             return None
 
         async def call_for_fp_guidance():

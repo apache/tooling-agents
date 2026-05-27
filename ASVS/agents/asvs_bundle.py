@@ -287,20 +287,20 @@ BATCH RESULTS TO CONSOLIDATE:
 
             messages = [{"role": "user", "content": prompt}]
             consolidation_params = {**params, "max_tokens": 32000}
-            for attempt in range(2):
-                try:
-                    resp, _ = await call_llm(
-                        provider=provider, model=model,
-                        messages=messages, parameters=consolidation_params, timeout=600,
-                    )
-                    return resp
-                except Exception as e:
-                    if attempt == 0:
-                        print(f"    Single-pass consolidation attempt 1 failed ({type(e).__name__}), retrying...", flush=True)
-                        await asyncio.sleep(5)
-                    else:
-                        print(f"    Single-pass consolidation failed, joining raw: {e}", flush=True)
-                        return "\n\n---\n\n".join(results)
+            try:
+                resp, _ = await call_llm(
+                    provider=provider, model=model,
+                    messages=messages, parameters=consolidation_params, timeout=600,
+                )
+                return resp
+            except Exception as e:
+                # call_llm has exhausted its centralized retries. Fall
+                # back to raw-joining the batch results rather than
+                # losing them entirely — the consolidated structure is
+                # degraded but the findings are preserved for downstream
+                # processing.
+                print(f"    Single-pass consolidation failed, joining raw: {e}", flush=True)
+                return "\n\n---\n\n".join(results)
 
         async def _multi_round_consolidate(results, asvs_description, provider, model, params, context_window):
             """Original multi-round behavior, kicks in only for >4 batch results."""
@@ -374,18 +374,19 @@ BATCH RESULTS TO CONSOLIDATE:
 
         async def _try_consolidate(template, group, provider, model, params):
             prompt = template + "\n---\n".join(group)
-            for attempt in range(2):
-                try:
-                    resp, _ = await call_llm(
-                        provider=provider, model=model,
-                        messages=[{"role": "user", "content": prompt}],
-                        parameters=params, timeout=300,
-                    )
-                    return resp
-                except Exception:
-                    if attempt == 0:
-                        await asyncio.sleep(5)
-            return None
+            try:
+                resp, _ = await call_llm(
+                    provider=provider, model=model,
+                    messages=[{"role": "user", "content": prompt}],
+                    parameters=params, timeout=300,
+                )
+                return resp
+            except Exception:
+                # Returning None signals the caller to fall back to its
+                # raw-join behavior. call_llm has already done its
+                # central backoff and failed; immediate further retry
+                # here would be redundant.
+                return None
 
 
         import os
@@ -772,23 +773,24 @@ FILES TO EVALUATE:
                         entries_text = "".join(batch.values())
                         prompt = relevance_prompt_template + entries_text
                         messages = [{"role": "user", "content": prompt}]
-                        for attempt in range(2):
-                            try:
-                                content_resp, _ = await call_llm(
-                                    provider=HAIKU_PROVIDER, model=HAIKU_MODEL,
-                                    messages=messages, parameters=HAIKU_PARAMS,
-                                    timeout=120,
-                                )
-                                json_match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', content_resp, re.DOTALL)
-                                if json_match:
-                                    scores = json.loads(json_match.group())
-                                    return scores
-                            except Exception as e:
-                                if attempt == 0:
-                                    print(f"[bundle {bundle_label}] relevance batch {i+1} attempt 1 failed ({type(e).__name__}), retrying...", flush=True)
-                                    await asyncio.sleep(5)
-                                else:
-                                    print(f"[bundle {bundle_label}] relevance batch {i+1} FAILED: {e}", flush=True)
+                        # call_llm handles retries with exponential backoff.
+                        # If we get here with an exception, retries have been
+                        # exhausted (or it's a non-retryable error like a bad
+                        # JSON response). Fall back to score=5 for every
+                        # file in the batch — the audit will include them
+                        # all rather than losing them silently.
+                        try:
+                            content_resp, _ = await call_llm(
+                                provider=HAIKU_PROVIDER, model=HAIKU_MODEL,
+                                messages=messages, parameters=HAIKU_PARAMS,
+                                timeout=120,
+                            )
+                            json_match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', content_resp, re.DOTALL)
+                            if json_match:
+                                scores = json.loads(json_match.group())
+                                return scores
+                        except Exception as e:
+                            print(f"[bundle {bundle_label}] relevance batch {i+1} FAILED: {e}", flush=True)
                         print(f"[bundle {bundle_label}] WARNING: relevance batch {i+1} defaulting {len(batch)} files to score=5", flush=True)
                         return {path: 5 for path in batch}
 
@@ -914,21 +916,19 @@ FILES:
                                 print(f"[bundle {bundle_label}] inventory sub-batch failed: {e}", flush=True)
                         return "\n\n".join(results)
 
-                    for attempt in range(2):
-                        try:
-                            resp, _ = await call_llm(
-                                provider=SONNET_PROVIDER, model=SONNET_MODEL,
-                                messages=messages, parameters=SONNET_PARAMS,
-                                timeout=300,
-                            )
-                            return resp
-                        except Exception as e:
-                            if attempt == 0:
-                                print(f"[bundle {bundle_label}] inventory batch {i+1} attempt 1 failed ({type(e).__name__}), retrying...", flush=True)
-                                await asyncio.sleep(5)
-                            else:
-                                print(f"[bundle {bundle_label}] inventory batch {i+1} FAILED: {e}", flush=True)
-                                return ""
+                    # Retries handled centrally in call_llm. On failure
+                    # the inventory entry for this batch is dropped; the
+                    # caller filters empty results before joining.
+                    try:
+                        resp, _ = await call_llm(
+                            provider=SONNET_PROVIDER, model=SONNET_MODEL,
+                            messages=messages, parameters=SONNET_PARAMS,
+                            timeout=300,
+                        )
+                        return resp
+                    except Exception as e:
+                        print(f"[bundle {bundle_label}] inventory batch {i+1} FAILED: {e}", flush=True)
+                        return ""
 
             inventory_results = await asyncio.gather(*[
                 inventory_batch(i, batch)
@@ -1285,65 +1285,51 @@ Be thorough but precise. If something is done correctly, acknowledge it as a pos
                             half_text = "".join([v for _, v in half_items])
                             half_user = user_template + half_text + inventory_section
                             half_messages = [{"role": "user", "content": analysis_system_prompt + "\n\n" + half_user}]
-                            for attempt in range(3):
-                                try:
-                                    resp, _ = await call_llm(
-                                        provider=OPUS_PROVIDER, model=OPUS_MODEL,
-                                        messages=half_messages, parameters=OPUS_PARAMS,
-                                        timeout=1800,
-                                    )
-                                    results.append(resp)
-                                    print(f"[bundle {bundle_label}] Opus batch {i+1} sub-{half_label} complete", flush=True)
-                                    break
-                                except Exception as e:
-                                    if attempt < 2:
-                                        wait = 15 * (attempt + 1)
-                                        print(f"[bundle {bundle_label}] Opus batch {i+1} sub-{half_label} attempt {attempt+1} failed ({type(e).__name__}), retrying in {wait}s...", flush=True)
-                                        await asyncio.sleep(wait)
-                                    else:
-                                        print(f"[bundle {bundle_label}] Opus batch {i+1} sub-{half_label} FAILED: {e}", flush=True)
-                                        results.append(f"[Analysis failed for sub-batch {i+1}{half_label}: {str(e)[:200]}]")
+                            # call_llm handles retries (rate-limit and
+                            # timeout). On exhaustion we keep a sentinel
+                            # string so the bundle still produces output
+                            # for the surviving halves; the failed-batch
+                            # filter downstream strips these out.
+                            try:
+                                resp, _ = await call_llm(
+                                    provider=OPUS_PROVIDER, model=OPUS_MODEL,
+                                    messages=half_messages, parameters=OPUS_PARAMS,
+                                    timeout=1800,
+                                )
+                                results.append(resp)
+                                print(f"[bundle {bundle_label}] Opus batch {i+1} sub-{half_label} complete", flush=True)
+                            except Exception as e:
+                                print(f"[bundle {bundle_label}] Opus batch {i+1} sub-{half_label} FAILED: {e}", flush=True)
+                                results.append(f"[Analysis failed for sub-batch {i+1}{half_label}: {str(e)[:200]}]")
                         combined = "\n\n---\n\n".join(results)
                         analysis_cache_ns.set(cache_key, combined)
                         return combined
                     else:
                         key, entry_val = items[0]
                         slim_messages = [{"role": "user", "content": analysis_system_prompt + "\n\n" + user_template + entry_val}]
-                        for attempt in range(3):
-                            try:
-                                resp, _ = await call_llm(
-                                    provider=OPUS_PROVIDER, model=OPUS_MODEL,
-                                    messages=slim_messages, parameters=OPUS_PARAMS,
-                                    timeout=1800,
-                                )
-                                analysis_cache_ns.set(cache_key, resp)
-                                return resp
-                            except Exception as e:
-                                if attempt < 2:
-                                    wait = 15 * (attempt + 1)
-                                    print(f"[bundle {bundle_label}] Opus batch {i+1} single-file attempt {attempt+1} failed ({type(e).__name__}), retrying in {wait}s...", flush=True)
-                                    await asyncio.sleep(wait)
-                                else:
-                                    return f"[Analysis failed for {key}: {str(e)[:200]}]"
+                        try:
+                            resp, _ = await call_llm(
+                                provider=OPUS_PROVIDER, model=OPUS_MODEL,
+                                messages=slim_messages, parameters=OPUS_PARAMS,
+                                timeout=1800,
+                            )
+                            analysis_cache_ns.set(cache_key, resp)
+                            return resp
+                        except Exception as e:
+                            return f"[Analysis failed for {key}: {str(e)[:200]}]"
 
-                for attempt in range(3):
-                    try:
-                        resp, _ = await call_llm(
-                            provider=OPUS_PROVIDER, model=OPUS_MODEL,
-                            messages=messages, parameters=OPUS_PARAMS,
-                            timeout=1800,
-                        )
-                        analysis_cache_ns.set(cache_key, resp)
-                        print(f"[bundle {bundle_label}] Opus batch {i+1} complete", flush=True)
-                        return resp
-                    except Exception as e:
-                        if attempt < 2:
-                            wait = 15 * (attempt + 1)
-                            print(f"[bundle {bundle_label}] Opus batch {i+1} attempt {attempt+1} failed ({type(e).__name__}), retrying in {wait}s...", flush=True)
-                            await asyncio.sleep(wait)
-                        else:
-                            print(f"[bundle {bundle_label}] Opus batch {i+1} FAILED: {e}", flush=True)
-                            return f"[Analysis failed for batch {i+1}: {str(e)[:200]}]"
+                try:
+                    resp, _ = await call_llm(
+                        provider=OPUS_PROVIDER, model=OPUS_MODEL,
+                        messages=messages, parameters=OPUS_PARAMS,
+                        timeout=1800,
+                    )
+                    analysis_cache_ns.set(cache_key, resp)
+                    print(f"[bundle {bundle_label}] Opus batch {i+1} complete", flush=True)
+                    return resp
+                except Exception as e:
+                    print(f"[bundle {bundle_label}] Opus batch {i+1} FAILED: {e}", flush=True)
+                    return f"[Analysis failed for batch {i+1}: {str(e)[:200]}]"
 
         analysis_results = await asyncio.gather(*[
             analyze_batch(i, batch)
