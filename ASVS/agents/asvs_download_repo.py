@@ -91,10 +91,63 @@ async def run(input_dict, tools):
         tar_bytes = tar_resp.content
         print(f"Tarball downloaded: {len(tar_bytes):,} bytes", flush=True)
 
-        # ----- Filtering rules (same as original) -----
+        # ----- Filtering rules -----
+        # Vendor directories (existing). These hold third-party
+        # dependency source that is upstream's problem, not ours.
         VENDOR_DIRS = {
             'node_modules', 'vendor', 'third_party', 'third-party', '.git',
         }
+
+        # Generated-output directories (NEW). Any depth in the tree.
+        # These hold build artifacts, snapshot fixtures, test coverage
+        # reports, and other tool-emitted content. No security audit
+        # value and they bloat the file scope when committed (which they
+        # sometimes are, by mistake or convention).
+        GENERATED_DIRS = {
+            'dist', 'build', 'out', '.next', '.nuxt', '.cache',
+            '.parcel-cache', '.turbo', '.svelte-kit',
+            '__snapshots__', '__generated__', '__fixtures__', 'generated',
+            'coverage', 'htmlcov', '.nyc_output',
+            '.pytest_cache', '.mypy_cache', '.ruff_cache',
+        }
+
+        # Vendor manifests / lockfiles (NEW). Pinned, transitively-
+        # resolved dependency declarations — not authored source. The
+        # supply-chain audit lives in dependency-pin policy, not in
+        # ASVS code review. Matched by exact basename, anywhere in the
+        # tree.
+        LOCKFILE_NAMES = {
+            'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml',
+            'npm-shrinkwrap.json',
+            'poetry.lock', 'uv.lock', 'Pipfile.lock',
+            'Gemfile.lock', 'Cargo.lock', 'composer.lock', 'go.sum',
+            'Podfile.lock', 'mix.lock', 'flake.lock',
+        }
+
+        # Data-file extensions (NEW). Below the threshold these are
+        # likely config or small test fixtures and pass through. Above
+        # the threshold they are almost always static data corpora
+        # (GIS shapes, tabular dumps, DB exports) that have no code
+        # to audit but consume large slices of the discovery agent's
+        # per-batch context budget.
+        DATA_FILE_EXTS = {
+            '.geojson', '.topojson',
+            '.csv', '.tsv',
+            '.ndjson', '.jsonl',
+            '.sql', '.dump',
+            '.parquet', '.feather', '.arrow', '.avro',
+        }
+        DATA_FILE_THRESHOLD = 50_000   # 50 KB
+
+        # Generated / minified file suffixes (NEW). Build-tool output
+        # regardless of size. Source maps included because they're
+        # mechanical transforms of the original source.
+        GENERATED_FILE_SUFFIXES = (
+            '.min.js', '.min.mjs', '.min.css',
+            '.bundle.js', '.bundle.css',
+            '.js.map', '.mjs.map', '.css.map', '.d.ts.map',
+        )
+
         MAX_FILE_SIZE = 1_000_000
 
         ns_name = f"files:{repo}/{path_prefix}" if path_prefix else f"files:{repo}"
@@ -110,6 +163,9 @@ async def run(input_dict, tools):
         fetched_count = 0
         skipped_binary = 0
         skipped_vendor = 0
+        skipped_generated = 0
+        skipped_lockfile = 0
+        skipped_data = 0
         skipped_large = 0
         skipped_outside_prefix = 0
         error_count = 0
@@ -152,6 +208,34 @@ async def run(input_dict, tools):
                     skipped_vendor += 1
                     continue
 
+                # Generated/build-output directory filter (NEW)
+                if any(part in GENERATED_DIRS for part in parts[:-1]):
+                    skipped_generated += 1
+                    continue
+
+                basename = parts[-1]
+
+                # Lockfile filter (NEW) — match by exact basename
+                if basename in LOCKFILE_NAMES:
+                    skipped_lockfile += 1
+                    continue
+
+                # Minified / source-map / bundle suffix filter (NEW)
+                if any(basename.endswith(suffix) for suffix in GENERATED_FILE_SUFFIXES):
+                    skipped_generated += 1
+                    continue
+
+                # Static-data-file filter (NEW) — extension + size gate.
+                # Small data files (config-shaped JSON, small fixture
+                # CSVs) pass through; large ones are static corpora and
+                # are dropped.
+                lower = basename.lower()
+                dot_pos = lower.rfind(".")
+                ext = lower[dot_pos:] if dot_pos != -1 else ""
+                if ext in DATA_FILE_EXTS and member.size > DATA_FILE_THRESHOLD:
+                    skipped_data += 1
+                    continue
+
                 # Size filter
                 if member.size > MAX_FILE_SIZE:
                     skipped_large += 1
@@ -187,6 +271,9 @@ async def run(input_dict, tools):
             f"Files fetched and stored: {fetched_count}",
             f"Skipped (binary): {skipped_binary}",
             f"Skipped (vendor/third-party dirs): {skipped_vendor}",
+            f"Skipped (generated/build dirs and minified files): {skipped_generated}",
+            f"Skipped (lockfiles): {skipped_lockfile}",
+            f"Skipped (static data files > {DATA_FILE_THRESHOLD:,} bytes): {skipped_data}",
             f"Skipped (>1MB): {skipped_large}",
             f"Skipped (outside path prefix): {skipped_outside_prefix}",
             f"Errors: {error_count}",
