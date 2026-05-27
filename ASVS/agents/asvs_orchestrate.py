@@ -170,7 +170,7 @@ async def run(input_dict, tools):
         # =============================================================
         # Concurrency / bundling configuration
         # =============================================================
-        PASS_CONCURRENCY = int(os.environ.get("PASS_CONCURRENCY", "4"))
+        PASS_CONCURRENCY = int(os.environ.get("PASS_CONCURRENCY", "2"))
         BUNDLE_MAX_SECTIONS = int(os.environ.get("BUNDLE_MAX_SECTIONS", "6"))
         BUNDLE_MIN_SECTIONS = int(os.environ.get("BUNDLE_MIN_SECTIONS", "2"))
         TINY_REPO_LOC_THRESHOLD = int(os.environ.get("TINY_REPO_LOC_THRESHOLD", "30000"))
