@@ -452,11 +452,72 @@ JSON schema:
   "positive_controls": [{"control": "description", "evidence": "where observed", "files": ["file:line"]}]
 }"""
 
+        # GUARDRAIL: failure-shape patterns that may appear in stored
+        # per-section reports. These indicate the audit pipeline failed
+        # for the section rather than producing a real audit. The LLM
+        # extraction step, given such content, tends to silently return
+        # `{"findings": [], "asvs_status": "N/A"}` because the failure
+        # text doesn't look like findings. Detecting these patterns up
+        # front lets us tag the section as ERROR and surface in the
+        # quality check rather than burying the failure as fake-N/A.
+        #
+        # The patterns must match content produced by:
+        #   asvs_bundle.py     all-batches-failed envelope, no-files envelope
+        #   asvs_orchestrate.py  _parse_audit_output ERROR stubs
+        _FAILURE_PATTERNS = (
+            "**Status:** ERROR",                            # orchestrator stubs
+            '"error": "All analysis batches failed"',       # raw bundle envelope
+            '"error": "No files found in namespaces',       # raw bundle envelope
+            "did not return per-section output",            # legacy stub (pre-guardrails)
+            "Bundled audit produced no output",             # legacy stub
+        )
+
+        def _detect_pipeline_failure(content):
+            """Return (is_failure, marker_text) if the content looks like a
+            pipeline-failure stub rather than a real audit report."""
+            if not content:
+                return False, None
+            head = content[:1500]
+            for pat in _FAILURE_PATTERNS:
+                if pat in head:
+                    return True, pat
+            return False, None
+
         extraction_semaphore = asyncio.Semaphore(8)  # raised from 5
         all_extracted = {}
         extraction_errors = []
+        pipeline_failure_sections = []  # surfaced in Quality Checks
 
         async def extract_report(report_key, content):
+            # GUARDRAIL: short-circuit pipeline-failure content before
+            # the LLM extraction call. This both saves a Sonnet call per
+            # failed section and ensures the failure is recorded as ERROR
+            # rather than the LLM's default-N/A interpretation.
+            is_failure, marker = _detect_pipeline_failure(content)
+            if is_failure:
+                # Derive a best-effort ASVS section ID from the report key
+                # (e.g., "oauth_openid_integration/10.1.1.md" -> "10.1.1").
+                import re as _re
+                m = _re.search(r'(\d+\.\d+(?:\.\d+)?)\.md$', report_key)
+                section_id = m.group(1) if m else report_key
+                print(
+                    f"  {report_key}: PIPELINE FAILURE detected "
+                    f"(marker={marker!r}); short-circuit extraction",
+                    flush=True,
+                )
+                synthetic = {
+                    "source_report": report_key,
+                    "asvs_section": section_id,
+                    "asvs_section_title": "",
+                    "asvs_status": "ERROR",
+                    "findings": [],
+                    "positive_controls": [],
+                    "_pipeline_failure": True,
+                    "_pipeline_failure_marker": marker,
+                }
+                pipeline_failure_sections.append((report_key, section_id, marker))
+                return report_key, synthetic, None
+
             # Cache key includes content hash so re-running against an updated
             # report file produces fresh extraction. Without this, the same
             # filename in the same directory always hits the cache regardless
@@ -1477,6 +1538,31 @@ For multi-value table cells (Files, Source Reports, etc.): use ", " (comma-space
         print(f"Finding sections: {len(finding_sections)} (expected: {len(all_findings)})")
         issue_headers = set(re.findall(r'## Issue: (FINDING-\d{3})', issues_md))
         print(f"Issues: {len(issue_headers)} (expected: {len(actionable)})")
+
+        # GUARDRAIL: pipeline-failure surfacing. Sections whose stored
+        # report content matched a known failure pattern were extracted
+        # as ERROR (not silently as N/A). If any are present, the run is
+        # not safe to publish without manual review — the consolidated
+        # report will be missing real audit content for those sections,
+        # and the silent failure mode this guardrail is closing has in
+        # the past produced reports where V10 (OAuth) was entirely empty
+        # because every section came through as a stub.
+        print(f"Pipeline-failure sections: {len(pipeline_failure_sections)}")
+        if pipeline_failure_sections:
+            print("  *** RUN SHOULD NOT BE PUBLISHED WITHOUT REVIEW ***")
+            # Group by marker so the operator sees the failure shape at
+            # a glance rather than scrolling through N individual lines.
+            by_marker = {}
+            for rk, sid, marker in pipeline_failure_sections:
+                by_marker.setdefault(marker, []).append((rk, sid))
+            for marker, items in sorted(by_marker.items()):
+                print(f"  marker={marker!r}: {len(items)} section(s)")
+                # Cap displayed list at 20 to avoid log spam on a fully
+                # broken run; the count above gives the full picture.
+                for rk, sid in items[:20]:
+                    print(f"    - {sid}  (from {rk})")
+                if len(items) > 20:
+                    print(f"    ... and {len(items) - 20} more")
 
         # Push to GitHub
         print("\n=== Pushing files ===")

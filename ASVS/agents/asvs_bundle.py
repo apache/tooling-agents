@@ -1331,17 +1331,87 @@ Be thorough but precise. If something is done correctly, acknowledge it as a pos
                     print(f"[bundle {bundle_label}] Opus batch {i+1} FAILED: {e}", flush=True)
                     return f"[Analysis failed for batch {i+1}: {str(e)[:200]}]"
 
+        # =============================================================
+        # GUARDRAIL: distinguish "no work needed" from "all work failed"
+        # =============================================================
+        # Before this guardrail, a bundle with zero opus_batches (code
+        # inventory determined nothing relevant to audit) fell through
+        # to the same `analysis_results == []` path as a bundle whose
+        # batches all crashed, and both returned the same `error:
+        # "All analysis batches failed"` envelope. The orchestrator's
+        # parser couldn't recognize the envelope as bundled output,
+        # silently attributed the error JSON to the first section,
+        # and emitted "did not return per-section output" stubs for
+        # the rest. The stored stubs were then read by the consolidator
+        # as legitimate N/A.
+        #
+        # The two cases need different handling:
+        #   - 0 batches      => no relevant code; legitimate N/A
+        #   - all crashed    => real failure; surface loudly
+        if not opus_batches:
+            print(
+                f"[bundle {bundle_label}] no Opus batches needed (code inventory "
+                f"determined no relevant implementation); emitting per-section N/A",
+                flush=True,
+            )
+            per_section_na = {}
+            for sid in asvs_sections:
+                desc = asvs_descriptions.get(sid, f"ASVS Requirement {sid}")
+                na_body = (
+                    f"## ASVS-{sid}\n\n"
+                    f"**Status:** N/A\n\n"
+                    f"**Reason:** Code inventory of the audited scope determined "
+                    f"that no implementation relevant to this requirement exists "
+                    f"in the repository. The framework does not appear to provide "
+                    f"functionality covered by ASVS {sid}.\n"
+                )
+                report = _format_section_report(
+                    sid, desc,
+                    repo_name, audit_date,
+                    len(relevant_files), len(filtered_files), skipped_count,
+                    {"Critical": 0, "High": 0, "Medium": 0, "Low": 0},
+                    na_body, "",
+                )
+                per_section_na[sid] = {
+                    "report": report,
+                    "findings": {"Critical": 0, "High": 0, "Medium": 0, "Low": 0},
+                    "files_analyzed": len(relevant_files),
+                    "files_total": len(filtered_files),
+                    "files_skipped": skipped_count,
+                    "status": "N/A",
+                    "reason": "no_relevant_code",
+                }
+            return {"outputText": json.dumps({
+                "mode": "bundled",
+                "asvs_sections": asvs_sections,
+                "per_section": per_section_na,
+                "bundle_status": "no_relevant_code",
+            })}
+
         analysis_results = await asyncio.gather(*[
             analyze_batch(i, batch)
             for i, batch in enumerate(opus_batches)
         ])
 
+        attempted = len(opus_batches)
         analysis_results = [r for r in analysis_results if r and not r.startswith("[Analysis failed")]
 
         if not analysis_results:
+            # GUARDRAIL: opus_batches existed (work was attempted) but
+            # every batch crashed. Tag the envelope so the orchestrator's
+            # parser recognizes this as a real failure rather than a
+            # bundled mode-output. See asvs_orchestrate.py
+            # `_parse_audit_output` error-envelope branch.
+            print(
+                f"[bundle {bundle_label}] ALL OPUS BATCHES FAILED "
+                f"(attempted={attempted}); returning error envelope",
+                flush=True,
+            )
             return {"outputText": json.dumps({
                 "error": "All analysis batches failed",
                 "asvs_sections": asvs_sections,
+                "attempted_batches": attempted,
+                "bundle_status": "all_batches_failed",
             })}
 
         # =============================================================

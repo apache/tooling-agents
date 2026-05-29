@@ -60,41 +60,128 @@ async def run(input_dict, tools):
         def _parse_audit_output(audit_output_text, section_chunk):
             """Decode either a bundled JSON envelope or a single-section markdown report.
 
-            Returns dict: {section_id: report_markdown}.
+            Returns dict: {section_id: (report_markdown, status_signal)}.
+
+            status_signal is one of:
+              - "ok"            => section has real content (findings or
+                                   the auditor's own Pass/Fail/N/A judgment)
+              - "no_relevant_code" => bundle determined nothing applies (the
+                                   asvs_bundle.py "no Opus batches needed"
+                                   path); legitimate N/A, NOT a failure
+              - "bundle_error"  => bundle emitted an error envelope. The
+                                   section's result is missing and the run
+                                   must not be published without manual review.
+              - "missing_section" => bundle returned `per_section` with this
+                                   section's entry absent or None. Partial
+                                   bundle failure; flag for review.
+              - "malformed_multi" => bundle was expected to return a JSON
+                                   envelope for a multi-section chunk but
+                                   returned raw markdown. Treat as a partial
+                                   failure: first section gets the markdown,
+                                   the rest get error stubs.
             """
             import json
-            # Try bundled envelope first
-            if audit_output_text.strip().startswith("{"):
+
+            # ---- Bundled JSON envelope path ----
+            stripped = audit_output_text.strip()
+            if stripped.startswith("{"):
                 try:
                     envelope = json.loads(audit_output_text)
+                except json.JSONDecodeError:
+                    envelope = None
+
+                if envelope is not None:
+                    # GUARDRAIL: explicit error envelope check BEFORE the
+                    # bundled-mode check. The legacy code path treated any
+                    # non-bundled JSON as "unparseable" and fell through to
+                    # the multi-section fallback, which silently attributed
+                    # the error JSON to the first section. Detect the error
+                    # shape explicitly and emit per-section ERROR stubs so
+                    # downstream can fail the quality check.
+                    err_msg = envelope.get("error")
+                    if err_msg:
+                        bundle_status = envelope.get("bundle_status", "bundle_error")
+                        print(
+                            f"  [WARN] bundle returned error envelope "
+                            f"(status={bundle_status}): {err_msg}",
+                            flush=True,
+                        )
+                        out = {}
+                        for sid in section_chunk:
+                            out[sid] = (
+                                (
+                                    f"# ASVS {sid}\n\n"
+                                    f"**Status:** ERROR\n\n"
+                                    f"**Reason:** Bundle audit agent returned an "
+                                    f"error envelope. This section's per-section "
+                                    f"report is missing.\n\n"
+                                    f"**Bundle status:** `{bundle_status}`\n\n"
+                                    f"**Error:** {err_msg}\n\n"
+                                    f"_The consolidated report should not be "
+                                    f"published until this section is re-audited "
+                                    f"or this status is reviewed._\n"
+                                ),
+                                "bundle_error",
+                            )
+                        return out
+
                     if envelope.get("mode") == "bundled":
                         per_section = envelope.get("per_section", {})
+                        bundle_status = envelope.get("bundle_status", "ok")
                         out = {}
                         for sid in section_chunk:
                             entry = per_section.get(sid)
                             if entry is None:
                                 out[sid] = (
-                                    f"# ASVS {sid}\n\n"
-                                    f"_Bundled audit produced no output for this section. "
-                                    f"This may indicate the section is not applicable to "
-                                    f"the audited file scope._\n"
+                                    (
+                                        f"# ASVS {sid}\n\n"
+                                        f"**Status:** ERROR\n\n"
+                                        f"**Reason:** Bundle audit produced no "
+                                        f"output for this section. The bundle "
+                                        f"completed but this section's slot in "
+                                        f"the per_section map was empty. This "
+                                        f"may indicate the analysis didn't "
+                                        f"return a recognizable section header "
+                                        f"for this requirement.\n"
+                                    ),
+                                    "missing_section",
                                 )
                             else:
-                                out[sid] = entry.get("report", "")
+                                section_signal = (
+                                    "no_relevant_code"
+                                    if bundle_status == "no_relevant_code"
+                                    else "ok"
+                                )
+                                out[sid] = (entry.get("report", ""), section_signal)
                         return out
-                except json.JSONDecodeError:
-                    pass
-            # Fallback: single-section markdown report
+
+            # ---- Fallback: single-section markdown report ----
             if len(section_chunk) == 1:
-                return {section_chunk[0]: audit_output_text}
-            # Multiple sections expected but didn't get JSON envelope — attribute
-            # the markdown to the first and emit stubs for the rest
-            out = {section_chunk[0]: audit_output_text}
+                return {section_chunk[0]: (audit_output_text, "ok")}
+
+            # ---- Fallback: multiple sections expected but no JSON envelope ----
+            # This is a malformed response. Attribute markdown to first section
+            # and emit ERROR stubs for the rest so the loss is surfaced rather
+            # than silently treated as "did not return per-section output" and
+            # then read as N/A by the consolidator.
+            print(
+                f"  [WARN] bundle returned non-JSON output but multiple sections "
+                f"({len(section_chunk)}) were expected; first section keeps the "
+                f"output, others marked ERROR",
+                flush=True,
+            )
+            out = {section_chunk[0]: (audit_output_text, "malformed_multi")}
             for sid in section_chunk[1:]:
                 out[sid] = (
-                    f"# ASVS {sid}\n\n"
-                    f"_Audit agent did not return per-section output for this requirement. "
-                    f"See ASVS {section_chunk[0]} report for the bundle's full output._\n"
+                    (
+                        f"# ASVS {sid}\n\n"
+                        f"**Status:** ERROR\n\n"
+                        f"**Reason:** Audit agent did not return a parseable "
+                        f"per-section envelope for this multi-section bundle. "
+                        f"See ASVS {section_chunk[0]} for the bundle's raw "
+                        f"output.\n"
+                    ),
+                    "malformed_multi",
                 )
             return out
 
@@ -2030,7 +2117,11 @@ async def run(input_dict, tools):
                     return local_successes, local_failures, local_outputs, pass_output_dir
 
                 # ----- Parse output: bundled JSON envelope or single-section markdown -----
-                per_section_reports = _parse_audit_output(audit_output_text, section_chunk)
+                # GUARDRAIL: _parse_audit_output now returns dict of
+                # {sid: (report_text, status_signal)}. Signals: "ok" /
+                # "no_relevant_code" (both success), "bundle_error" /
+                # "missing_section" / "malformed_multi" (all failure shapes).
+                per_section_parsed = _parse_audit_output(audit_output_text, section_chunk)
 
                 # ----- Push per-section reports in parallel (throttled) -----
                 # Uses the SHARED github_push_sem from outer scope so all
@@ -2059,16 +2150,37 @@ async def run(input_dict, tools):
                         return section_id, err_str
 
                 push_results = await asyncio.gather(*[
-                    store_one(sid, txt) for sid, txt in per_section_reports.items()
+                    store_one(sid, parsed[0]) for sid, parsed in per_section_parsed.items()
                 ])
+                # GUARDRAIL: a successful CouchDB write of an ERROR-status
+                # stub is NOT an audit success. Sections whose parser signal
+                # is anything other than "ok" or "no_relevant_code" go into
+                # local_failures even though the store itself succeeded, so
+                # the run summary reflects the real audit-phase outcome.
+                section_signals = {sid: parsed[1] for sid, parsed in per_section_parsed.items()}
+                _failure_signals = {"bundle_error", "missing_section", "malformed_multi"}
                 for sid, err in push_results:
-                    if err is None:
-                        local_successes.append(sid)
-                        print(f"    [{pass_name}] {sid}: stored", flush=True)
-                    else:
+                    if err is not None:
                         local_failures.append(f"{sid} (store): {err}")
                         print(f"    [{pass_name}] {sid}: store failed: {err}", flush=True)
-                local_outputs.extend(per_section_reports.values())
+                        continue
+                    signal = section_signals.get(sid, "ok")
+                    if signal in _failure_signals:
+                        local_failures.append(f"{sid} (bundle): {signal}")
+                        print(
+                            f"    [{pass_name}] {sid}: stored as ERROR stub "
+                            f"(signal={signal}) — counted as failure",
+                            flush=True,
+                        )
+                    else:
+                        local_successes.append(sid)
+                        # Annotate the success log line when the success is
+                        # a deliberate N/A so an operator skimming the log
+                        # can see at a glance which sections were genuinely
+                        # not applicable vs. which were affirmatively audited.
+                        suffix = " [N/A: no relevant code]" if signal == "no_relevant_code" else ""
+                        print(f"    [{pass_name}] {sid}: stored{suffix}", flush=True)
+                local_outputs.extend(parsed[0] for parsed in per_section_parsed.values())
 
                 return local_successes, local_failures, local_outputs, pass_output_dir
 
