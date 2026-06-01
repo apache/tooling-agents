@@ -44,7 +44,7 @@ The pipeline uses three model tiers. Add all three to the agent's **Invokable Mo
 
 | Tier | Model string | Used for | Recommended UI parameters |
 |---|---|---|---|
-| **Opus** | `us.anthropic.claude-opus-4-6-v1` | Deep analysis (per issue) | `temperature: 1`, `reasoning_effort: high`, `max_tokens: 32768` |
+| **Opus** | `us.anthropic.claude-opus-4-8` | Deep analysis (per issue) | `temperature: 1`, `reasoning_effort: high`, `max_tokens: 32768` |
 | **Sonnet** | `us.anthropic.claude-sonnet-4-5-20250929-v1:0` | Architecture, domains, inventory (one-time per SHA) | `temperature: 0.2`, `max_tokens: 16384` |
 | **Haiku** | `us.anthropic.claude-haiku-4-5-20251001-v1:0` | Relevance, clustering, domain classification | `temperature: 0.3`, `max_tokens: 4096` |
 

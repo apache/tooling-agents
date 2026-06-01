@@ -2363,7 +2363,7 @@ If `triage_type` is `question`, `discussion`, `unrelated`, or `unclear`: set `cl
         # Per-model parameters (temperature, max_tokens, reasoning_effort)
         # are configured per invokable model in the gofannon UI.
         provider = "bedrock"
-        model = "us.anthropic.claude-opus-4-6-v1"               # deep analysis
+        model = "us.anthropic.claude-opus-4-8"               # deep analysis
         relevance_provider = "bedrock"
         relevance_model = "us.anthropic.claude-haiku-4-5-20251001-v1:0"  # cheap-batch passes
         discovery_provider = "bedrock"
