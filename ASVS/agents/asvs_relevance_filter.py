@@ -156,7 +156,7 @@ async def run(input_dict, tools):
         print(f"[filter] pat={'set' if pat else 'not set'}")
 
         REASON_PROVIDER = "bedrock"
-        REASON_MODEL = "us.anthropic.claude-opus-4-6-v1"
+        REASON_MODEL = "us.anthropic.claude-opus-4-8"
 
         source_ns = data_store.use_namespace(source_namespace)
         reports_ns = data_store.use_namespace(reports_namespace)

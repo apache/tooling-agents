@@ -319,7 +319,7 @@ async def run(input_dict, tools):
         FAST_PARAMS = {"temperature": 0.7, "max_tokens": 16384}
 
         HEAVY_PROVIDER = "bedrock"
-        HEAVY_MODEL = "us.anthropic.claude-opus-4-6-v1"
+        HEAVY_MODEL = "us.anthropic.claude-opus-4-8"
         HEAVY_PARAMS = {"temperature": 1, "reasoning_effort": "medium", "max_tokens": 128000}
 
         FAST_CONTEXT_WINDOW = get_context_window(FAST_PROVIDER, FAST_MODEL)

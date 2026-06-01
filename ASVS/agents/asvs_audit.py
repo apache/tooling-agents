@@ -405,8 +405,8 @@ This means one of the following:
         HAIKU_PARAMS = {"temperature": 0.3, "max_tokens": 8192}
 
         OPUS_PROVIDER = "bedrock"
-        OPUS_MODEL = "us.anthropic.claude-opus-4-6-v1"
-        OPUS_PARAMS = {"temperature": 1, "reasoning_effort": "high", "max_tokens": 64000}
+        OPUS_MODEL = "us.anthropic.claude-opus-4-8"
+        OPUS_PARAMS = {"temperature": 1, "reasoning_effort": "high", "max_tokens": 128000}
 
         SONNET_CONTEXT = get_context_window(SONNET_PROVIDER, SONNET_MODEL)
         HAIKU_CONTEXT = get_context_window(HAIKU_PROVIDER, HAIKU_MODEL)

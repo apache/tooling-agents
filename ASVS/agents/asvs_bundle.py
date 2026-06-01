@@ -482,9 +482,9 @@ BATCH RESULTS TO CONSOLIDATE:
         HAIKU_PARAMS = {"temperature": 0.3, "max_tokens": 8192}
 
         OPUS_PROVIDER = "bedrock"
-        OPUS_MODEL = "us.anthropic.claude-opus-4-6-v1"
+        OPUS_MODEL = "us.anthropic.claude-opus-4-8"
         # Bundled output is bigger — give Opus more room to write per-section blocks
-        OPUS_PARAMS = {"temperature": 1, "reasoning_effort": "high", "max_tokens": 96000}
+        OPUS_PARAMS = {"temperature": 1, "reasoning_effort": "high", "max_tokens": 128000}
 
         SONNET_CONTEXT = get_context_window(SONNET_PROVIDER, SONNET_MODEL)
         HAIKU_CONTEXT = get_context_window(HAIKU_PROVIDER, HAIKU_MODEL)
