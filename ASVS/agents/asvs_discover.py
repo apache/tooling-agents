@@ -425,7 +425,7 @@ Return ONLY a JSON array of strings:
                     provider=PROVIDER, model=MODEL,
                     messages=[{"role": "user", "content": DOMAIN_PROMPT}],
                     parameters={**PARAMS, "max_tokens": 32000},
-                    timeout=300,
+                    timeout=900,
                 )
                 json_match = re.search(r'\{[\s\S]*\}', result)
                 if json_match:
@@ -440,7 +440,7 @@ Return ONLY a JSON array of strings:
                     provider=PROVIDER, model=MODEL,
                     messages=[{"role": "user", "content": FP_PROMPT}],
                     parameters=PARAMS,
-                    timeout=120,
+                    timeout=300,
                 )
                 json_match = re.search(r'\[[\s\S]*\]', result)
                 if json_match:
