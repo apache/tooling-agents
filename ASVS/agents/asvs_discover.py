@@ -118,6 +118,13 @@ async def run(input_dict, tools):
 
         all_files = {}
         for ns in namespaces:
+            if not ns.startswith("files:"):
+                # Supplemental namespaces (audit_guidance:*, threat-model docs,
+                # vendored-lib code, etc.) are loaded by the audit/bundle phase
+                # as additional context. Discover only classifies primary
+                # source code, so skip non-primary namespaces here.
+                print(f"  [discover] skipping non-primary namespace for classification: {ns}", flush=True)
+                continue
             ns_store = data_store.use_namespace(ns)
             keys = ns_store.list_keys()
             file_contents = ns_store.get_many(keys) if keys else {}
