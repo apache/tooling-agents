@@ -15,7 +15,7 @@
 
 ## Executive Summary
 
-This consolidated report aggregates results from 345 source security audit reports covering 21 audit domains for the `superset-extensions-cli` component. The audit was conducted at ASVS Level 3 (the most rigorous verification level) with no severity threshold applied. No actionable findings were identified across any domain.
+This audit evaluated the `superset-extensions-cli` component across 20 security domains at ASVS Level 3. The tool is a development-only local CLI utility with no network attack surface, no authentication boundary, and no multi-user context. As a result, no actionable security findings were identified. The audit confirmed that the tool appropriately delegates security controls to infrastructure and runtime environments where they are relevant, and avoids implementing unnecessary security mechanisms that would be inappropriate for its trust model.
 
 ### Severity Distribution
 
@@ -29,24 +29,27 @@ This consolidated report aggregates results from 345 source security audit repor
 
 ### ASVS Level Coverage
 
-All 21 audit domains were evaluated against ASVS Level 3 requirements. The repository achieved full compliance with no findings at any severity level, reflecting a mature security posture appropriate for high-assurance deployments.
+All 20 designated security domains were evaluated against ASVS L3 requirements. The majority of ASVS controls were determined to be not applicable to this component due to its nature as a single-user, local-only development CLI tool with no network exposure, authentication surface, or production deployment context.
 
 ### Top 5 Risks
 
-1. **No critical or high-severity findings identified** [Info] — The audit produced zero findings across all domains, indicating no immediate risks requiring remediation.
-2. **No medium-severity findings identified** [Info] — No moderate-risk issues were detected in any of the 21 audited domains.
-3. **No low-severity findings identified** [Info] — Even at the lowest severity threshold, no issues were surfaced during analysis.
-4. **No informational findings identified** [Info] — No advisory or hardening recommendations were generated from the audit.
-5. **No residual risks from dropped findings** [Info] — One candidate finding (ASVS-1541-LOW-001) was evaluated and dropped after confirming it represents a safe concurrency pattern rather than a vulnerability.
+1. **No actionable findings identified** [Info] — The tool operates in a local single-user trust context with no remote attack surface, rendering standard web application risks inapplicable.
+2. **No network exposure risks** [Info] — The CLI tool does not bind to any network interface or expose any service endpoints.
+3. **No authentication or authorization risks** [Info] — The tool has no authentication surface and operates under the invoking user's OS-level permissions.
+4. **No supply chain risks specific to runtime** [Info] — The tool is dev-only and does not execute in production environments where dependency compromise would have direct impact.
+5. **No data protection risks** [Info] — The tool does not process, store, or transmit sensitive user data beyond local filesystem operations under developer control.
 
 ### Positive Controls Observed
 
-- **TLS termination delegated to deployment infrastructure (reverse proxy/load balancer)** — Report confirms N/A status for application-level TLS configuration, appropriate for this component type. *(tls_transport_security)*
-- **Application documentation defines risk-based remediation time frames for third-party component vulnerabilities** — ASVS 15.1.1 passed. *(dependency_supply_chain)*
-- **Inventory catalog (SBOM) is maintained for all third-party libraries with verification of trusted repositories** — ASVS 15.1.2 passed. *(dependency_supply_chain)*
-- **Application components are kept within documented update and remediation time frames** — ASVS 15.2.1 passed. *(dependency_supply_chain)*
-- **Third-party components and transitive dependencies are sourced from expected repositories with protection against dependency confusion attacks** — ASVS 15.2.4 passed. *(dependency_supply_chain)*
-- **FrontendChangeHandler filters out dist/ directory events to prevent infinite rebuild loops** — Demonstrates safe concurrency pattern by preventing resource contention (dropped finding ASVS-1541-LOW-001). *(code_quality_dangerous_functions)*
+- **Single-user local trust context with safe input validation** — The CLI restricts template variables to safe character subsets; input validation serves correctness and usability rather than acting as a security boundary. _(flask_backend_api_enforcement)_
+- **No client-server boundary requiring trusted service layer** — ASVS requirements for server-side enforcement are not applicable; the tool has no network exposure. _(flask_backend_api_enforcement)_
+- **No authentication surface** — The tool correctly avoids implementing authentication mechanisms that would be unnecessary for a local development tool. _(flask_appbuilder_rbac)_
+- **No network attack surface or multi-user business logic** — Business logic controls (rate limiting, anti-automation, multi-user approval) are correctly absent as they would be inappropriate for the tool's context. _(admin_trust_boundary)_
+- **Clean-slate build and validate-before-mutate patterns** — The tool uses `clean_dist` and validates state before performing mutations, ensuring correctness and idempotency. _(admin_trust_boundary)_
+- **Designed for automated invocation** — The tool correctly avoids human timing constraints that would impede its intended use in CI/CD and scripted workflows. _(admin_trust_boundary)_
+- **No network-exposed file upload surface** — File operations are local-only with no remote upload capability. _(extension_system)_
+- **TLS/HTTPS delegated to infrastructure** — The tool correctly avoids implementing network services; transport security is appropriately delegated to deployment infrastructure. _(infrastructure_delegated_controls)_
+- **No production security logging obligations** — The tool is scoped as development-only and correctly omits security event logging that would be meaningless in its context. _(logging_monitoring_and_error_handling)_
 
 ---
 
@@ -60,12 +63,22 @@ All 21 audit domains were evaluated against ASVS Level 3 requirements. The repos
 
 | Domain | Control | Evidence Source | Supporting Files |
 |--------|---------|-----------------|------------------|
-| Tls Transport Security | TLS termination delegated to deployment infrastructure (reverse proxy/load balancer) | Report confirms N/A status for application-level TLS configuration | — |
-| Dependency Supply Chain | Application documentation defines risk-based remediation time frames for third-party component vulnerabilities | ASVS 15.1.1 passed | — |
-| Dependency Supply Chain | Inventory catalog (SBOM) is maintained for all third-party libraries with verification of trusted repositories | ASVS 15.1.2 passed | — |
-| Dependency Supply Chain | Application components are kept within documented update and remediation time frames | ASVS 15.2.1 passed | — |
-| Dependency Supply Chain | Third-party components and transitive dependencies are sourced from expected repositories with protection against dependency confusion attacks | ASVS 15.2.4 passed | — |
-| Code Quality Dangerous Functions | FrontendChangeHandler filters out dist/ directory events to prevent infinite rebuild loops | Dropped finding ASVS-1541-LOW-001 - demonstrates safe concurrency pattern by preventing resource contention | — |
+| Flask Backend Api Enforcement | superset-extensions-cli operates in single-user local trust context with no remote attack surface; input validation restricts template variables to safe character subsets | source: Dropped finding ASVS-123-LOW-001 | — |
+| Flask Backend Api Enforcement | superset-extensions-cli is a dev-only local CLI tool; validation exists for correctness/usability, not as a security boundary | ASVS section 2.2.1 - Input validation is not required as security control for local development tooling | — |
+| Flask Backend Api Enforcement | superset-extensions-cli is a dev-only local CLI tool with no client-server boundary | ASVS section 2.2.2 - No trusted service layer required for local CLI tools without network exposure | — |
+| Flask Backend Api Enforcement | superset-extensions-cli is a dev-only local CLI tool; cross-file consistency validation exists for correctness, not security | ASVS section 2.2.3 - Logical validation of related data items implemented for functional correctness | — |
+| Flask Appbuilder Rbac | superset-extensions-cli is a dev-only local tool with no authentication surface | Dropped finding ASVS-611-INFO-001 | — |
+| Admin Trust Boundary | superset-extensions-cli is a dev-only local CLI tool with no network attack surface | Observed across validation and business logic documentation sections | — |
+| Admin Trust Boundary | superset-extensions-cli is a dev-only local CLI tool with no multi-user business logic | Observed in business logic limits documentation section | — |
+| Admin Trust Boundary | superset-extensions-cli is a dev-only local CLI tool; sequential step enforcement exists for correctness, not security | Observed in business logic flow control section | — |
+| Admin Trust Boundary | superset-extensions-cli uses clean-slate build approach (clean_dist) and validate-before-mutate pattern for correctness | Observed in transaction handling section | — |
+| Admin Trust Boundary | superset-extensions-cli is a dev-only local CLI tool with no shared resources requiring locking | Observed in resource contention section | — |
+| Admin Trust Boundary | superset-extensions-cli is a dev-only local CLI tool with no high-value flows requiring multi-user approval | Observed in high-value business logic section | — |
+| Admin Trust Boundary | superset-extensions-cli is a dev-only local CLI tool with no network exposure requiring anti-automation | Observed in anti-automation controls section | — |
+| Admin Trust Boundary | superset-extensions-cli is a dev-only local CLI tool designed for automated invocation; human timing constraints would be a defect | Observed in human timing verification section | — |
+| Extension System | superset-extensions-cli operates in single-user local trust context with no network-exposed file upload surface | source: Dropped finding ASVS-511-INFO-001 | — |
+| Infrastructure Delegated Controls | Dev-only CLI tool correctly avoids implementing network services; TLS delegated to deployment infrastructure | Report-level positive pattern - Application architecture appropriately delegates TLS/HTTPS and network security controls to infrastructure layer | — |
+| Logging Monitoring And Error Handling | superset-extensions-cli is a dev-only local CLI tool with no security logging requirements | Tool scoped as development-only with no production security logging obligations | — |
 
 ---
 
@@ -145,7 +158,7 @@ All 21 audit domains were evaluated against ASVS Level 3 requirements. The repos
 | 3.5.7 | Verify that data requiring authorization is not included in script resource responses, like JavaScript files, to prevent Cross-Site Script Inclusion (XSSI) attacks. | **N/A** |  |
 | 3.5.8 | Verify that authenticated resources (such as images, videos, scripts, and other documents) can be loaded or embedded on behalf of the user only when intended. This can be accomplished by strict validation of the Sec-Fetch-* HTTP request header fields to ensure that the request did not originate from an inappropriate cross-origin call, or by setting a restrictive Cross-Origin-Resource-Policy HTTP response header field to instruct the browser to block returned content. | **N/A** |  |
 | 3.6.1 | Verify that client-side assets, such as JavaScript libraries, CSS, or web fonts, are only hosted externally (e.g., on a Content Delivery Network) if the resource is static and versioned and Subresource Integrity (SRI) is used to validate the integrity of the asset. If this is not possible, there should be a documented security decision to justify this for each resource. | **N/A** |  |
-| 3.7.1 | Verify that the application only uses client-side technologies which are still supported and considered secure. Examples of technologies which do not meet this requirement include NSAPI plugins, Flash, Shockwave, ActiveX, Silverlight, NACL, or client-side Java applets. | **Pass** |  |
+| 3.7.1 | Verify that the application only uses client-side technologies which are still supported and considered secure. Examples of technologies which do not meet this requirement include NSAPI plugins, Flash, Shockwave, ActiveX, Silverlight, NACL, or client-side Java applets. | **N/A** |  |
 | 3.7.2 | Verify that the application will only automatically redirect the user to a different hostname or domain (which is not controlled by the application) where the destination appears on an allowlist. | **N/A** |  |
 | 3.7.3 | Verify that the application shows a notification when the user is being redirected to a URL outside of the application's control, with an option to cancel the navigation. | **N/A** |  |
 | 3.7.4 | Verify that the application's top-level domain (e.g., site.tld) is added to the public preload list for HTTP Strict Transport Security (HSTS). This ensures that the use of TLS for the application is built directly into the main browsers, rather than relying only on the Strict-Transport-Security response header field. | **N/A** |  |
@@ -383,16 +396,16 @@ All 21 audit domains were evaluated against ASVS Level 3 requirements. The repos
 | 14.3.2 | Verify that the application sets sufficient anti-caching HTTP response header fields (i.e., Cache-Control: no-store) so that sensitive data is not cached in browsers. | **N/A** |  |
 | 14.3.3 | Verify that data stored in browser storage (such as localStorage, sessionStorage, IndexedDB, or cookies) does not contain sensitive data, with the exception of session tokens. | **N/A** |  |
 | **V15: Secure Coding and Architecture** | | | |
-| 15.1.1 | Verify that application documentation defines risk based remediation time frames for 3rd party component versions with vulnerabilities and for updating libraries in general, to minimize the risk from these components. | **Pass** |  |
-| 15.1.2 | Verify that an inventory catalog, such as software bill of materials (SBOM), is maintained of all third-party libraries in use, including verifying that components come from pre-defined, trusted, and continually maintained repositories. | **Pass** |  |
+| 15.1.1 | Verify that application documentation defines risk based remediation time frames for 3rd party component versions with vulnerabilities and for updating libraries in general, to minimize the risk from these components. | **N/A** |  |
+| 15.1.2 | Verify that an inventory catalog, such as software bill of materials (SBOM), is maintained of all third-party libraries in use, including verifying that components come from pre-defined, trusted, and continually maintained repositories. | **N/A** |  |
 | 15.1.3 | Verify that the application documentation identifies functionality which is time-consuming or resource-demanding. This must include how to prevent a loss of availability due to overusing this functionality and how to avoid a situation where building a response takes longer than the consumer's timeout. Potential defenses may include asynchronous processing, using queues, and limiting parallel processes per user and per application. | **N/A** |  |
-| 15.1.4 | Verify that application documentation highlights third-party libraries which are considered to be "risky components". | **Pass** |  |
-| 15.1.5 | Verify that application documentation highlights parts of the application where "dangerous functionality" is being used. | **Pass** |  |
-| 15.2.1 | Verify that the application only contains components which have not breached the documented update and remediation time frames. | **Pass** |  |
+| 15.1.4 | Verify that application documentation highlights third-party libraries which are considered to be "risky components". | **N/A** |  |
+| 15.1.5 | Verify that application documentation highlights parts of the application where "dangerous functionality" is being used. | **N/A** |  |
+| 15.2.1 | Verify that the application only contains components which have not breached the documented update and remediation time frames. | **N/A** |  |
 | 15.2.2 | Verify that the application has implemented defenses against loss of availability due to functionality which is time-consuming or resource-demanding, based on the documented security decisions and strategies for this. | **N/A** |  |
-| 15.2.3 | Verify that the production environment only includes functionality that is required for the application to function, and does not expose extraneous functionality such as test code, sample snippets, and development functionality. | **Pass** |  |
-| 15.2.4 | Verify that third-party components and all of their transitive dependencies are included from the expected repository, whether internally owned or an external source, and that there is no risk of a dependency confusion attack. | **Pass** |  |
-| 15.2.5 | Verify that the application implements additional protections around parts of the application which are documented as containing "dangerous functionality" or using third-party libraries considered to be "risky components". This could include techniques such as sandboxing, encapsulation, containerization or network level isolation to delay and deter attackers who compromise one part of an application from pivoting elsewhere in the application. | **Pass** |  |
+| 15.2.3 | Verify that the production environment only includes functionality that is required for the application to function, and does not expose extraneous functionality such as test code, sample snippets, and development functionality. | **N/A** |  |
+| 15.2.4 | Verify that third-party components and all of their transitive dependencies are included from the expected repository, whether internally owned or an external source, and that there is no risk of a dependency confusion attack. | **N/A** |  |
+| 15.2.5 | Verify that the application implements additional protections around parts of the application which are documented as containing "dangerous functionality" or using third-party libraries considered to be "risky components". This could include techniques such as sandboxing, encapsulation, containerization or network level isolation to delay and deter attackers who compromise one part of an application from pivoting elsewhere in the application. | **N/A** |  |
 | 15.3.1 | Verify that the application only returns the required subset of fields from a data object. For example, it should not return an entire data object, as some individual fields should not be accessible to users. | **N/A** |  |
 | 15.3.2 | Verify that where the application backend makes calls to external URLs, it is configured to not follow redirects unless it is intended functionality. | **N/A** |  |
 | 15.3.3 | Verify that the application has countermeasures to protect against mass assignment attacks by limiting allowed fields per controller and action, e.g., it is not possible to insert or update a field value when it was not intended to be part of that action. | **N/A** |  |
@@ -437,9 +450,9 @@ All 21 audit domains were evaluated against ASVS Level 3 requirements. The repos
 | 17.3.2 | Verify that the signaling server is able to continue processing legitimate signaling messages when encountering malformed signaling message that could cause a denial of service condition. This could include implementing input validation, safely handling integer overflows, preventing buffer overflows, and employing other robust error-handling techniques. | **N/A** |  |
 
 **Summary Statistics:**
-- **Pass**: 9 requirements (2.6%)
+- **Pass**: 0 requirements (0.0%)
 - **Partial**: 0 requirements (0.0%)
-- **N/A**: 336 requirements (97.4%)
+- **N/A**: 345 requirements (100.0%)
 - **Fail**: 0 requirements (0.0%)
 
 ---
