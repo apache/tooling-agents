@@ -1042,30 +1042,28 @@ Follow ALL of these analysis requirements:
 
 ### Scope Check — do this FIRST for EACH requirement, before generating findings
 
-Bundle audits cover multiple ASVS requirements simultaneously. Some
-target SPECIFIC architectural patterns and apply only to systems that
-exhibit those patterns. Per requirement: verify the audited codebase
-actually uses the targeted pattern. If not, produce a single N/A
-finding for that requirement explaining why, and move on.
+Each ASVS requirement is written assuming the audited code implements a
+specific technology, protocol, component role, feature, or data type.
+A requirement applies only when the audited code actually meets that
+architectural assumption.
 
-Concrete examples (not exhaustive):
-- **Requirements about REFERENCE tokens** (e.g. 7.2.3) apply only to
-  systems issuing opaque reference tokens looked up server-side.
-  Systems using self-contained tokens (JWT, signed cookies, PASETO)
-  are OUT OF SCOPE — their security is governed by signing/algorithm
-  requirements in V9. DO NOT apply reference-token requirements to
-  JWT signing keys.
-- **OAuth Authorization Server requirements** (V10.4.x) apply only to
-  systems acting as an OAuth provider. OAuth clients are out of scope.
-- **WebSocket requirements** (4.4.x) apply only when WebSocket is used.
-- **XML parser requirements** (1.5.1) apply only when XML is parsed.
-- **File-upload requirements** (V5.2.x) apply only when user file
-  uploads are accepted.
+For each requirement, before generating any finding:
+1. Identify the architectural assumption the requirement embeds — what
+   protocol, technology, component role, feature, or data type the
+   requirement governs.
+2. Verify the audited codebase actually exhibits that assumption.
+3. If the assumption is not met, mark the requirement as N/A in the
+   coverage table with a one-line reason. Do NOT generate a finding for
+   it — absences are not findings, and findings exist only when there
+   is concrete code to describe a defect against.
 
-If the codebase does not exhibit the targeted pattern for a given
-requirement, return a single N/A finding for THAT requirement (not all)
-with a clear explanation of WHY it is not in scope. Do NOT stretch a
-requirement to fit some loosely related aspect of the code.
+Do not stretch a requirement to fit thematically similar but
+architecturally different code. If the audited codebase implements
+something adjacent to the requirement's target — a different token
+format, a different transport, a different protocol role, a different
+component type — the requirement is N/A for the parts of the standard
+that target the specific pattern, even when other requirements in the
+same control family do apply.
 
 ### Core Principle: Existence ≠ Application
 For each security control found:
@@ -1099,10 +1097,16 @@ section, or gap shape alone.
   exploitation, documentation deficiencies that don't enable exploit,
   dead dependency pins, hardening recommendations without a concrete
   exploit path, nice-to-have library improvements.
-- **Informational** — observations with security relevance that do not
-  constitute vulnerabilities. Documentation gaps governed by
-  foundation-level processes (e.g., ASF Security Team for ASF projects)
-  rate Informational.
+- **Informational** — reserved for cases where a real, concrete code
+  defect exists with specific file and line references, but no clear
+  attack scenario can be constructed. This is the "downgrade-from-Low"
+  tier — a real bug without an exploit path. Do NOT use Informational
+  for requirements that don't apply to this component type, controls
+  delegated to other layers, or absences of features. Those cases are
+  N/A coverage, not findings. If your finding body would reasonably
+  contain "not applicable", "feature absent", "delegated to", or
+  "no [X] in this codebase", it belongs in N/A coverage and should
+  not be emitted as a finding.
 
 ### Severity calibration — apply per finding
 
@@ -1179,7 +1183,8 @@ For EACH ASVS requirement listed above, produce a section with this EXACT header
 <controls relevant to this requirement, with location and coverage status>
 
 ### Positive Patterns for {section_id}
-<positive patterns specific to this requirement>
+For each positive pattern, format as: `- **<short name>**: <what's done correctly> — <file>:<line>`
+The trailing file:line reference is required so the consolidated report can cite the specific code under review.
 ```
 
 Use the EXACT header `## ASVS-{section_id}:` (with the dash and colon) for each requirement section.

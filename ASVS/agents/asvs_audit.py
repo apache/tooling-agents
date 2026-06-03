@@ -902,36 +902,28 @@ Follow ALL of these analysis requirements:
 
 ### Scope Check — do this FIRST, before generating any findings
 
-Some ASVS requirements target SPECIFIC architectural patterns and apply
-only to systems exhibiting those patterns. Before generating findings,
-verify the audited codebase actually uses the pattern this requirement
-targets. If not, produce a single N/A finding explaining why, and STOP.
+Each ASVS requirement is written assuming the audited code implements a
+specific technology, protocol, component role, feature, or data type.
+A requirement applies only when the audited code actually meets that
+architectural assumption.
 
-Concrete examples (not exhaustive):
-- **Requirements about REFERENCE tokens** (e.g. 7.2.3 "Reference tokens
-  unique with 128 bits entropy") apply only to systems issuing opaque
-  reference tokens that are looked up server-side for state. Systems
-  using self-contained tokens (JWT, signed cookies, PASETO) are OUT OF
-  SCOPE — their security is governed by signing/algorithm requirements
-  in V9, not entropy of reference identifiers. DO NOT apply
-  reference-token requirements to JWT signing keys.
-- **OAuth Authorization Server requirements** (e.g. V10.4.x) apply only
-  to systems acting as an OAuth provider issuing tokens to third-party
-  clients. Systems that only CONSUME OAuth (OAuth clients) are out of
-  scope for these requirements.
-- **WebSocket requirements** (e.g. 4.4.x) apply only to systems using
-  the WebSocket protocol.
-- **XML parser requirements** (e.g. 1.5.1) apply only when the codebase
-  parses XML.
-- **File-upload requirements** (V5.2.x) apply only when the codebase
-  accepts and processes user-uploaded files.
+For each requirement, before generating any finding:
+1. Identify the architectural assumption the requirement embeds — what
+   protocol, technology, component role, feature, or data type the
+   requirement governs.
+2. Verify the audited codebase actually exhibits that assumption.
+3. If the assumption is not met, mark the requirement as N/A in the
+   coverage table with a one-line reason. Do NOT generate a finding for
+   it — absences are not findings, and findings exist only when there
+   is concrete code to describe a defect against.
 
-If the audited codebase does not exhibit the architectural pattern this
-requirement targets, return a single N/A finding with a clear
-explanation of WHY this requirement is not in scope (e.g. "Codebase uses
-self-contained JWTs validated cryptographically; this requirement
-applies only to opaque reference tokens"). Do NOT stretch the
-requirement to fit some loosely related aspect of the code.
+Do not stretch a requirement to fit thematically similar but
+architecturally different code. If the audited codebase implements
+something adjacent to the requirement's target — a different token
+format, a different transport, a different protocol role, a different
+component type — the requirement is N/A for the parts of the standard
+that target the specific pattern, even when other requirements in the
+same control family do apply.
 
 ### Core Principle: Existence ≠ Application
 For each security control found:
@@ -1238,7 +1230,7 @@ Required structure:
    - Location with file, function, line numbers
    - Related functions checked
    - Description, vulnerable code, data flow, PoC, impact, remediation
-5. **Positive Security Patterns** — what's done well
+5. **Positive Security Patterns** — what's done well, each with a `file:line` reference to the specific code
 6. **Architecture Observations**
 7. **Recommendations Summary** — Immediate/Short-term/Long-term
 8. **Appendix: Files Analyzed** — collapsible list

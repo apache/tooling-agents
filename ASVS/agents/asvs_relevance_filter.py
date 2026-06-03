@@ -1127,6 +1127,74 @@ async def run(input_dict, tools):
             )
             return any(p in desc for p in carve_phrases) and any(p in desc for p in did_phrases)
 
+        # Informational-absence filter: drop Informational findings that
+        # describe an absence ("not applicable", "no X in this codebase",
+        # "delegated to", etc.) rather than a real code defect. Per the
+        # severity calibration in the audit prompt, Informational is
+        # reserved for the downgrade-from-Low case — a real bug with no
+        # exploit path. Absences belong in N/A coverage, not the findings
+        # list. This catches Informational findings that slipped past the
+        # audit prompt's rule.
+        def _is_informational_absence(finding):
+            sev = (finding.get("severity") or "").strip().lower()
+            if sev not in ("info", "informational"):
+                return False
+
+            title = (finding.get("title") or "").lower()
+            desc = (finding.get("description") or "").lower()
+            body = f"{title}\n{desc}"
+            if not body.strip():
+                return False
+
+            # Phrase families that indicate absence rather than defect.
+            # Sourced empirically from absence-flavored Informational
+            # findings observed across audit runs.
+            absence_phrases = (
+                "not applicable",
+                "requirement not applicable",
+                "feature absent",
+                "feature is not present",
+                "not implemented",
+                "is not present in",
+                "no relevant code",
+                "out of scope",
+                "delegated to",
+                "absence of",
+                "no auth surface",
+                "no remote attack surface",
+                "registers no",
+                "opens no connections",
+                "no outbound calls",
+                "stub package",
+                "interface package",
+                "placeholder",
+            )
+            if any(p in body for p in absence_phrases):
+                return True
+
+            # "No X in/of/from Y" / "no X present" / "no X to inventory"
+            # pattern. Captures phrasings like "No multi-stage
+            # canonicalization", "No cookie operations in provided
+            # codebase", "No dynamic code execution primitives in the
+            # CLI". Word-boundary on "no" so it doesn't fire on "no
+            # clear attack scenario" or "no concrete exploit", which
+            # describe DEFECTS rather than absences.
+            import re
+            if re.search(
+                r"\bno\s+[a-z][a-z0-9_\- ]{2,40}\s+(in|of|from|present|to inventory|to validate|to review)\b",
+                body,
+            ):
+                return True
+
+            # An Informational finding without any concrete file
+            # reference is almost certainly an absence. Real
+            # defects-with-no-exploit point at code.
+            files = finding.get("files") or finding.get("affected_files") or []
+            if not files:
+                return True
+
+            return False
+
         FILTER_PROMPT_TEMPLATE = (
             "You are a security audit triage reviewer.\n\n"
             "You have the project's own Security Profile (synthesized from the "
@@ -1359,6 +1427,41 @@ async def run(input_dict, tools):
                     })
                 print(f"[filter] {key}: post-pass dropped "
                       f"{len(escape_hatch_drops)} defense-in-depth escape-hatch "
+                      f"finding(s)")
+
+            # Informational-absence safety net. Audit prompt asks the
+            # model to route absences to N/A coverage rather than emit
+            # Info findings, but enforce structurally too in case any
+            # slip through. Absence-flavored Informational findings get
+            # moved from kept to dropped with confidence=high so they
+            # surface in the drop log but do not clutter the review
+            # queue (the absence regex/phrase set is empirical and
+            # well-tested, not speculative).
+            absence_drops = []
+            survivors = []
+            for f in kept:
+                if _is_informational_absence(f):
+                    absence_drops.append(f)
+                else:
+                    survivors.append(f)
+            if absence_drops:
+                kept = survivors
+                for f in absence_drops:
+                    dropped.append({
+                        "original_id": f.get("finding_id") or f.get("id") or "?",
+                        "title": f.get("title", "?"),
+                        "severity": f.get("severity", "?"),
+                        "reason": (
+                            "informational-absence: finding describes "
+                            "non-applicability of a requirement rather than "
+                            "a concrete code defect. Belongs in N/A coverage "
+                            "per the audit prompt's severity calibration "
+                            "rules. Filter dropped structurally."
+                        ),
+                        "confidence": "high",
+                    })
+                print(f"[filter] {key}: post-pass dropped "
+                      f"{len(absence_drops)} informational-absence "
                       f"finding(s)")
 
             total_kept += len(kept)
