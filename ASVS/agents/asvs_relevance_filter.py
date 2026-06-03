@@ -1186,12 +1186,15 @@ async def run(input_dict, tools):
             ):
                 return True
 
-            # An Informational finding without any concrete file
-            # reference is almost certainly an absence. Real
-            # defects-with-no-exploit point at code.
-            files = finding.get("files") or finding.get("affected_files") or []
-            if not files:
-                return True
+            # NOTE: previously this helper also dropped findings whose
+            # `files` / `affected_files` field was empty, on the theory
+            # that real defects always point at code. That heuristic
+            # was too aggressive: legitimate Informational findings
+            # reference code inline in the description (function name,
+            # config line, file path in prose) rather than always in
+            # the structured field. Removed -- rely on the absence-
+            # phrase and no-X-in-Y patterns above, which match the
+            # actual absence vocabulary without the false positives.
 
             return False
 
