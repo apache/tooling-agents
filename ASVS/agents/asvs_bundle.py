@@ -1263,9 +1263,23 @@ Be thorough but precise. If something is done correctly, acknowledge it as a pos
 
         print(f"[bundle {bundle_label}] Opus: {len(opus_batches)} batch(es)", flush=True)
 
+        # Pre-load analysis cache namespace in one bulk call. Each
+        # batch's cache lookup below becomes an in-memory dict read
+        # instead of a sync CouchDB get that would block the agent
+        # thread's loop. Writes stay per-batch so a stopped run
+        # preserves its cache progress.
+        try:
+            analysis_cache_all = analysis_cache_ns.get_all() or {}
+        except Exception as e:
+            print(f"  WARN: analysis cache pre-load failed, falling back to per-key: {e}", flush=True)
+            analysis_cache_all = None
+
         async def analyze_batch(i, batch):
             cache_key = f"batch-{i}"
-            cached = analysis_cache_ns.get(cache_key)
+            if analysis_cache_all is not None:
+                cached = analysis_cache_all.get(cache_key)
+            else:
+                cached = analysis_cache_ns.get(cache_key)
             if cached:
                 print(f"[bundle {bundle_label}] Opus batch {i+1}: cached", flush=True)
                 return cached

@@ -708,9 +708,15 @@ async def run(input_dict, tools):
         ]
 
         try:
-            source_keys = source_ns.list_keys() or []
+            # Bulk-load the whole source namespace so the candidate loop
+            # below can do dict lookups instead of per-key get() calls.
+            # On a typical Mahout-sized repo this was ~100-500 candidate
+            # docs each fetched separately; get_all() makes it one call.
+            source_all = source_ns.get_all() or {}
+            source_keys = list(source_all.keys())
         except Exception as e:
             print(f"[filter] WARN: could not list source namespace: {e}")
+            source_all = {}
             source_keys = []
 
         candidate_keys = []
@@ -767,7 +773,16 @@ async def run(input_dict, tools):
 
         # Source namespace
         for key in candidate_keys:
-            content = _read_ns_value(source_ns, key)
+            # Use the pre-loaded source_all dict instead of a fresh
+            # CouchDB get() per candidate. _read_ns_value's shape
+            # normalization (handle dict-wrapped values) inlined here.
+            raw = source_all.get(key)
+            if raw is None:
+                continue
+            if isinstance(raw, dict):
+                content = raw.get("report") or raw.get("content") or raw.get("body") or json.dumps(raw)
+            else:
+                content = raw if isinstance(raw, str) else str(raw)
             if not content or len(content) < 200:
                 continue
             all_candidates.append(
@@ -799,10 +814,20 @@ async def run(input_dict, tools):
         # Explicit guidance namespaces — tier-1 (user-curated authority)
         for gns_name in guidance_namespaces:
             try:
+                # One get_all() per guidance namespace rather than
+                # list_keys + per-key get. Guidance namespaces are
+                # typically small (a handful of docs) so memory is
+                # fine; the savings is N+1 -> 1 HTTP calls per
+                # namespace.
                 gns = data_store.use_namespace(gns_name)
-                gkeys = gns.list_keys() or []
-                for gkey in gkeys:
-                    content = _read_ns_value(gns, gkey)
+                gdata = gns.get_all() or {}
+                for gkey, raw in gdata.items():
+                    if raw is None:
+                        continue
+                    if isinstance(raw, dict):
+                        content = raw.get("report") or raw.get("content") or raw.get("body") or json.dumps(raw)
+                    else:
+                        content = raw if isinstance(raw, str) else str(raw)
                     if not content:
                         continue
                     all_candidates.append((1, f"{gns_name}::{gkey}", gkey, content))
@@ -1035,9 +1060,16 @@ async def run(input_dict, tools):
         print("\n[filter] === Phase 2: Per-chapter triage ===")
 
         try:
-            all_report_keys = reports_ns.list_keys() or []
+            # Bulk-load the whole reports namespace so the pass-through
+            # path further down can do dict lookups instead of per-key
+            # gets. The audit can produce hundreds of per-section
+            # reports under multiple passes; this collapses
+            # potentially-hundreds of CouchDB reads into one.
+            reports_all = reports_ns.get_all() or {}
+            all_report_keys = list(reports_all.keys())
         except Exception as e:
             print(f"[filter] ERROR listing reports namespace: {e}")
+            reports_all = {}
             all_report_keys = []
 
         section_keys = [k for k in all_report_keys if re.search(r'(?:^|/)(\d+\.\d+\.\d+)\.md$', k)]
@@ -1383,7 +1415,16 @@ async def run(input_dict, tools):
         for key in section_keys:
             rep = per_key_results.get(key)
             if rep is None:
-                original = _read_ns_value(reports_ns, key)
+                # Pass-through: source content from the pre-loaded
+                # reports_all dict rather than a fresh ns.get(key).
+                raw = reports_all.get(key)
+                if raw is not None:
+                    if isinstance(raw, dict):
+                        original = raw.get("report") or raw.get("content") or raw.get("body") or json.dumps(raw)
+                    else:
+                        original = raw if isinstance(raw, str) else str(raw)
+                else:
+                    original = None
                 if original is not None:
                     try:
                         filtered_ns.set(key, original)
@@ -1542,11 +1583,17 @@ async def run(input_dict, tools):
             "_suggested_audit_guidance.md": suggested_md,
             "_review_queue.md": review_md,
         }
-        for fname, body in artifacts.items():
-            try:
-                filtered_ns.set(fname, body)
-            except Exception as e:
-                print(f"[filter] WARN: failed to write artifact {fname}: {e}")
+        # Bulk-write the 4 artifacts in one round trip rather than four
+        # individual set() calls.
+        try:
+            filtered_ns.set_many(artifacts)
+        except Exception as e:
+            print(f"[filter] WARN: set_many for artifacts failed; falling back to per-key: {e}")
+            for fname, body in artifacts.items():
+                try:
+                    filtered_ns.set(fname, body)
+                except Exception as ee:
+                    print(f"[filter] WARN: failed to write artifact {fname}: {ee}")
 
         # ═══════════════════════════════════════════════════════════════
         # PHASE 4 — Push artifacts to private repo (optional)

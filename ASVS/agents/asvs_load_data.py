@@ -327,26 +327,33 @@ async def run(input_dict, tools):
         existing_asvs = [k for k in existing if k.startswith("asvs:")]
         if clear_existing:
             if existing_asvs:
-                print(f"  Clearing {len(existing_asvs)} existing 'asvs:*' keys", flush=True)
-                for k in existing_asvs:
-                    asvs_ns.delete(k)
-                cleared_count = len(existing_asvs)
+                print(f"  Clearing {len(existing_asvs)} existing 'asvs:*' keys via delete_many", flush=True)
+                # delete_many ships one _bulk_docs call regardless of N.
+                # Previously this loop did per-key delete() -- ~345 calls
+                # for ASVS 3.1, each requiring exists-check + GET + DELETE
+                # (~1000 HTTP roundtrips total) and pinning the worker.
+                cleared_count = asvs_ns.delete_many(existing_asvs)
         else:
             if existing_asvs:
                 print(f"  Skipping clear; {len(existing_asvs)} existing 'asvs:*' keys "
                       f"will be overwritten in place where IDs match", flush=True)
 
-        print(f"  Writing {len(chapters)} chapters...", flush=True)
+        # Bulk-write all three families in a single set_many call.
+        # Previously this was three separate per-key loops (chapters +
+        # sections + requirements) for ~300 individual CouchDB writes
+        # per run; set_many ships them all in one _bulk_docs round trip.
+        print(f"  Writing {len(chapters)} chapters, {len(sections)} sections, "
+              f"{len(requirements)} requirements via set_many...", flush=True)
+        all_writes = {}
         for chapter_id, ch in chapters.items():
-            asvs_ns.set(f"asvs:chapters:{chapter_id}", ch)
-
-        print(f"  Writing {len(sections)} sections...", flush=True)
+            all_writes[f"asvs:chapters:{chapter_id}"] = ch
         for section_id, sec in sections.items():
-            asvs_ns.set(f"asvs:sections:{section_id}", sec)
-
-        print(f"  Writing {len(requirements)} requirements...", flush=True)
+            all_writes[f"asvs:sections:{section_id}"] = sec
         for req_id, req in requirements.items():
-            asvs_ns.set(f"asvs:requirements:{req_id}", req)
+            all_writes[f"asvs:requirements:{req_id}"] = req
+        saved = asvs_ns.set_many(all_writes)
+        if saved != len(all_writes):
+            print(f"  WARN: set_many saved {saved}/{len(all_writes)} -- {len(all_writes) - saved} keys failed", flush=True)
 
         # =============================================================
         # Sanity check

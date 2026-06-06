@@ -329,11 +329,15 @@ invent paths — downstream tooling uses these as cache and audit keys.
         asvs_sections_available = []
         sections_dropped_above_level = 0
         try:
+            # Single get_all() load instead of list_keys + per-key
+            # get(). With ~345 ASVS requirements, the old shape made
+            # ~346 sequential CouchDB calls; get_all() is one round
+            # trip regardless of N.
             asvs_ns = data_store.use_namespace("asvs")
-            all_keys = asvs_ns.list_keys()
-            req_keys = [k for k in all_keys if k.startswith("asvs:requirements:")]
-            for rk in sorted(req_keys):
-                req = asvs_ns.get(rk)
+            all_data = asvs_ns.get_all() or {}
+            req_items = {k: v for k, v in all_data.items() if k.startswith("asvs:requirements:")}
+            for rk in sorted(req_items.keys()):
+                req = req_items[rk]
                 if req:
                     section_id = rk.replace("asvs:requirements:", "")
                     # ASVS req levels are integers (1, 2, 3). Skip

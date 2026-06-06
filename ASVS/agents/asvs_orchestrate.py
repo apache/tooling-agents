@@ -1649,13 +1649,16 @@ async def run(input_dict, tools):
             if asvs_level_cache:
                 return
             try:
+                # Load the ASVS namespace in one shot via get_all() rather
+                # than list_keys() followed by per-key get() calls. With
+                # ~345 requirements the old shape was ~346 HTTP calls;
+                # get_all() is one call regardless of N.
                 asvs_ns = data_store.use_namespace("asvs")
-                all_keys = asvs_ns.list_keys()
-                req_keys = [k for k in all_keys if k.startswith("asvs:requirements:")]
+                all_data = asvs_ns.get_all() or {}
+                req_items = {k: v for k, v in all_data.items() if k.startswith("asvs:requirements:")}
                 skipped_empty = 0
                 skipped_bad_level = []
-                for rk in req_keys:
-                    req = asvs_ns.get(rk)
+                for rk, req in req_items.items():
                     if not req:
                         skipped_empty += 1
                         continue
@@ -1776,20 +1779,17 @@ async def run(input_dict, tools):
                 for ns_name in to_clear:
                     try:
                         ns = data_store.use_namespace(ns_name)
-                        keys = ns.list_keys() or []
-                        deleted = 0
-                        for k in keys:
-                            try:
-                                ns.delete(k)
-                                deleted += 1
-                            except Exception as de:
-                                # Per-key failures shouldn't abort the
-                                # whole wipe; log and continue.
-                                print(f"    {ns_name}/{k}: delete failed: {de}", flush=True)
+                        # clear() ships one bulk delete regardless of key
+                        # count. Previously this looped delete() per key
+                        # at ~3 HTTP calls each, which on a cache-heavy
+                        # namespace (analysis_cache, consolidation_cache)
+                        # could be thousands of sequential CouchDB calls
+                        # blocking the worker for tens of seconds.
+                        deleted = ns.clear()
                         total_keys += deleted
-                        print(f"    {ns_name}: deleted {deleted}/{len(keys)} key(s)", flush=True)
+                        print(f"    {ns_name}: cleared {deleted} key(s)", flush=True)
                     except Exception as e:
-                        print(f"    {ns_name}: list/delete failed: "
+                        print(f"    {ns_name}: clear failed: "
                               f"{type(e).__name__}: {e}", flush=True)
                 print(f"  Cleared {total_keys} keys across "
                       f"{len(to_clear)} namespace(s)", flush=True)
@@ -2275,13 +2275,15 @@ async def run(input_dict, tools):
                     print(f"  Found {len(orphan_keys)} orphan keys "
                           f"(passes not in current run: "
                           f"{sorted(set(k.split('/', 1)[0] for k in orphan_keys))})", flush=True)
-                    deleted = 0
-                    for k in orphan_keys:
-                        try:
-                            reports_ns.delete(k)
-                            deleted += 1
-                        except Exception as de:
-                            print(f"    {k}: delete failed: {de}", flush=True)
+                    # delete_many bulks the orphan wipe into one round
+                    # trip. Per-key delete() loop here could be hundreds
+                    # of HTTP calls for a multi-pass run with cumulative
+                    # stale keys.
+                    try:
+                        deleted = reports_ns.delete_many(orphan_keys)
+                    except Exception as de:
+                        print(f"    delete_many failed for {len(orphan_keys)} orphan keys: {de}", flush=True)
+                        deleted = 0
                     print(f"  Deleted {deleted} stale keys from {reports_namespace}", flush=True)
             except Exception as e:
                 # Cleanup failures shouldn't block consolidation

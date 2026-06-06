@@ -153,12 +153,14 @@ async def run(input_dict, tools):
         ns_name = f"files:{repo}/{path_prefix}" if path_prefix else f"files:{repo}"
         files_ns = data_store.use_namespace(ns_name)
 
-        # Clear stale data from previous runs
-        existing_keys = files_ns.list_keys()
-        if existing_keys:
-            print(f"Clearing {len(existing_keys)} existing files from namespace", flush=True)
-            for key in existing_keys:
-                files_ns.delete(key)
+        # Clear stale data from previous runs in a single bulk op rather
+        # than looping delete() per key. With ~300 files per repo, the
+        # per-key loop was ~900 HTTP roundtrips to CouchDB (each delete
+        # is exists-check + GET-rev + DELETE); clear() ships one bulk
+        # call regardless of N.
+        cleared_count = files_ns.clear()
+        if cleared_count:
+            print(f"Cleared {cleared_count} existing files from namespace", flush=True)
 
         fetched_count = 0
         skipped_binary = 0
@@ -175,6 +177,13 @@ async def run(input_dict, tools):
         # GitHub tarballs have a single top-level dir like "owner-repo-<sha>/..."
         # Strip that prefix when storing to data_store so paths match the
         # `contents/{path}` form the rest of the pipeline expects.
+        #
+        # Writes are accumulated in `new_files` and shipped in one bulk
+        # set_many() after the walk completes. Previously this loop did
+        # per-file files_ns.set() -- 439 sequential HTTP calls to
+        # CouchDB for a typical Mahout-sized repo, blocking the worker
+        # for tens of seconds. set_many() is one round trip.
+        new_files: dict = {}
         with tarfile.open(fileobj=io.BytesIO(tar_bytes), mode="r:gz") as tar:
             members = tar.getmembers()
             print(f"Tarball contains {len(members)} members", flush=True)
@@ -252,12 +261,21 @@ async def run(input_dict, tools):
                     except UnicodeDecodeError:
                         skipped_binary += 1
                         continue
-                    files_ns.set(rel_path, content)
+                    new_files[rel_path] = content
                     fetched_count += 1
                 except Exception as e:
                     error_count += 1
                     if len(errors) < 10:
                         errors.append(f"{rel_path}: {str(e)}")
+
+        # Ship accumulated writes in one bulk call. Two HTTP round trips
+        # (a get_many for existing _revs, then one _bulk_docs) regardless
+        # of how many files were fetched.
+        if new_files:
+            print(f"Writing {len(new_files)} files via set_many...", flush=True)
+            saved = files_ns.set_many(new_files)
+            if saved != len(new_files):
+                print(f"  WARN: set_many saved {saved}/{len(new_files)} -- {len(new_files) - saved} keys failed and will be missing", flush=True)
 
         summary_lines = [
             f"Repository: {repo}",
@@ -267,7 +285,7 @@ async def run(input_dict, tools):
         if path_prefix:
             summary_lines.append(f"Path prefix: {path_prefix}")
         summary_lines += [
-            f"Previous files cleared: {len(existing_keys)}",
+            f"Previous files cleared: {cleared_count}",
             f"Files fetched and stored: {fetched_count}",
             f"Skipped (binary): {skipped_binary}",
             f"Skipped (vendor/third-party dirs): {skipped_vendor}",

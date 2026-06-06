@@ -1082,9 +1082,25 @@ Be thorough but precise. If something is done correctly, acknowledge it as a pos
 
         print(f"  Deep analysis: {len(opus_batches)} batches", flush=True)
 
+        # Pre-load the analysis cache namespace in one call. Each batch's
+        # cache check becomes a dict lookup instead of a sync ns.get()
+        # that would block the agent thread's loop during the lookup.
+        # With ~30 concurrent gather'd batches and a CouchDB that's
+        # itself under load from writes, this saves ~30 sequential
+        # blocking reads per audit. Writes stay per-batch to preserve
+        # the cache's resumability semantics on a stopped run.
+        try:
+            analysis_cache_all = analysis_cache_ns.get_all() or {}
+        except Exception as e:
+            print(f"  WARN: analysis cache pre-load failed, falling back to per-key: {e}", flush=True)
+            analysis_cache_all = None
+
         async def analyze_batch(i, batch):
             cache_key = f"batch-{i}"
-            cached = analysis_cache_ns.get(cache_key)
+            if analysis_cache_all is not None:
+                cached = analysis_cache_all.get(cache_key)
+            else:
+                cached = analysis_cache_ns.get(cache_key)
             if cached:
                 print(f"    Opus batch {i+1}: cached", flush=True)
                 return cached

@@ -360,8 +360,16 @@ async def run(input_dict, tools):
         report_dirs = {}  # report_key -> pass-name it came from
 
         try:
+            # Load the entire reports namespace in one shot via get_all()
+            # rather than list_keys() + per-key get() inside the directory
+            # loop below. With per-section reports under multiple passes,
+            # a typical run had hundreds of sequential CouchDB calls here;
+            # get_all() is one bulk fetch regardless of N. Memory cost is
+            # bounded by the same data we were reading anyway, just held
+            # together instead of trickling in.
             ns = data_store.use_namespace(reports_namespace_arg)
-            all_keys = ns.list_keys() or []
+            all_data = ns.get_all() or {}
+            all_keys = list(all_data.keys())
             print(f"  Namespace {reports_namespace_arg}: {len(all_keys)} keys total", flush=True)
         except Exception as e:
             return {
@@ -394,7 +402,13 @@ async def run(input_dict, tools):
 
             for k in report_keys:
                 try:
-                    content = ns.get(k)
+                    # Dict lookup from the upfront get_all() rather than
+                    # a fresh CouchDB call per key. Same exception
+                    # handling as before -- KeyError treated like the
+                    # 'returned None' branch, since a missing key
+                    # after the list_keys() check is the same anomaly
+                    # that warning was guarding against.
+                    content = all_data.get(k)
                     if content is None:
                         print(f"    WARNING: {k} returned None", flush=True)
                         continue
@@ -487,6 +501,18 @@ JSON schema:
         all_extracted = {}
         extraction_errors = []
         pipeline_failure_sections = []  # surfaced in Quality Checks
+
+        # Bulk-load the extraction cache so each gather'd
+        # extract_report coroutine can do a dict lookup instead of a
+        # sync ns.get() that would block the agent thread's loop while
+        # it runs. With ~50-100 reports per domain across multiple
+        # passes, the old shape was hundreds of sequential CouchDB
+        # reads at gather time.
+        try:
+            extraction_cache_all = extraction_ns.get_all() or {}
+        except Exception as e:
+            print(f"  WARN: extraction cache pre-load failed, falling back to per-key: {e}")
+            extraction_cache_all = None
 
         async def extract_report(report_key, content):
             # GUARDRAIL: short-circuit pipeline-failure content before
@@ -762,6 +788,13 @@ Return valid JSON:
                 return ""
             return "\n\n## ASVS Requirement Descriptions\n" + "\n".join(ctx_lines)
 
+        # Same pre-load pattern for the consolidation cache.
+        try:
+            consolidation_cache_all = consolidation_ns.get_all() or {}
+        except Exception as e:
+            print(f"  WARN: consolidation cache pre-load failed, falling back to per-key: {e}")
+            consolidation_cache_all = None
+
         async def consolidate_domain(domain, rpts):
             # Cache key must change when the input findings change. Previously
             # the cache was keyed on just the domain name, which meant any
@@ -777,7 +810,11 @@ Return valid JSON:
             input_hash = hashlib.sha256(rpts_repr.encode()).hexdigest()[:16]
             cache_key = f"{domain}:{input_hash}"
 
-            cached = consolidation_ns.get(cache_key)
+            # Pre-loaded dict lookup; see get_all() above.
+            if consolidation_cache_all is not None:
+                cached = consolidation_cache_all.get(cache_key)
+            else:
+                cached = consolidation_ns.get(cache_key)
             if cached:
                 print(f"  {domain}: cached ({len(cached.get('consolidated_findings', []))} findings)")
                 return domain, cached
