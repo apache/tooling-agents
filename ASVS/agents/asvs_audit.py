@@ -319,6 +319,7 @@ This means one of the following:
         import re
         import fnmatch
         import hashlib
+        import random
         from datetime import date
         audit_date = date.today().strftime("%b %d, %Y")
 
@@ -415,9 +416,17 @@ This means one of the following:
         # T2: configurable concurrency (was hardcoded to 2 / 5)
         OPUS_CONCURRENCY = int(os.environ.get("OPUS_CONCURRENCY", "4"))
         SONNET_CONCURRENCY = int(os.environ.get("SONNET_CONCURRENCY", "5"))
+        # Haiku relevance-scoring (Step 2) gets its own, lower concurrency.
+        # It previously borrowed sonnet_semaphore (5-wide), which the
+        # Bedrock Haiku per-minute quota can't sustain across ~100 batches
+        # — every call throttled on attempt 1 and survived only via
+        # call_llm's retry/backoff. 3-wide stays under the quota so the
+        # batches stop paying the retry tax. Tune via HAIKU_CONCURRENCY.
+        HAIKU_CONCURRENCY = int(os.environ.get("HAIKU_CONCURRENCY", "3"))
 
         sonnet_semaphore = asyncio.Semaphore(SONNET_CONCURRENCY)
         opus_semaphore = asyncio.Semaphore(OPUS_CONCURRENCY)
+        haiku_semaphore = asyncio.Semaphore(HAIKU_CONCURRENCY)
 
         cache_key_prefix = f"asvs-{asvs}-{'-'.join(namespaces)}"
         relevance_cache_ns = data_store.use_namespace(f"audit-cache:relevance:{cache_key_prefix}")
@@ -662,7 +671,18 @@ FILES TO EVALUATE:
                 relevance_scores = {}
 
                 async def filter_batch(i, batch):
-                    async with sonnet_semaphore:
+                    # Startup stagger BEFORE acquiring the semaphore, so a
+                    # sleeping coroutine doesn't hold one of the few slots
+                    # while it waits. gather() launches every batch at once;
+                    # without this the first HAIKU_CONCURRENCY calls all hit
+                    # Bedrock in the same instant and throttle on attempt 1.
+                    # Offset each by a small jittered, capped delay so the
+                    # opening burst spreads across a few seconds. Once the
+                    # run is warm the semaphore alone paces it.
+                    stagger = min(i * 0.15, 3.0) + random.uniform(0, 0.25)
+                    if stagger:
+                        await asyncio.sleep(stagger)
+                    async with haiku_semaphore:
                         entries_text = "".join(batch.values())
                         prompt = relevance_prompt_template + entries_text
                         messages = [{"role": "user", "content": prompt}]
