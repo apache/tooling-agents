@@ -97,18 +97,31 @@ async def run(input_dict, tools):
 
         # ----- Walk the file inventory -----
         # For each file, record its directory and basename. We'll then find
+        # Load the size index written by asvs_download_repo at ingest time
+        # (files_meta:{repo} -> "sizes" -> {path: char_len}). This avoids
+        # calling ns.get(key) on EVERY file just to measure it — that pulls
+        # full document bodies from CouchDB and reintroduces the monolithic
+        # I/O pattern multi-component mode exists to avoid. byte_count is
+        # advisory (display + ordering only), so if the index is absent we
+        # fall back to 0 rather than paying N body reads.
+        sizes = {}
+        try:
+            meta_ns = data_store.use_namespace(f"files_meta:{repo}")
+            raw = meta_ns.get("sizes")
+            if raw:
+                sizes = json.loads(raw)
+        except Exception as _idx_e:
+            print(
+                f"[components] no size index ({type(_idx_e).__name__}); "
+                f"byte_count will be 0",
+                flush=True,
+            )
+            sizes = {}
+
         # directories that contain marker files.
         files_by_dir = {}   # dir_path -> list of (basename, size)
         for key in all_keys:
-            # Determine size if available; data_store may not return size,
-            # so we read length lazily. For monster repos, avoid reading
-            # full content for every file — use a cheap len() call.
-            try:
-                content = ns.get(key)
-                size = len(content) if isinstance(content, str) else 0
-            except Exception:
-                size = 0
-
+            size = sizes.get(key, 0)
             dir_path, basename = os.path.split(key)
             files_by_dir.setdefault(dir_path, []).append((basename, size))
 
