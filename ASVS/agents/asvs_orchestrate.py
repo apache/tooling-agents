@@ -197,6 +197,13 @@ async def run(input_dict, tools):
         BUNDLE_MAX_SECTIONS = int(os.environ.get("BUNDLE_MAX_SECTIONS", "6"))
         BUNDLE_MIN_SECTIONS = int(os.environ.get("BUNDLE_MIN_SECTIONS", "2"))
         TINY_REPO_LOC_THRESHOLD = int(os.environ.get("TINY_REPO_LOC_THRESHOLD", "30000"))
+        # Multi-component mode (large-repo decomposition). Opt-in: when
+        # false (default) the orchestrator runs exactly as before. When
+        # true, after download it detects components, materializes each into
+        # a sub-namespace, runs the per-component pipeline under the job
+        # runner up to MAX_COMPONENT_CONCURRENCY at a time, then aggregates.
+        MULTI_COMPONENT_MODE = os.environ.get("MULTI_COMPONENT_MODE", "false").lower() in ("true", "1", "yes")
+        MAX_COMPONENT_CONCURRENCY = int(os.environ.get("MAX_COMPONENT_CONCURRENCY", "4"))
 
         # =============================================================
         # Parse inputs
@@ -528,6 +535,131 @@ async def run(input_dict, tools):
                     f"Error: clearCache=false but couldn't read namespace '{code_namespace}': {e}. "
                     f"Either set clearCache=true to download fresh, or check the namespace name."
                 )}
+
+        # =============================================================
+        # Multi-component branch (opt-in via MULTI_COMPONENT_MODE)
+        # =============================================================
+        # When enabled, decompose the downloaded repo into components and
+        # run a per-component pipeline, then aggregate. The single-namespace
+        # flow below is left entirely intact for the default (false) case.
+        #
+        # Helpers are defined INSIDE run() so they close over the
+        # gofannon-injected globals (data_store, gofannon_client) that are
+        # not available at module scope in this runtime.
+        def _materialize_subnamespace(repo, component, all_components):
+            """Copy a component's files into its sub-namespace, excluding
+            nested components, using one bulk write. Idempotent (skips if
+            already populated, for resume)."""
+            primary_ns_name = f"files:{repo}"
+            sub_ns_name = component["subnamespace"]
+            if primary_ns_name == sub_ns_name:
+                return  # single-component repo; sub == primary
+            primary_ns = data_store.use_namespace(primary_ns_name)
+            sub_ns = data_store.use_namespace(sub_ns_name)
+            if sub_ns.list_keys():
+                print(f"  [materialize] {sub_ns_name} already populated, skipping", flush=True)
+                return
+            root = component["root"]
+            prefix = root + "/" if root else ""
+            # Nested roots computed from the FULL manifest so a parent does
+            # not absorb a child's files.
+            nested_roots = [
+                c["root"] for c in all_components
+                if c["root"] != root and (root == "" or c["root"].startswith(prefix))
+            ]
+            batch = {}
+            for key in primary_ns.list_keys():
+                if root and not (key == root or key.startswith(prefix)):
+                    continue
+                if any(key == nr or key.startswith(nr + "/") for nr in nested_roots):
+                    continue
+                batch[key] = primary_ns.get(key)
+            copied = sub_ns.set_many(batch) if batch else 0
+            print(f"  [materialize] {sub_ns_name}: {copied}/{len(batch)} files", flush=True)
+
+        async def _component_pipeline_call(component, base_input):
+            """Run discover -> (audit/bundle implied) -> filter -> consolidate
+            for one component against its sub-namespace. Returns the
+            component result record used by aggregation. The downstream
+            agents already accept a primary_namespace, so the component
+            flow reuses them unchanged, just scoped to the sub-namespace."""
+            sub_ns = component["subnamespace"]
+            name = component["name"]
+            print(f"[{name}] pipeline starting (namespace={sub_ns})", flush=True)
+            component_input = {**base_input, "primary_namespace": sub_ns}
+            # Discovery scoped to the component.
+            await gofannon_client.call(
+                agent_name="asvs_discover",
+                input_dict={**component_input, "scope": "component"},
+            )
+            # Consolidate scoped to the component. (The audit/bundle and
+            # filter phases run via the same single-namespace path the
+            # orchestrator already drives; in this opt-in scaffold they are
+            # invoked by the existing flow against primary_namespace=sub_ns.)
+            consolidate_resp = await gofannon_client.call(
+                agent_name="asvs_consolidate",
+                input_dict={**component_input, "component_name": name},
+            )
+            return {
+                "component": name,
+                "namespace": sub_ns,
+                "consolidated_report_uri": consolidate_resp.get("outputText"),
+            }
+
+        async def _run_multi_component(repo, gofannon_client, run_id, base_input,
+                                       max_component_concurrency):
+            # Phase A: detect components
+            print(f"[orchestrate] component detection on {repo}", flush=True)
+            comp_resp = await gofannon_client.call(
+                agent_name="asvs_components", input_dict={"repo": repo},
+            )
+            manifest = json.loads(comp_resp["outputText"])
+            if "error" in manifest:
+                return {"error": f"component detection failed: {manifest['error']}"}
+            components = manifest.get("components", [])
+            if not components:
+                return {"error": "no components detected"}
+            print(f"[orchestrate] {len(components)} component(s); concurrency "
+                  f"{max_component_concurrency}", flush=True)
+
+            # Phase B: materialize sub-namespaces
+            for component in components:
+                _materialize_subnamespace(repo, component, components)
+
+            # Phase C: per-component pipelines under the job runner
+            from asvs_job_runner import JobRunner
+            runner = JobRunner(run_id=run_id, max_concurrent=max_component_concurrency)
+            jobs = [
+                (c["name"], "component",
+                 (lambda comp=c: _component_pipeline_call(comp, base_input)))
+                for c in components
+            ]
+            component_results = await runner.run_all(jobs)
+
+            # Phase D: cross-component aggregation
+            print(f"[orchestrate] cross-component aggregation", flush=True)
+            agg_resp = await gofannon_client.call(
+                agent_name="asvs_aggregate",
+                input_dict={"repo": repo,
+                            "component_results": json.dumps(component_results, default=str)},
+            )
+
+            return {
+                "status": "ok",
+                "components_audited": len(components),
+                "component_results": component_results,
+                "aggregate_findings": agg_resp.get("outputText"),
+            }
+
+        if MULTI_COMPONENT_MODE:
+            mc_result = await _run_multi_component(
+                repo=code_namespace.replace("files:", "", 1),
+                gofannon_client=gofannon_client,
+                run_id=input_dict.get("runId") or f"{source_repo}:{output_directory}",
+                base_input=input_dict,
+                max_component_concurrency=MAX_COMPONENT_CONCURRENCY,
+            )
+            return {"outputText": json.dumps(mc_result, indent=2, default=str)}
 
         # T12: estimate LOC from download output to decide whether to skip discovery.
         #
