@@ -286,7 +286,9 @@ BATCH RESULTS TO CONSOLIDATE:
         """ + "\n---\n".join(results)
 
             messages = [{"role": "user", "content": prompt}]
-            consolidation_params = {**params, "max_tokens": 32000}
+            # Sonnet 4.6 allows up to 64K output (vs 4.5's 32K).
+            # Consolidation is output-heavy; raise to 48000, under the ceiling.
+            consolidation_params = {**params, "max_tokens": 48000}
             try:
                 resp, _ = await call_llm(
                     provider=provider, model=model,
@@ -322,7 +324,9 @@ NOTE: This is a bundled multi-section audit. Preserve per-section structure
 
 BATCH RESULTS TO CONSOLIDATE:
         """
-            consolidation_params = {**params, "max_tokens": 16384}
+            # Sonnet 4.6 allows 64K output; raise from 16384 so each round
+            # emits more and fewer rounds are needed. Under the ceiling.
+            consolidation_params = {**params, "max_tokens": 32768}
             template_tokens = count_tokens(template, provider, model)
             max_cons_content = int(context_window * 0.40) - template_tokens
 
@@ -474,8 +478,12 @@ BATCH RESULTS TO CONSOLIDATE:
         # Model configuration
         # =============================================================
         SONNET_PROVIDER = "bedrock"
-        SONNET_MODEL = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
-        SONNET_PARAMS = {"temperature": 0.7, "max_tokens": 16384}
+        # Sonnet 4.6: 1M context (up from 200K) + 64K max output (up from
+        # 32K). SONNET_CONTEXT budgets below recompute against 1M via
+        # get_context_window. max_tokens 16384 -> 32768 for fatter inventory
+        # batches; stays under the 64000 output ceiling.
+        SONNET_MODEL = "us.anthropic.claude-sonnet-4-6"
+        SONNET_PARAMS = {"temperature": 0.7, "max_tokens": 32768}
 
         # T9: Haiku for relevance filtering — cheaper and faster
         HAIKU_PROVIDER = "bedrock"

@@ -128,7 +128,10 @@ BATCH RESULTS TO CONSOLIDATE:
         """ + "\n---\n".join(results)
 
             messages = [{"role": "user", "content": prompt}]
-            consolidation_params = {**params, "max_tokens": 32000}
+            # Sonnet 4.6 allows up to 64K output (vs 4.5's 32K). Consolidation
+            # is output-heavy (it re-emits merged findings), so raise the cap
+            # to 48000 — generous headroom without crowding the 64000 ceiling.
+            consolidation_params = {**params, "max_tokens": 48000}
             try:
                 resp, _ = await call_llm(
                     provider=provider, model=model,
@@ -158,7 +161,10 @@ ASVS Requirement: {asvs}
 
 BATCH RESULTS TO CONSOLIDATE:
         """
-            consolidation_params = {**params, "max_tokens": 16384}
+            # Sonnet 4.6 allows 64K output; raise from 16384 so each
+            # consolidation round can emit more merged content per pass and
+            # need fewer rounds. Kept under the 64000 ceiling.
+            consolidation_params = {**params, "max_tokens": 32768}
             template_tokens = count_tokens(template, provider, model)
             max_cons_content = int(context_window * 0.40) - template_tokens
 
@@ -397,8 +403,14 @@ This means one of the following:
         # Model configuration
         # =============================================================
         SONNET_PROVIDER = "bedrock"
-        SONNET_MODEL = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
-        SONNET_PARAMS = {"temperature": 0.7, "max_tokens": 16384}
+        # Sonnet 4.6: 1M-token context window (up from 4.5's 200K) and 64K
+        # max output (up from 32K). The SONNET_CONTEXT-derived batch budgets
+        # below recompute against 1M automatically via get_context_window.
+        # max_tokens raised 16384 -> 32768 for inventory: a larger input
+        # window means fatter inventory batches, which want more room to
+        # emit structure. Stay well under the 64000 output ceiling.
+        SONNET_MODEL = "us.anthropic.claude-sonnet-4-6"
+        SONNET_PARAMS = {"temperature": 0.7, "max_tokens": 32768}
 
         # T9: Haiku for relevance filtering (cheap classification)
         HAIKU_PROVIDER = "bedrock"

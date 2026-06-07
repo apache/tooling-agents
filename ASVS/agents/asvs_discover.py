@@ -62,8 +62,14 @@ async def run(input_dict, tools):
         # Model configuration
         # =============================================================
         PROVIDER = "bedrock"
-        MODEL = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
-        PARAMS = {"temperature": 0.7, "max_tokens": 16384}
+        # Sonnet 4.6: 1M context (up from 200K). CONTEXT_WINDOW and
+        # SAFE_LIMIT below recompute against 1M via get_context_window, so
+        # the classification batcher packs far more files per call and emits
+        # many fewer batches over a large tree. max_tokens 16384 -> 32768
+        # (the domain-generation call already overrides to 32000); under the
+        # 64000 output ceiling.
+        MODEL = "us.anthropic.claude-sonnet-4-6"
+        PARAMS = {"temperature": 0.7, "max_tokens": 32768}
         CONTEXT_WINDOW = get_context_window(PROVIDER, MODEL)
         SAFE_LIMIT = int(CONTEXT_WINDOW * 0.40)
 

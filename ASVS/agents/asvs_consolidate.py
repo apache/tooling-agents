@@ -322,7 +322,10 @@ async def run(input_dict, tools):
         # id on Bedrock (verified against the Claude Code Bedrock docs);
         # confirm it is enabled in your region before deploying.
         FAST_MODEL = "us.anthropic.claude-sonnet-4-6"
-        FAST_PARAMS = {"temperature": 0.7, "max_tokens": 16384}
+        # max_tokens default raised 16384 -> 32768 for the lighter FAST
+        # calls now that Sonnet 4.6 permits 64K output. The big
+        # report-generation calls below already pass an explicit 64000.
+        FAST_PARAMS = {"temperature": 0.7, "max_tokens": 32768}
 
         HEAVY_PROVIDER = "bedrock"
         HEAVY_MODEL = "us.anthropic.claude-opus-4-8"
