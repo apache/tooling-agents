@@ -156,49 +156,72 @@ class JobRunner:
             )
             return {"status": "skipped-fatal", "error": state.get("last_error")}
 
-        # Claim the job
-        attempts = (state.get("attempts", 0) if state else 0) + 1
-        async with self.semaphore:
-            self._write_state(
-                key,
-                self.RUNNING,
-                attempts=attempts,
-                started_at=self._now(),
-                last_error=None,
-            )
+        # Claim the job. Retry as an internal loop (NOT recursion): the
+        # old code recursed into run_job while still holding self.semaphore
+        # and slept during backoff inside the held semaphore. Both are bugs
+        # at concurrency >= max_concurrent: asyncio.Semaphore is not
+        # reentrant, so N jobs all retrying would each hold a slot while
+        # waiting for a slot -> deadlock; and a backing-off job needlessly
+        # occupied a slot for up to 60s. Now the semaphore is held only for
+        # the attempt itself, and the backoff sleep happens after release.
+        attempts = (state.get("attempts", 0) if state else 0)
 
-            try:
-                result = await callable_()
+        while True:
+            attempts += 1
+
+            async with self.semaphore:
                 self._write_state(
                     key,
-                    self.DONE,
-                    completed_at=self._now(),
-                    output_uri=(
-                        result.get("output_uri")
-                        if isinstance(result, dict)
-                        else None
-                    ),
+                    self.RUNNING,
+                    attempts=attempts,
+                    started_at=self._now(),
+                    last_error=None,
                 )
-                print(
-                    f"[runner] DONE {key} (attempt {attempts})",
-                    flush=True,
-                )
-                return result
+                try:
+                    result = await callable_()
+                    self._write_state(
+                        key,
+                        self.DONE,
+                        completed_at=self._now(),
+                        output_uri=(
+                            result.get("output_uri")
+                            if isinstance(result, dict)
+                            else None
+                        ),
+                    )
+                    print(
+                        f"[runner] DONE {key} (attempt {attempts})",
+                        flush=True,
+                    )
+                    return result
 
-            except Exception as e:
-                err_type = type(e).__name__
-                err_msg = str(e) or "(no message)"
-                is_rate_limit = "RateLimitError" in err_type or "429" in err_msg
-                is_timeout = "Timeout" in err_type
-                retryable = is_rate_limit or is_timeout or attempts < self.MAX_ATTEMPTS
+                except Exception as e:
+                    err_type = type(e).__name__
+                    err_msg = str(e) or "(no message)"
+                    is_rate_limit = "RateLimitError" in err_type or "429" in err_msg
 
-                if retryable and attempts < self.MAX_ATTEMPTS:
+                    if attempts >= self.MAX_ATTEMPTS:
+                        self._write_state(
+                            key,
+                            self.FAILED_FATAL,
+                            last_error=f"{err_type}: {err_msg}",
+                            completed_at=self._now(),
+                        )
+                        print(
+                            f"[runner] FATAL {key} after {attempts} "
+                            f"attempt(s): {err_type}: {err_msg[:120]}",
+                            flush=True,
+                        )
+                        return {"status": "failed-fatal", "error": err_msg}
+
+                    # Mark for retry; compute backoff. The sleep happens
+                    # AFTER the semaphore is released (below), so a
+                    # backing-off job does not hold a concurrency slot.
                     self._write_state(
                         key,
                         self.QUEUED,
                         last_error=f"{err_type}: {err_msg}",
                     )
-                    # Backoff before the caller might retry
                     backoff = min(60, 2 ** attempts)
                     if is_rate_limit:
                         backoff = max(backoff, 30)
@@ -208,22 +231,9 @@ class JobRunner:
                         f"{err_type}: {err_msg[:120]}",
                         flush=True,
                     )
-                    await asyncio.sleep(backoff)
-                    # Recurse — the same call attempts the job again
-                    return await self.run_job(component, phase, callable_, section)
-                else:
-                    self._write_state(
-                        key,
-                        self.FAILED_FATAL,
-                        last_error=f"{err_type}: {err_msg}",
-                        completed_at=self._now(),
-                    )
-                    print(
-                        f"[runner] FATAL {key} after {attempts} "
-                        f"attempt(s): {err_type}: {err_msg[:120]}",
-                        flush=True,
-                    )
-                    return {"status": "failed-fatal", "error": err_msg}
+
+            # Semaphore released. Back off without holding a slot, then loop.
+            await asyncio.sleep(backoff)
 
     # ----- Bulk run -----
 
@@ -250,16 +260,27 @@ class JobRunner:
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        # Print summary
-        succeeded = sum(1 for r in results if isinstance(r, dict) and r.get("status") not in ("failed-fatal", "skipped-fatal"))
-        failed = sum(1 for r in results if isinstance(r, dict) and r.get("status") in ("failed-fatal",))
-        skipped_done = sum(1 for r in results if isinstance(r, dict) and r.get("status") == "skipped-done")
-        skipped_fatal = sum(1 for r in results if isinstance(r, dict) and r.get("status") == "skipped-fatal")
+        # Print summary. Count each bucket explicitly; do NOT fold skips
+        # into success (the old `not in (failed-fatal, skipped-fatal)`
+        # counted skipped-done as a fresh success and miscounted raised
+        # exceptions). A successful phase result is a dict without a
+        # failure/skip status.
+        def _status(r):
+            if isinstance(r, dict):
+                return r.get("status")
+            return "exception"
+
+        completed = sum(1 for r in results if _status(r) in (None, "ok"))
+        failed = sum(1 for r in results if _status(r) == "failed-fatal")
+        skipped_done = sum(1 for r in results if _status(r) == "skipped-done")
+        skipped_fatal = sum(1 for r in results if _status(r) == "skipped-fatal")
+        raised = sum(1 for r in results if _status(r) == "exception")
         print(
-            f"[runner] run complete: {succeeded} succeeded, "
+            f"[runner] run complete: {completed} completed, "
             f"{failed} fatal, "
             f"{skipped_done} skipped (already done), "
-            f"{skipped_fatal} skipped (previously fatal)",
+            f"{skipped_fatal} skipped (previously fatal), "
+            f"{raised} raised",
             flush=True,
         )
 
