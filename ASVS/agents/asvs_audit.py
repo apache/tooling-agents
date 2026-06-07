@@ -617,16 +617,6 @@ This means one of the following:
                 relevance_scores = cached_relevance
                 print(f"  Using cached relevance scores for {len(relevance_scores)} files", flush=True)
             else:
-                file_previews = {}
-                for path, content in filtered_files.items():
-                    # Supplemental files are guidance, not auditable
-                    # code — don't waste Haiku tokens scoring them.
-                    # They get force-included below regardless.
-                    if path in supplemental_keys:
-                        continue
-                    lines = content.split('\n')
-                    file_previews[path] = '\n'.join(lines[:200])
-
                 SAFE_HAIKU_LIMIT = int(HAIKU_CONTEXT * 0.40)
 
                 relevance_prompt_template = f"""You are a security auditor performing file relevance filtering.
@@ -650,6 +640,40 @@ FILES TO EVALUATE:
 
                 template_tokens = count_tokens(relevance_prompt_template, HAIKU_PROVIDER, HAIKU_MODEL)
                 preview_budget = SAFE_HAIKU_LIMIT - template_tokens
+
+                # Per-file preview cap. The 200-line slice alone is NOT a
+                # safe bound: on huge repos (OpenOffice is 2M+ LOC) a single
+                # file can have 200 lines of pathologically long content
+                # (minified JS, generated XML, giant string tables) whose
+                # token count exceeds the whole batch budget — and the
+                # batcher below cannot split a single entry, so it ships one
+                # oversized prompt and Bedrock 400s with "prompt is too long"
+                # (observed: batches 130/131 at ~201,787 tokens, 1 file each).
+                # Cap each preview to a fraction of the batch budget so no
+                # lone file can blow the window.
+                PER_FILE_PREVIEW_TOKEN_CAP = max(1000, preview_budget // 4)
+
+                file_previews = {}
+                for path, content in filtered_files.items():
+                    # Supplemental files are guidance, not auditable
+                    # code — don't waste Haiku tokens scoring them.
+                    # They get force-included below regardless.
+                    if path in supplemental_keys:
+                        continue
+                    lines = content.split('\n')
+                    preview = '\n'.join(lines[:200])
+                    # Token-bound the preview. count_tokens is the source of
+                    # truth; loop-trim by characters until under the cap so
+                    # we never hand the batcher an entry it cannot place.
+                    if count_tokens(preview, HAIKU_PROVIDER, HAIKU_MODEL) > PER_FILE_PREVIEW_TOKEN_CAP:
+                        approx_chars = PER_FILE_PREVIEW_TOKEN_CAP * 3
+                        preview = preview[:approx_chars]
+                        while (preview and
+                               count_tokens(preview, HAIKU_PROVIDER, HAIKU_MODEL)
+                               > PER_FILE_PREVIEW_TOKEN_CAP):
+                            preview = preview[: int(len(preview) * 0.8)]
+                        preview = preview + "\n... [preview truncated for relevance scoring]"
+                    file_previews[path] = preview
 
                 preview_batches = []
                 current_batch = {}
@@ -777,6 +801,26 @@ FILES:
                 entry = f"\n--- {path} ---\n{content}\n"
                 entry_tokens = count_tokens(entry, SONNET_PROVIDER, SONNET_MODEL)
                 if entry_tokens > inv_budget:
+                    # A single file larger than the batch budget. Isolating
+                    # it into its own batch is NOT enough — the runtime
+                    # split-in-half fallback further down splits by FILES, so
+                    # a lone oversized file still overflows (observed on
+                    # OpenOffice: "Input is too long" even after the split,
+                    # because half of one monster file is still > window).
+                    # Truncate the content itself to fit. Inventory only
+                    # needs structure (imports, classes, signatures), so a
+                    # head slice is acceptable degradation vs. dropping the
+                    # file entirely.
+                    approx_chars = inv_budget * 3
+                    truncated = content[:approx_chars]
+                    while (truncated and
+                           count_tokens(
+                               f"\n--- {path} ---\n{truncated}\n",
+                               SONNET_PROVIDER, SONNET_MODEL) > inv_budget):
+                        truncated = truncated[: int(len(truncated) * 0.8)]
+                    entry = (f"\n--- {path} ---\n{truncated}\n"
+                             f"... [file truncated at {len(truncated)} chars "
+                             f"for inventory; full file exceeds model window]\n")
                     if current_batch:
                         inv_batches.append(current_batch)
                         current_batch = {}
