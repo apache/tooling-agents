@@ -418,11 +418,12 @@ This means one of the following:
         SONNET_CONCURRENCY = int(os.environ.get("SONNET_CONCURRENCY", "5"))
         # Haiku relevance-scoring (Step 2) gets its own, lower concurrency.
         # It previously borrowed sonnet_semaphore (5-wide), which the
-        # Bedrock Haiku per-minute quota can't sustain across ~100 batches
-        # — every call throttled on attempt 1 and survived only via
-        # call_llm's retry/backoff. 3-wide stays under the quota so the
-        # batches stop paying the retry tax. Tune via HAIKU_CONCURRENCY.
-        HAIKU_CONCURRENCY = int(os.environ.get("HAIKU_CONCURRENCY", "3"))
+        # default Bedrock Haiku per-minute quota can't sustain across many
+        # batches — calls throttled to retry 4/5 and 5/5, surviving only via
+        # call_llm's backoff. Default 2 keeps it under the DEFAULT account
+        # quota. If you get a Bedrock quota increase for the Haiku inference
+        # profile, raise this via the HAIKU_CONCURRENCY env var.
+        HAIKU_CONCURRENCY = int(os.environ.get("HAIKU_CONCURRENCY", "2"))
 
         sonnet_semaphore = asyncio.Semaphore(SONNET_CONCURRENCY)
         opus_semaphore = asyncio.Semaphore(OPUS_CONCURRENCY)

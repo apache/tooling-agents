@@ -394,6 +394,7 @@ BATCH RESULTS TO CONSOLIDATE:
         import re
         import fnmatch
         import hashlib
+        import random
         from datetime import date
         audit_date = date.today().strftime("%b %d, %Y")
 
@@ -493,9 +494,17 @@ BATCH RESULTS TO CONSOLIDATE:
         # T2: configurable concurrency
         OPUS_CONCURRENCY = int(os.environ.get("OPUS_CONCURRENCY", "4"))
         SONNET_CONCURRENCY = int(os.environ.get("SONNET_CONCURRENCY", "5"))
+        # Haiku relevance-scoring gets its own, low concurrency. It used to
+        # borrow sonnet_semaphore (5-wide), which the default Bedrock Haiku
+        # per-minute quota cannot sustain across many batches — every call
+        # throttled, often to retry 4/5 or 5/5, surviving only via
+        # call_llm's backoff. Default 2 keeps it under the default quota.
+        # Raise via HAIKU_CONCURRENCY if you get a quota increase.
+        HAIKU_CONCURRENCY = int(os.environ.get("HAIKU_CONCURRENCY", "2"))
 
         sonnet_semaphore = asyncio.Semaphore(SONNET_CONCURRENCY)
         opus_semaphore = asyncio.Semaphore(OPUS_CONCURRENCY)
+        haiku_semaphore = asyncio.Semaphore(HAIKU_CONCURRENCY)
 
         # Cache key uses ALL bundled sections so re-runs with same bundle hit cache
         bundle_key = "+".join(sorted(asvs_sections))
@@ -788,7 +797,16 @@ FILES TO EVALUATE:
                 relevance_scores = {}
 
                 async def filter_batch(i, batch):
-                    async with sonnet_semaphore:
+                    # Startup stagger BEFORE acquiring the semaphore so a
+                    # sleeping coroutine doesn't hold one of the few Haiku
+                    # slots. gather() launches every batch at once; without
+                    # this the first HAIKU_CONCURRENCY calls hit Bedrock in
+                    # the same instant and throttle immediately. Spread the
+                    # opening burst across a few seconds.
+                    stagger = min(i * 0.15, 3.0) + random.uniform(0, 0.25)
+                    if stagger:
+                        await asyncio.sleep(stagger)
+                    async with haiku_semaphore:
                         entries_text = "".join(batch.values())
                         prompt = relevance_prompt_template + entries_text
                         messages = [{"role": "user", "content": prompt}]
