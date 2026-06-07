@@ -184,6 +184,10 @@ async def run(input_dict, tools):
         # CouchDB for a typical Mahout-sized repo, blocking the worker
         # for tens of seconds. set_many() is one round trip.
         new_files: dict = {}
+        # Per-file character-length index, persisted to a sibling
+        # namespace so asvs_components can total component sizes without
+        # re-reading every file body. Advisory; display/ordering only.
+        file_sizes: dict = {}
         with tarfile.open(fileobj=io.BytesIO(tar_bytes), mode="r:gz") as tar:
             members = tar.getmembers()
             print(f"Tarball contains {len(members)} members", flush=True)
@@ -262,6 +266,7 @@ async def run(input_dict, tools):
                         skipped_binary += 1
                         continue
                     new_files[rel_path] = content
+                    file_sizes[rel_path] = len(content)
                     fetched_count += 1
                 except Exception as e:
                     error_count += 1
@@ -276,6 +281,21 @@ async def run(input_dict, tools):
             saved = files_ns.set_many(new_files)
             if saved != len(new_files):
                 print(f"  WARN: set_many saved {saved}/{len(new_files)} -- {len(new_files) - saved} keys failed and will be missing", flush=True)
+
+        # Persist the size index to files_meta:{repo} as one key
+        # ("sizes" -> {path: char_len}). One small write; lets the
+        # component detector size components without N body reads.
+        if file_sizes:
+            try:
+                import json as _json_meta
+                meta_ns_name = f"files_meta:{repo}/{path_prefix}" if path_prefix else f"files_meta:{repo}"
+                meta_ns = data_store.use_namespace(meta_ns_name)
+                meta_ns.set("sizes", _json_meta.dumps(file_sizes))
+                print(f"Wrote size index ({len(file_sizes)} entries) to {meta_ns_name}", flush=True)
+            except Exception as _meta_e:
+                # Non-fatal: the index is an optimization. Components
+                # fall back to byte_count=0 if it is missing.
+                print(f"  WARN: could not write size index: {type(_meta_e).__name__}: {_meta_e}", flush=True)
 
         summary_lines = [
             f"Repository: {repo}",
