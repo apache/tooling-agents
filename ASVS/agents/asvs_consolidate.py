@@ -315,7 +315,13 @@ async def run(input_dict, tools):
         # Model configuration
         # =============================================================
         FAST_PROVIDER = "bedrock"
-        FAST_MODEL = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+        # Bumped Sonnet 4.5 -> 4.6: same price ($3/$15), better
+        # instruction-following on the merge/dedup/severity-table logic.
+        # Consolidation is where the apache/openoffice run's malformed
+        # single-pass output surfaced. 4.6 uses a dateless inference-profile
+        # id on Bedrock (verified against the Claude Code Bedrock docs);
+        # confirm it is enabled in your region before deploying.
+        FAST_MODEL = "us.anthropic.claude-sonnet-4-6"
         FAST_PARAMS = {"temperature": 0.7, "max_tokens": 16384}
 
         HEAVY_PROVIDER = "bedrock"
