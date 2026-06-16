@@ -4,7 +4,7 @@ Research and evaluation of automated security tooling for open source projects. 
 
 ## Tooling-Agents Pipelines
 
-The Tooling team maintains two pipelines, both running on the [Gofannon](../gofannon/) agent platform:
+The Tooling team maintains two pipelines, both running on the [Gofannon](../platform/gofannon.md) agent platform:
 
 **ASVS Security Audit Pipeline** ([ASVS/](../../ASVS/)) — LLM-driven code analysis against OWASP ASVS v5.0.0 requirements. Uses architecture-aware domain scoping to audit 345 requirements across 3 levels. Produces per-requirement reports, consolidated findings, and GitHub issues. In production, piloted on ATR and Apache Steve.
 
@@ -67,9 +67,9 @@ The Tooling team maintains two pipelines, both running on the [Gofannon](../gofa
 
 ## Links
 
-- [ASVS Applicability Study](../roadmap/asvs-applicability.md) — where ASVS fits (web apps) and where it doesn't (libraries, backend services)
-- [Eval Framework](../roadmap/eval-framework.md) — test harness, fixtures, metrics, and operational error handling at scale
-- [Multi-Spec Roadmap](../roadmap/) — expanding the pipeline beyond ASVS to CWE Top 25, API Top 10, ASF Baseline, and SLSA
+- [ASVS Applicability Study](asvs-applicability.md) — where ASVS fits (web apps) and where it doesn't (libraries, backend services)
+- [Eval Framework](eval-framework.md) — test harness, fixtures, metrics, and operational error handling at scale
+- [Multi-Spec Roadmap]() — expanding the pipeline beyond ASVS to CWE Top 25, API Top 10, ASF Baseline, and SLSA
 - [OWASP ASVS v5.0.0 PDF](https://github.com/OWASP/ASVS/blob/v5.0.0/5.0/OWASP_Application_Security_Verification_Standard_5.0.0_en.pdf)
 - [OpenSSF Scorecard documentation](https://github.com/ossf/scorecard)
 - [OSS-CRS paper](https://arxiv.org/abs/2603.08566)

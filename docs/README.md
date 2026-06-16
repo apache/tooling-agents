@@ -1,17 +1,31 @@
 # Documentation
 
-### [gofannon/](gofannon/)
+## Responsible AI Initiative
 
-Platform setup and agent development guide for [Gofannon](https://github.com/The-AI-Alliance/gofannon), the agent runtime that powers review pipelines.
+### [rai/](rai/README.md)
 
-### [tooling/](tooling/)
+What the Responsible AI Initiative is and what it provides to the Foundation and
+its projects.
 
-Security tooling landscape — comparison of our pipelines with external tools (Scorecard, OSS-CRS, Strix, zizmor, and others), evaluation results, and how they complement each other.
+### [rai/roadmap/](rai/roadmap/README.md)
 
-### [roadmap/](roadmap/)
+A proposed [platform architecture](rai/roadmap/architecture.md) to support RAI:
+the `llm` gateway, `agents`, `mcp`, and the `advisor` governance layer.
 
-Where the pipeline is headed: eval framework, ASVS applicability analysis, multi-spec architecture for expanding beyond ASVS, and integration plans for CWE Top 25, API Top 10, ASF Baseline, and SLSA.
+## Supporting
+
+### [security-pipeline/](security-pipeline/README.md)
+
+The security audit pipeline: its roadmap, eval framework, and security-spec
+coverage (ASVS, CWE Top 25, API Top 10, ASF Baseline, SLSA).
+
+### [platform/](platform/)
+
+Setup and runbooks for the systems the platform depends on:
+[Gofannon](platform/gofannon.md) (the agent runtime) and the
+[vast.ai + OpenWebUI runbook](platform/vast-ai-openwebui-runbook.md) (self-hosted
+model serving PoC).
 
 ### [how-to-contribute.md](how-to-contribute.md)
 
-Contributor agreement and guidelines for the tooling-agents project.
+Contributor agreement and guidelines.
