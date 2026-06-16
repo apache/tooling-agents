@@ -1069,6 +1069,29 @@ If no duplicates: {"merges": []}"""
         for i, finding in enumerate(all_findings, 1):
             finding["global_id"] = f"FINDING-{i:03d}"
 
+        # Persist the structured findings list so downstream agents (e.g.
+        # asvs_compare_open_issues_prs) can read clean JSON instead of
+        # re-parsing the rendered consolidated.md. This is the same data we
+        # already hold in memory — global_id, title, severity, cwe,
+        # affected_files (with line numbers), asvs_sections — written once to
+        # a sibling namespace keyed off the same reports namespace the caller
+        # passed. Additive: does not change report rendering. Best-effort so a
+        # storage hiccup never aborts consolidation.
+        if reports_namespace_arg:
+            try:
+                findings_ns = data_store.use_namespace(
+                    f"consolidated_findings:{reports_namespace_arg}")
+                # One key holding the whole list; small relative to the report
+                # and read in a single get by the compare agent.
+                findings_ns.set("findings", json.dumps(all_findings, default=str))
+                print(f"  Persisted {len(all_findings)} structured finding(s) "
+                      f"to consolidated_findings:{reports_namespace_arg}",
+                      flush=True)
+            except Exception as _pf_e:
+                print(f"  WARN: could not persist structured findings "
+                      f"({type(_pf_e).__name__}: {_pf_e}); compare agent will "
+                      f"fall back to markdown parsing", flush=True)
+
         # Cross-references
         print("Building cross-references...")
 
