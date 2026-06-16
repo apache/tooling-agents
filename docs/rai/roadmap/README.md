@@ -19,6 +19,13 @@ See [architecture.md](architecture.md) for the full description; in brief:
 
 The proposal leaves open the formation of project committees which could include **LLM gateway and model management**, **agent harnesses**, and **MCP server frameworks**, which map directly onto the `llm`, `agents`, and `mcp` boxes above, and a **cross-cutting governance layer** which maps onto the `advisor` box.
 
+## Implementations
+
+Early work already maps onto some of the boxes above:
+
+- **`llm` gateway — [llmao / Hayward](https://github.com/andrewmusselman/llmao)** A thin litellm-proxy gateway fronted by asfquart: ASF identity, per-PMC budgets, a model catalog with governance metadata, and an OpenAI-compatible API. asfquart owns identity and per-PMC authorization; litellm owns the catalog, budgets, metering, and the API; the project is the seam between them plus a thin portal.
+- **`agents` — [tooling-gofannon](https://github.com/apache/tooling-gofannon)**. A provider- and model-agnostic toolkit and web application for prototyping AI agents and the lightweight web UIs that wrap them, with model access through LiteLLM.
+-
 ## Related
 
 - [../README.md](../README.md) — what RAI is.
