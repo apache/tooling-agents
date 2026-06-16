@@ -1,310 +1,227 @@
 # asvs_job_runner
 #
-# Lightweight in-process job queue with persistent state in CouchDB.
-# Drives per-component, per-section work for multi-component audit runs.
-# Supports resume-from-failure: a multi-day run that crashes can be
-# restarted with the same run_id and skips already-completed cells.
+# Job-state oracle for multi-component audit runs. gofannon has no concept
+# of an importable module — all code is an agent invoked by name — so the
+# job runner is an AGENT that owns the persistent job-state table and
+# answers per-job state operations. The ORCHESTRATOR drives the actual
+# concurrency loop (it holds the per-component pipeline closures, which
+# cannot cross an agent-call boundary) and calls this agent to decide
+# whether each job should run, and to record outcomes.
 #
-# Not a heavyweight workflow engine — just enough state to make long
-# runs survivable. ~200 lines.
+# Supports resume-from-failure: a run that crashes can be restarted with
+# the same run_id; already-DONE jobs are skipped and orphaned RUNNING jobs
+# (crashed mid-flight) are reset so they re-run.
 #
-# Usage:
-#   runner = JobRunner(run_id="airflow-2026-06-03", max_concurrent=4)
-#   results = await runner.run_all([
-#       lambda: _component_pipeline(c1),
-#       lambda: _component_pipeline(c2),
-#       ...
-#   ])
-#
-# State table layout (CouchDB namespace `audit_state:{run_id}`):
+# State table (CouchDB namespace `audit_state:{run_id}`):
 #   key:   {component}|{phase}|{section_or_NONE}
 #   value: JSON {
 #       status: queued|running|done|failed-retry|failed-fatal,
-#       attempts: int,
-#       last_error: str|null,
-#       started_at: iso8601|null,
-#       completed_at: iso8601|null,
-#       output_uri: str|null   # location of phase output in CouchDB
+#       attempts: int, last_error: str|null,
+#       started_at: iso|null, completed_at: iso|null, output_uri: str|null
 #   }
+#
+# Operations (input_dict["op"]):
+#
+#   "init"     -> reset orphaned RUNNING jobs to QUEUED (call once at start
+#                 of a run, before claiming any jobs). Returns how many were
+#                 reset. Idempotent.
+#     inputs:  run_id
+#
+#   "claim"    -> decide whether a job should run now. Returns a decision:
+#                   {"decision": "run",          "attempt": N}   run it
+#                   {"decision": "skipped-done", "output_uri": ...}
+#                   {"decision": "skipped-fatal","error": ...}
+#                 On "run" the job is marked RUNNING with attempt=N so a
+#                 concurrent/restarted runner won't double-claim it.
+#     inputs:  run_id, component, phase, section?(opt)
+#
+#   "complete" -> record success. Marks DONE.
+#     inputs:  run_id, component, phase, section?, output_uri?(opt)
+#
+#   "fail"     -> record a failed attempt. Returns whether to retry:
+#                   {"decision": "retry", "backoff_seconds": S, "attempt": N}
+#                   {"decision": "fatal", "attempt": N}
+#                 Marks QUEUED (retry) or FAILED_FATAL. The orchestrator is
+#                 responsible for sleeping backoff_seconds OUTSIDE its
+#                 concurrency gate before re-claiming.
+#     inputs:  run_id, component, phase, section?, error,
+#              is_rate_limit?(opt bool), is_timeout?(opt bool),
+#              max_attempts?(opt, default 3)
+#
+#   "summary"  -> snapshot of all job state for the run_id (by_status,
+#                 by_component). Read-only.
+#     inputs:  run_id
+#
+# Output: {"outputText": <JSON>} for every op (JSON so the orchestrator can
+# json.loads it). Errors surface as {"error": "..."} inside that JSON.
+#
+# No LLM call. Pure CouchDB state I/O.
 
-import asyncio
-import json
-import time
-from datetime import datetime, timezone
+QUEUED = "queued"
+RUNNING = "running"
+DONE = "done"
+FAILED_RETRY = "failed-retry"
+FAILED_FATAL = "failed-fatal"
+DEFAULT_MAX_ATTEMPTS = 3
 
 
-class JobRunner:
-    """
-    Concurrent job runner with CouchDB-backed state.
+async def run(input_dict, tools):
+    # Imports inside run() per gofannon convention (run() is recompiled in a
+    # fresh namespace at invocation time, so module-level imports/helpers do
+    # not survive — everything the op needs lives in here).
+    import json
+    from datetime import datetime, timezone
 
-    Each "job" is a unit of work to schedule and track. Jobs run on the
-    runner's worker pool up to max_concurrent in flight. State is persisted
-    so a crashed run can be resumed.
-    """
-
-    # Statuses
+    # State-status constants must be defined inside run() too, for the same
+    # reason: module-level names are not in scope when run() executes.
     QUEUED = "queued"
     RUNNING = "running"
     DONE = "done"
     FAILED_RETRY = "failed-retry"
     FAILED_FATAL = "failed-fatal"
+    DEFAULT_MAX_ATTEMPTS = 3
 
-    MAX_ATTEMPTS = 3
-    HEARTBEAT_INTERVAL_SEC = 30
+    def _now():
+        return datetime.now(timezone.utc).isoformat()
 
-    def __init__(self, run_id, max_concurrent=4, max_attempts=None):
-        self.run_id = run_id
-        self.state_ns_name = f"audit_state:{run_id}"
-        self.state_ns = data_store.use_namespace(self.state_ns_name)
-        self.semaphore = asyncio.Semaphore(max_concurrent)
-        if max_attempts is not None:
-            self.MAX_ATTEMPTS = max_attempts
+    def _key(component, phase, section=None):
+        return f"{component}|{phase}|{section if section else 'NONE'}"
 
-    # ----- State helpers -----
+    def _ns(run_id):
+        return data_store.use_namespace(f"audit_state:{run_id}")
 
-    def _key(self, component, phase, section=None):
-        section_part = section if section else "NONE"
-        return f"{component}|{phase}|{section_part}"
-
-    def _read_state(self, key):
+    def _read(ns, key):
         try:
-            raw = self.state_ns.get(key)
+            raw = ns.get(key)
             return json.loads(raw) if raw else None
         except Exception:
             return None
 
-    def _write_state(self, key, status, **kwargs):
-        existing = self._read_state(key) or {
-            "status": self.QUEUED,
-            "attempts": 0,
-            "last_error": None,
-            "started_at": None,
-            "completed_at": None,
-            "output_uri": None,
+    def _write(ns, key, status, **kwargs):
+        existing = _read(ns, key) or {
+            "status": QUEUED, "attempts": 0, "last_error": None,
+            "started_at": None, "completed_at": None, "output_uri": None,
         }
         existing["status"] = status
         for k, v in kwargs.items():
             existing[k] = v
-        self.state_ns.set(key, json.dumps(existing))
+        ns.set(key, json.dumps(existing))
+        return existing
 
-    def _now(self):
-        return datetime.now(timezone.utc).isoformat()
+    def _backoff_seconds(attempts, is_rate_limit):
+        b = min(60, 2 ** attempts)
+        if is_rate_limit:
+            b = max(b, 30)
+        return b
 
-    # ----- Resume support -----
+    try:
+        op = (input_dict.get("op") or "").strip()
+        run_id = (input_dict.get("run_id") or "").strip()
+        if not op:
+            return {"outputText": json.dumps({"error": "op is required "
+                    "(init|claim|complete|fail|summary)"})}
+        if not run_id:
+            return {"outputText": json.dumps({"error": "run_id is required"})}
 
-    def reset_orphaned_running_jobs(self):
-        """
-        On startup, find any state entries marked RUNNING (which means the
-        previous run crashed mid-job) and reset them to QUEUED so they can
-        be retried.
-        """
-        reset_count = 0
-        for key in self.state_ns.list_keys():
-            state = self._read_state(key)
-            if state and state.get("status") == self.RUNNING:
-                self._write_state(
-                    key,
-                    self.QUEUED,
-                    last_error=(
-                        f"Orphaned RUNNING state reset on runner startup "
-                        f"(previous worker likely crashed). "
-                        f"Will retry on next claim."
-                    ),
-                )
-                reset_count += 1
-        if reset_count > 0:
-            print(
-                f"[runner] reset {reset_count} orphaned RUNNING job(s) to "
-                f"QUEUED",
-                flush=True,
-            )
+        ns = _ns(run_id)
 
-    # ----- Job execution -----
+        # ----- init: reset orphaned RUNNING jobs to QUEUED -----
+        if op == "init":
+            reset = 0
+            for key in ns.list_keys():
+                st = _read(ns, key)
+                if st and st.get("status") == RUNNING:
+                    _write(ns, key, QUEUED, last_error=(
+                        "Orphaned RUNNING state reset on run init "
+                        "(previous worker likely crashed)."))
+                    reset += 1
+            print(f"[runner:{run_id}] init: reset {reset} orphaned RUNNING "
+                  f"job(s)", flush=True)
+            return {"outputText": json.dumps({"reset": reset})}
 
-    async def run_job(self, component, phase, callable_, section=None):
-        """
-        Run one job under the runner's semaphore. Persists state at every
-        transition. Skips if already DONE.
+        # ----- summary: read-only snapshot -----
+        if op == "summary":
+            by_status, by_component = {}, {}
+            for key in ns.list_keys():
+                st = _read(ns, key)
+                if not st:
+                    continue
+                s = st.get("status", "unknown")
+                by_status[s] = by_status.get(s, 0) + 1
+                comp = key.split("|")[0]
+                by_component.setdefault(comp, {})
+                by_component[comp][s] = by_component[comp].get(s, 0) + 1
+            return {"outputText": json.dumps({
+                "run_id": run_id, "by_status": by_status,
+                "by_component": by_component})}
 
-        Args:
-          component: str, component name from the manifest
-          phase: str, one of discover|audit|filter|consolidate
-          callable_: async callable returning a dict (the phase's result)
-          section: optional str, for per-section phases
+        # The remaining ops are per-job and need component/phase.
+        component = (input_dict.get("component") or "").strip()
+        phase = (input_dict.get("phase") or "").strip()
+        section = input_dict.get("section") or None
+        if not component or not phase:
+            return {"outputText": json.dumps({"error":
+                    "component and phase are required for "
+                    f"op={op}"})}
+        key = _key(component, phase, section)
+        state = _read(ns, key)
 
-        Returns:
-          The job's result dict, or None if already done / fatally failed.
-        """
-        key = self._key(component, phase, section)
-        state = self._read_state(key)
+        # ----- claim: decide run / skip, mark RUNNING on run -----
+        if op == "claim":
+            if state and state.get("status") == DONE:
+                print(f"[runner:{run_id}] SKIP {key} (already done)", flush=True)
+                return {"outputText": json.dumps({
+                    "decision": "skipped-done",
+                    "output_uri": state.get("output_uri")})}
+            if state and state.get("status") == FAILED_FATAL:
+                print(f"[runner:{run_id}] SKIP {key} (previously fatal)", flush=True)
+                return {"outputText": json.dumps({
+                    "decision": "skipped-fatal",
+                    "error": state.get("last_error")})}
+            attempt = (state.get("attempts", 0) if state else 0) + 1
+            _write(ns, key, RUNNING, attempts=attempt,
+                   started_at=_now(), last_error=None)
+            print(f"[runner:{run_id}] CLAIM {key} (attempt {attempt})", flush=True)
+            return {"outputText": json.dumps({
+                "decision": "run", "attempt": attempt})}
 
-        # Skip if already complete
-        if state and state.get("status") == self.DONE:
-            print(
-                f"[runner] SKIP {key} (already done in attempt "
-                f"{state.get('attempts', '?')})",
-                flush=True,
-            )
-            return {"status": "skipped-done", "output_uri": state.get("output_uri")}
+        # ----- complete: mark DONE -----
+        if op == "complete":
+            output_uri = input_dict.get("output_uri")
+            _write(ns, key, DONE, completed_at=_now(), output_uri=output_uri)
+            print(f"[runner:{run_id}] DONE {key}", flush=True)
+            return {"outputText": json.dumps({"decision": "done"})}
 
-        # Skip if fatally failed
-        if state and state.get("status") == self.FAILED_FATAL:
-            print(
-                f"[runner] SKIP {key} (previously fatal: "
-                f"{state.get('last_error', '?')[:120]})",
-                flush=True,
-            )
-            return {"status": "skipped-fatal", "error": state.get("last_error")}
+        # ----- fail: record attempt, decide retry vs fatal -----
+        if op == "fail":
+            error = input_dict.get("error") or "(no message)"
+            is_rate_limit = bool(input_dict.get("is_rate_limit", False))
+            is_timeout = bool(input_dict.get("is_timeout", False))
+            max_attempts = int(input_dict.get("max_attempts", DEFAULT_MAX_ATTEMPTS))
+            attempt = state.get("attempts", 1) if state else 1
 
-        # Claim the job. Retry as an internal loop (NOT recursion): the
-        # old code recursed into run_job while still holding self.semaphore
-        # and slept during backoff inside the held semaphore. Both are bugs
-        # at concurrency >= max_concurrent: asyncio.Semaphore is not
-        # reentrant, so N jobs all retrying would each hold a slot while
-        # waiting for a slot -> deadlock; and a backing-off job needlessly
-        # occupied a slot for up to 60s. Now the semaphore is held only for
-        # the attempt itself, and the backoff sleep happens after release.
-        attempts = (state.get("attempts", 0) if state else 0)
-
-        while True:
-            attempts += 1
-
-            async with self.semaphore:
-                self._write_state(
-                    key,
-                    self.RUNNING,
-                    attempts=attempts,
-                    started_at=self._now(),
-                    last_error=None,
-                )
-                try:
-                    result = await callable_()
-                    self._write_state(
-                        key,
-                        self.DONE,
-                        completed_at=self._now(),
-                        output_uri=(
-                            result.get("output_uri")
-                            if isinstance(result, dict)
-                            else None
-                        ),
-                    )
-                    print(
-                        f"[runner] DONE {key} (attempt {attempts})",
-                        flush=True,
-                    )
-                    return result
-
-                except Exception as e:
-                    err_type = type(e).__name__
-                    err_msg = str(e) or "(no message)"
-                    is_rate_limit = "RateLimitError" in err_type or "429" in err_msg
-
-                    if attempts >= self.MAX_ATTEMPTS:
-                        self._write_state(
-                            key,
-                            self.FAILED_FATAL,
-                            last_error=f"{err_type}: {err_msg}",
-                            completed_at=self._now(),
-                        )
-                        print(
-                            f"[runner] FATAL {key} after {attempts} "
-                            f"attempt(s): {err_type}: {err_msg[:120]}",
-                            flush=True,
-                        )
-                        return {"status": "failed-fatal", "error": err_msg}
-
-                    # Mark for retry; compute backoff. The sleep happens
-                    # AFTER the semaphore is released (below), so a
-                    # backing-off job does not hold a concurrency slot.
-                    self._write_state(
-                        key,
-                        self.QUEUED,
-                        last_error=f"{err_type}: {err_msg}",
-                    )
-                    backoff = min(60, 2 ** attempts)
-                    if is_rate_limit:
-                        backoff = max(backoff, 30)
-                    print(
-                        f"[runner] RETRY {key} after {backoff}s "
-                        f"(attempt {attempts}/{self.MAX_ATTEMPTS}): "
-                        f"{err_type}: {err_msg[:120]}",
-                        flush=True,
-                    )
-
-            # Semaphore released. Back off without holding a slot, then loop.
-            await asyncio.sleep(backoff)
-
-    # ----- Bulk run -----
-
-    async def run_all(self, jobs):
-        """
-        Run a list of jobs concurrently under the semaphore.
-
-        Each job is a tuple (component, phase, callable, section?) or a
-        dict with the same keys.
-        """
-        self.reset_orphaned_running_jobs()
-
-        tasks = []
-        for j in jobs:
-            if isinstance(j, dict):
-                component = j["component"]
-                phase = j["phase"]
-                callable_ = j["callable"]
-                section = j.get("section")
+            # Retry if attempts remain. Rate-limit / timeout are retryable by
+            # nature; other errors are retryable until the attempt cap.
+            if attempt < max_attempts:
+                _write(ns, key, QUEUED, last_error=str(error)[:500])
+                backoff = _backoff_seconds(attempt, is_rate_limit)
+                print(f"[runner:{run_id}] RETRY {key} (attempt {attempt}/"
+                      f"{max_attempts}, backoff {backoff}s): "
+                      f"{str(error)[:120]}", flush=True)
+                return {"outputText": json.dumps({
+                    "decision": "retry", "backoff_seconds": backoff,
+                    "attempt": attempt})}
             else:
-                component, phase, callable_ = j[0], j[1], j[2]
-                section = j[3] if len(j) > 3 else None
-            tasks.append(self.run_job(component, phase, callable_, section))
+                _write(ns, key, FAILED_FATAL, last_error=str(error)[:500],
+                       completed_at=_now())
+                print(f"[runner:{run_id}] FATAL {key} after {attempt} "
+                      f"attempt(s): {str(error)[:120]}", flush=True)
+                return {"outputText": json.dumps({
+                    "decision": "fatal", "attempt": attempt})}
 
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        return {"outputText": json.dumps({"error": f"unknown op: {op}"})}
 
-        # Print summary. Count each bucket explicitly; do NOT fold skips
-        # into success (the old `not in (failed-fatal, skipped-fatal)`
-        # counted skipped-done as a fresh success and miscounted raised
-        # exceptions). A successful phase result is a dict without a
-        # failure/skip status.
-        def _status(r):
-            if isinstance(r, dict):
-                return r.get("status")
-            return "exception"
-
-        completed = sum(1 for r in results if _status(r) in (None, "ok"))
-        failed = sum(1 for r in results if _status(r) == "failed-fatal")
-        skipped_done = sum(1 for r in results if _status(r) == "skipped-done")
-        skipped_fatal = sum(1 for r in results if _status(r) == "skipped-fatal")
-        raised = sum(1 for r in results if _status(r) == "exception")
-        print(
-            f"[runner] run complete: {completed} completed, "
-            f"{failed} fatal, "
-            f"{skipped_done} skipped (already done), "
-            f"{skipped_fatal} skipped (previously fatal), "
-            f"{raised} raised",
-            flush=True,
-        )
-
-        return results
-
-    # ----- Progress reporting -----
-
-    def progress_summary(self):
-        """
-        Snapshot of all job state for this run_id. Useful for tailing a
-        long-running audit.
-        """
-        summary = {
-            "run_id": self.run_id,
-            "by_status": {},
-            "by_component": {},
-        }
-        for key in self.state_ns.list_keys():
-            state = self._read_state(key)
-            if not state:
-                continue
-            status = state.get("status", "unknown")
-            summary["by_status"][status] = summary["by_status"].get(status, 0) + 1
-            component = key.split("|")[0]
-            comp_summary = summary["by_component"].setdefault(component, {})
-            comp_summary[status] = comp_summary.get(status, 0) + 1
-        return summary
+    except Exception as e:
+        import json as _json
+        return {"outputText": _json.dumps({
+            "error": f"{type(e).__name__}: {str(e) or '(no message)'}"})}

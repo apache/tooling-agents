@@ -626,15 +626,84 @@ async def run(input_dict, tools):
             for component in components:
                 _materialize_subnamespace(repo, component, components)
 
-            # Phase C: per-component pipelines under the job runner
-            from asvs_job_runner import JobRunner
-            runner = JobRunner(run_id=run_id, max_concurrent=max_component_concurrency)
-            jobs = [
-                (c["name"], "component",
-                 (lambda comp=c: _component_pipeline_call(comp, base_input)))
-                for c in components
-            ]
-            component_results = await runner.run_all(jobs)
+            # Phase C: per-component pipelines under the job-runner agent.
+            #
+            # gofannon has no importable modules, so the job runner is an
+            # AGENT (asvs_job_runner) that owns the persistent job-state
+            # table and answers claim/complete/fail/summary. The execution
+            # closures (_component_pipeline_call) cannot cross an agent-call
+            # boundary, so the concurrency loop lives HERE: this orchestrator
+            # holds the semaphore, runs each component's pipeline, and calls
+            # the job-runner agent to decide whether to run/skip and to
+            # record outcomes. Deadlock-safe: the backoff sleep happens
+            # OUTSIDE the semaphore (a backing-off job never holds a slot),
+            # and there is no recursion.
+            async def _runner_call(op, **fields):
+                resp = await gofannon_client.call(
+                    agent_name="asvs_job_runner",
+                    input_dict={"op": op, "run_id": run_id, **fields},
+                )
+                return json.loads(resp["outputText"])
+
+            # Reset any orphaned RUNNING jobs from a prior crashed run.
+            await _runner_call("init")
+
+            sem = asyncio.Semaphore(max_component_concurrency)
+            max_attempts = 3
+
+            async def _drive_component(component):
+                name = component["name"]
+                phase = "component"
+                while True:
+                    claim = await _runner_call(
+                        "claim", component=name, phase=phase)
+                    decision = claim.get("decision")
+                    if decision == "skipped-done":
+                        return {"component": name,
+                                "status": "skipped-done",
+                                "output_uri": claim.get("output_uri")}
+                    if decision == "skipped-fatal":
+                        return {"component": name,
+                                "status": "skipped-fatal",
+                                "error": claim.get("error")}
+                    # decision == "run": execute under the concurrency gate.
+                    try:
+                        async with sem:
+                            result = await _component_pipeline_call(
+                                component, base_input)
+                        output_uri = (result.get("consolidated_report_uri")
+                                      if isinstance(result, dict) else None)
+                        await _runner_call(
+                            "complete", component=name, phase=phase,
+                            output_uri=output_uri)
+                        return result
+                    except Exception as e:
+                        err_type = type(e).__name__
+                        err_msg = str(e) or "(no message)"
+                        fail = await _runner_call(
+                            "fail", component=name, phase=phase,
+                            error=f"{err_type}: {err_msg}",
+                            is_rate_limit=("RateLimitError" in err_type
+                                           or "429" in err_msg),
+                            is_timeout=("Timeout" in err_type),
+                            max_attempts=max_attempts)
+                        if fail.get("decision") == "retry":
+                            # Back off WITHOUT holding the semaphore slot,
+                            # then loop to re-claim.
+                            await asyncio.sleep(fail.get("backoff_seconds", 0))
+                            continue
+                        return {"component": name, "status": "failed-fatal",
+                                "error": err_msg}
+
+            component_results = await asyncio.gather(
+                *[_drive_component(c) for c in components],
+                return_exceptions=False,
+            )
+
+            # Log the final state snapshot from the runner agent.
+            summary = await _runner_call("summary")
+            print(f"[orchestrate] job-runner summary: "
+                  f"{json.dumps(summary.get('by_status', {}))}", flush=True)
 
             # Phase D: cross-component aggregation
             print(f"[orchestrate] cross-component aggregation", flush=True)
