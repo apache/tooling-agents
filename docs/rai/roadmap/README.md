@@ -8,7 +8,7 @@ metrics, and routing intelligence to keep it accountable.
 
 See [architecture.md](architecture.md) for the full description; in brief:
 
-- **Clients** — the 200+ Apache projects that consume the platform.
+- **Clients** — the 200+ Apache projects and Foundation committees and operations that consume the platform.
 - **Services** — `agents`, `mcp`, and the `llm` gateway that all model calls
   funnel through.
 - **Models** — first-party, Bedrock, and ASF-hosted backends.
