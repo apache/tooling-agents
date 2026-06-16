@@ -14,9 +14,9 @@ consumption**.
 
 ## The layers
 
-**Clients — the 200+ Apache projects.** Every project is a consumer of the
+**Clients — Projects, Foundation committees and operations.** Every project and Foundation committee can consume this 
 platform. They make requests into the services layer and get responses back. A
-project can also reach `llm` directly when it just needs a model, without going
+client can also reach `llm` directly when it just needs a model, without going
 through agents or tools.
 
 **Services — agents, mcp, and llm.** The request-handling layer:
