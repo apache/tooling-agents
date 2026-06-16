@@ -17,10 +17,7 @@ See [architecture.md](architecture.md) for the full description; in brief:
 
 ![ASF AI platform architecture](architecture.svg)
 
-The proposal names three project committees — **LLM gateway and model
-management**, **agent harnesses**, and **MCP server frameworks** — which map
-directly onto the `llm`, `agents`, and `mcp` boxes above, with `advisor` as the
-cross-cutting governance layer.
+The proposal leaves open the formation of project committees which could include **LLM gateway and model management**, **agent harnesses**, and **MCP server frameworks**, which map directly onto the `llm`, `agents`, and `mcp` boxes above, and a **cross-cutting governance layer** which maps onto the `advisor` box.
 
 ## Related
 
