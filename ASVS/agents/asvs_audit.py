@@ -1184,12 +1184,23 @@ Be thorough but precise. If something is done correctly, acknowledge it as a pos
 
             async with opus_semaphore:
                 entries_text = "".join(batch.values())
-                user_content = user_template + entries_text + inventory_section
+                # Stable prefix shared by every batch of this section:
+                # analysis system prompt + code inventory. Only the source
+                # (entries_text) varies per batch, so passing the stable
+                # text as cache_prefix lets Bedrock cache it across this
+                # section's batches (ephemeral ~5min TTL), billing it at
+                # ~10% on intra-section hits. The per-batch message carries
+                # only the volatile source + small user template.
+                opus_cache_prefix = analysis_system_prompt + "\n\n" + inventory_section
+                user_content = user_template + entries_text
                 messages = [
-                    {"role": "user", "content": analysis_system_prompt + "\n\n" + user_content}
+                    {"role": "user", "content": user_content}
                 ]
 
-                msg_tokens = count_message_tokens(messages, OPUS_PROVIDER, OPUS_MODEL)
+                # Count against the full assembled prompt (prefix is still
+                # sent on a cache miss / first call).
+                _full_for_count = [{"role": "user", "content": opus_cache_prefix + "\n\n" + user_content}]
+                msg_tokens = count_message_tokens(_full_for_count, OPUS_PROVIDER, OPUS_MODEL)
                 limit = int(OPUS_CONTEXT * 0.80)
                 print(f"    Opus batch {i+1}/{len(opus_batches)}: {msg_tokens} tokens, {len(batch)} files", flush=True)
 
@@ -1200,8 +1211,8 @@ Be thorough but precise. If something is done correctly, acknowledge it as a pos
                         results = []
                         for half_label, half_items in [("a", items[:mid]), ("b", items[mid:])]:
                             half_text = "".join([v for _, v in half_items])
-                            half_user = user_template + half_text + inventory_section
-                            half_messages = [{"role": "user", "content": analysis_system_prompt + "\n\n" + half_user}]
+                            half_user = user_template + half_text
+                            half_messages = [{"role": "user", "content": half_user}]
                             # Retries handled centrally. On exhaustion
                             # emit a sentinel string so the surviving
                             # half still produces output; the post-gather
@@ -1211,6 +1222,7 @@ Be thorough but precise. If something is done correctly, acknowledge it as a pos
                                     provider=OPUS_PROVIDER, model=OPUS_MODEL,
                                     messages=half_messages, parameters=OPUS_PARAMS,
                                     timeout=1800,
+                                    cache_prefix=opus_cache_prefix,
                                 )
                                 results.append(resp)
                                 print(f"      Sub-batch {half_label} complete", flush=True)
@@ -1222,12 +1234,13 @@ Be thorough but precise. If something is done correctly, acknowledge it as a pos
                         return combined
                     else:
                         key, entry_val = items[0]
-                        slim_messages = [{"role": "user", "content": analysis_system_prompt + "\n\n" + user_template + entry_val}]
+                        slim_messages = [{"role": "user", "content": user_template + entry_val}]
                         try:
                             resp, _ = await call_llm(
                                 provider=OPUS_PROVIDER, model=OPUS_MODEL,
                                 messages=slim_messages, parameters=OPUS_PARAMS,
                                 timeout=1800,
+                                cache_prefix=opus_cache_prefix,
                             )
                             analysis_cache_ns.set(cache_key, resp)
                             return resp
@@ -1239,6 +1252,7 @@ Be thorough but precise. If something is done correctly, acknowledge it as a pos
                         provider=OPUS_PROVIDER, model=OPUS_MODEL,
                         messages=messages, parameters=OPUS_PARAMS,
                         timeout=1800,
+                        cache_prefix=opus_cache_prefix,
                     )
                     analysis_cache_ns.set(cache_key, resp)
                     print(f"    Opus batch {i+1} complete", flush=True)
