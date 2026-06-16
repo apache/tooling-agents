@@ -54,16 +54,31 @@ async def run(input_dict, tools):
     import re
 
     try:
-        repo = (input_dict.get("repo") or "").strip()
-        component_results_raw = input_dict.get("component_results") or "[]"
-
-        try:
-            component_results = json.loads(component_results_raw)
-        except Exception as e:
+        # Inputs arrive as a JSON object in inputText (same convention as
+        # asvs_guidance_upload / asvs_push_github):
+        #   inputText: {"repo": "owner/repo", "component_results": [...]}
+        # component_results may be a list (preferred) or a JSON-string for
+        # backward tolerance.
+        input_text = input_dict.get("inputText", "")
+        if not input_text:
             return {"outputText": json.dumps({
-                "error": f"component_results must be valid JSON: {e}",
-            })}
+                "error": "inputText is required (JSON with 'repo' and 'component_results')"})}
+        try:
+            params = json.loads(input_text)
+        except Exception as e:
+            return {"outputText": json.dumps({"error": f"inputText must be valid JSON: {e}"})}
+        if not isinstance(params, dict):
+            return {"outputText": json.dumps({"error": "inputText must be a JSON object"})}
 
+        repo = (params.get("repo") or "").strip()
+        component_results = params.get("component_results", [])
+        # Tolerate component_results being a JSON-encoded string.
+        if isinstance(component_results, str):
+            try:
+                component_results = json.loads(component_results)
+            except Exception as e:
+                return {"outputText": json.dumps({
+                    "error": f"component_results string must be valid JSON: {e}"})}
         if not isinstance(component_results, list):
             return {"outputText": json.dumps({
                 "error": "component_results must be a JSON array",

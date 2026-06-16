@@ -611,7 +611,8 @@ async def run(input_dict, tools):
             # Phase A: detect components
             print(f"[orchestrate] component detection on {repo}", flush=True)
             comp_resp = await gofannon_client.call(
-                agent_name="asvs_components", input_dict={"repo": repo},
+                agent_name="asvs_components",
+                input_dict={"inputText": json.dumps({"repo": repo})},
             )
             manifest = json.loads(comp_resp["outputText"])
             if "error" in manifest:
@@ -641,7 +642,8 @@ async def run(input_dict, tools):
             async def _runner_call(op, **fields):
                 resp = await gofannon_client.call(
                     agent_name="asvs_job_runner",
-                    input_dict={"op": op, "run_id": run_id, **fields},
+                    input_dict={"inputText": json.dumps(
+                        {"op": op, "run_id": run_id, **fields})},
                 )
                 return json.loads(resp["outputText"])
 
@@ -709,8 +711,9 @@ async def run(input_dict, tools):
             print(f"[orchestrate] cross-component aggregation", flush=True)
             agg_resp = await gofannon_client.call(
                 agent_name="asvs_aggregate",
-                input_dict={"repo": repo,
-                            "component_results": json.dumps(component_results, default=str)},
+                input_dict={"inputText": json.dumps(
+                    {"repo": repo, "component_results": component_results},
+                    default=str)},
             )
 
             return {

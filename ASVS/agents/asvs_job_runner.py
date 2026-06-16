@@ -115,8 +115,28 @@ async def run(input_dict, tools):
         return b
 
     try:
-        op = (input_dict.get("op") or "").strip()
-        run_id = (input_dict.get("run_id") or "").strip()
+        # All inputs arrive as a JSON object in inputText (same convention as
+        # asvs_guidance_upload / asvs_push_github). A single inputText field
+        # carries whatever keys the op needs — which vary per op — so the
+        # agent's input schema stays one field regardless of operation:
+        #   init:     {"op":"init","run_id":...}
+        #   claim:    {"op":"claim","run_id":...,"component":...,"phase":...,"section":...?}
+        #   complete: {"op":"complete","run_id":...,"component":...,"phase":...,"section":...?,"output_uri":...?}
+        #   fail:     {"op":"fail","run_id":...,"component":...,"phase":...,"section":...?,
+        #              "error":...,"is_rate_limit":bool?,"is_timeout":bool?,"max_attempts":int?}
+        #   summary:  {"op":"summary","run_id":...}
+        input_text = input_dict.get("inputText", "")
+        if not input_text:
+            return {"outputText": json.dumps({"error": "inputText is required (JSON with at least 'op' and 'run_id')"})}
+        try:
+            params = json.loads(input_text)
+        except Exception as e:
+            return {"outputText": json.dumps({"error": f"inputText must be valid JSON: {e}"})}
+        if not isinstance(params, dict):
+            return {"outputText": json.dumps({"error": "inputText must be a JSON object"})}
+
+        op = (params.get("op") or "").strip()
+        run_id = (params.get("run_id") or "").strip()
         if not op:
             return {"outputText": json.dumps({"error": "op is required "
                     "(init|claim|complete|fail|summary)"})}
@@ -156,9 +176,9 @@ async def run(input_dict, tools):
                 "by_component": by_component})}
 
         # The remaining ops are per-job and need component/phase.
-        component = (input_dict.get("component") or "").strip()
-        phase = (input_dict.get("phase") or "").strip()
-        section = input_dict.get("section") or None
+        component = (params.get("component") or "").strip()
+        phase = (params.get("phase") or "").strip()
+        section = params.get("section") or None
         if not component or not phase:
             return {"outputText": json.dumps({"error":
                     "component and phase are required for "
@@ -187,17 +207,17 @@ async def run(input_dict, tools):
 
         # ----- complete: mark DONE -----
         if op == "complete":
-            output_uri = input_dict.get("output_uri")
+            output_uri = params.get("output_uri")
             _write(ns, key, DONE, completed_at=_now(), output_uri=output_uri)
             print(f"[runner:{run_id}] DONE {key}", flush=True)
             return {"outputText": json.dumps({"decision": "done"})}
 
         # ----- fail: record attempt, decide retry vs fatal -----
         if op == "fail":
-            error = input_dict.get("error") or "(no message)"
-            is_rate_limit = bool(input_dict.get("is_rate_limit", False))
-            is_timeout = bool(input_dict.get("is_timeout", False))
-            max_attempts = int(input_dict.get("max_attempts", DEFAULT_MAX_ATTEMPTS))
+            error = params.get("error") or "(no message)"
+            is_rate_limit = bool(params.get("is_rate_limit", False))
+            is_timeout = bool(params.get("is_timeout", False))
+            max_attempts = int(params.get("max_attempts", DEFAULT_MAX_ATTEMPTS))
             attempt = state.get("attempts", 1) if state else 1
 
             # Retry if attempts remain. Rate-limit / timeout are retryable by
