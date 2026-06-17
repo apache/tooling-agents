@@ -49,6 +49,115 @@ async def run(input_dict, tools):
     def _err(msg):
         return {"outputText": json.dumps({"error": msg})}
 
+    def _parse_findings(md, re):
+        """Parse '#### FINDING-NNN: Title' blocks out of consolidated.md, pulling
+        Severity / CWE / Files from the attribute table and the Description text.
+        Tolerant of LLM-rendered markdown variation."""
+        findings = []
+        # Split on the finding headers, keeping the header with its block.
+        parts = re.split(r"(?m)^####\s+FINDING-(\d+)\s*:\s*(.+?)\s*$", md)
+        # parts = [pre, id1, title1, body1, id2, title2, body2, ...]
+        i = 1
+        while i + 2 < len(parts) + 1 and i + 2 <= len(parts):
+            if i + 2 > len(parts):
+                break
+            fid_num = parts[i]
+            title = parts[i + 1].strip()
+            body = parts[i + 2] if i + 2 < len(parts) else ""
+            def _field(name):
+                m = re.search(rf"(?im)^\s*[|*-]*\s*{name}\s*[:|]\s*(.+?)\s*\|?\s*$", body)
+                if m:
+                    return m.group(1).strip().strip("|").strip()
+                return ""
+            severity = _field("Severity")
+            # strip emoji/markdown noise from severity
+            severity = re.sub(r"[^\w]", "", severity).strip() or severity.strip()
+            for sv in ("Critical", "High", "Medium", "Low", "Info", "Informational"):
+                if sv.lower() in (severity or "").lower():
+                    severity = sv
+                    break
+            cwe_raw = _field("CWE")
+            cwe_m = re.search(r"CWE[-\s]?(\d+)", cwe_raw or body, re.IGNORECASE)
+            cwe = f"CWE-{cwe_m.group(1)}" if cwe_m else ""
+            files_raw = _field("Files") or _field("File")
+            files = []
+            for chunk in re.split(r"[,\n]", files_raw):
+                c = chunk.strip().strip("`").strip()
+                c = re.sub(r"[:\s(].*$", "", c)   # drop :line and trailing
+                if c and "/" in c or (c and "." in c):
+                    files.append(c)
+            # description = first prose paragraph after the table
+            desc = ""
+            dm = re.search(r"(?is)Description\s*[:|]?\s*(.+?)(?:\n\s*\n|Remediation|####|---)", body)
+            if dm:
+                desc = re.sub(r"\s+", " ", dm.group(1)).strip()
+            findings.append({
+                "id": f"FINDING-{fid_num}", "title": title, "severity": severity or "Info",
+                "cwe": cwe, "files": files, "description": desc,
+            })
+            i += 3
+        return findings
+
+
+    def _render_md(repo, sha, findings, annotations,
+                   n_issues=0, n_prs=0, n_tracked=0, n_addressed=0,
+                   n_unaddressed=0):
+        lines = [f"# Cross-Reference: Findings vs Open Issues/PRs",
+                 f"",
+                 f"Repository: `{repo}`  ",
+                 f"Commit: `{sha}`  ",
+                 f"Snapshot: {n_issues} open issue(s), {n_prs} open PR(s) "
+                 f"(pinned to this commit)  ",
+                 f""]
+        # Summary line so a reader sees the headline before the per-finding
+        # detail. Each finding is tracked by an open issue, possibly
+        # addressed by an open PR, or neither (a candidate for filing).
+        lines.append(
+            f"**{len(findings)} finding(s):** {n_tracked} tracked by an open "
+            f"issue, {n_addressed} possibly addressed by an open PR, "
+            f"{n_unaddressed} not addressed (candidates for filing).")
+        # When there are no issues at all, say so explicitly — otherwise a
+        # wall of "candidate for filing" reads like the tool found nothing,
+        # when in fact the project simply has no open GitHub issues (e.g.
+        # projects that track bugs in Bugzilla/JIRA rather than GitHub).
+        if n_issues == 0:
+            lines.append(
+                f"")
+            lines.append(
+                f"> Note: this repository has **0 open GitHub issues** in the "
+                f"snapshot. \"Candidate for filing\" here means untracked on "
+                f"GitHub specifically; if the project tracks issues elsewhere "
+                f"(Bugzilla/JIRA), cross-check there before filing.")
+        lines.append("")
+        lines.append("---")
+        lines.append("")
+        by_id = {a["finding_id"]: a for a in annotations}
+        for fnd in findings:
+            a = by_id.get(fnd["id"], {})
+            lines.append(f"## {fnd['id']}: {fnd['title']}  ({fnd['severity']})")
+            tb = a.get("tracked_by") or []
+            ab = a.get("addressed_by") or []
+            rel = a.get("related") or []
+            if tb:
+                for r in tb:
+                    lines.append(f"- **Tracked by open issue** #{r['number']} "
+                                 f"({r.get('confidence','?')}): {r.get('title','')} "
+                                 f"— {r.get('why','')}")
+            if ab:
+                for r in ab:
+                    lines.append(f"- **Possibly addressed by open PR** #{r['number']} "
+                                 f"({r.get('confidence','?')} — verify, in flight): "
+                                 f"{r.get('title','')} — {r.get('why','')}")
+            if rel:
+                refs = ", ".join(f"#{r['number']}" for r in rel)
+                lines.append(f"- Related (same area, does not cover): {refs}")
+            if not tb and not ab:
+                lines.append(f"- No open issue or PR appears to address this — "
+                             f"candidate for filing.")
+            lines.append("")
+        return "\n".join(lines)
+
+
     try:
         input_text = input_dict.get("inputText", "")
         if not input_text:
@@ -311,7 +420,10 @@ async def run(input_dict, tools):
                           if not a["tracked_by"] and not a["addressed_by"])
 
         annotations.sort(key=lambda a: a["finding_id"])
-        report_md = _render_md(repo, sha, findings, annotations)
+        report_md = _render_md(repo, sha, findings, annotations,
+                               n_issues=len(issues), n_prs=len(prs),
+                               n_tracked=tracked, n_addressed=addressed,
+                               n_unaddressed=unaddressed)
 
         print(f"[compare] {len(findings)} findings: {tracked} tracked by open "
               f"issue, {addressed} addressed by open PR, {unaddressed} "
@@ -332,85 +444,3 @@ async def run(input_dict, tools):
         import json as _json
         return {"outputText": _json.dumps({
             "error": f"{type(e).__name__}: {str(e) or '(no message)'}"})}
-
-
-def _parse_findings(md, re):
-    """Parse '#### FINDING-NNN: Title' blocks out of consolidated.md, pulling
-    Severity / CWE / Files from the attribute table and the Description text.
-    Tolerant of LLM-rendered markdown variation."""
-    findings = []
-    # Split on the finding headers, keeping the header with its block.
-    parts = re.split(r"(?m)^####\s+FINDING-(\d+)\s*:\s*(.+?)\s*$", md)
-    # parts = [pre, id1, title1, body1, id2, title2, body2, ...]
-    i = 1
-    while i + 2 < len(parts) + 1 and i + 2 <= len(parts):
-        if i + 2 > len(parts):
-            break
-        fid_num = parts[i]
-        title = parts[i + 1].strip()
-        body = parts[i + 2] if i + 2 < len(parts) else ""
-        def _field(name):
-            m = re.search(rf"(?im)^\s*[|*-]*\s*{name}\s*[:|]\s*(.+?)\s*\|?\s*$", body)
-            if m:
-                return m.group(1).strip().strip("|").strip()
-            return ""
-        severity = _field("Severity")
-        # strip emoji/markdown noise from severity
-        severity = re.sub(r"[^\w]", "", severity).strip() or severity.strip()
-        for sv in ("Critical", "High", "Medium", "Low", "Info", "Informational"):
-            if sv.lower() in (severity or "").lower():
-                severity = sv
-                break
-        cwe_raw = _field("CWE")
-        cwe_m = re.search(r"CWE[-\s]?(\d+)", cwe_raw or body, re.IGNORECASE)
-        cwe = f"CWE-{cwe_m.group(1)}" if cwe_m else ""
-        files_raw = _field("Files") or _field("File")
-        files = []
-        for chunk in re.split(r"[,\n]", files_raw):
-            c = chunk.strip().strip("`").strip()
-            c = re.sub(r"[:\s(].*$", "", c)   # drop :line and trailing
-            if c and "/" in c or (c and "." in c):
-                files.append(c)
-        # description = first prose paragraph after the table
-        desc = ""
-        dm = re.search(r"(?is)Description\s*[:|]?\s*(.+?)(?:\n\s*\n|Remediation|####|---)", body)
-        if dm:
-            desc = re.sub(r"\s+", " ", dm.group(1)).strip()
-        findings.append({
-            "id": f"FINDING-{fid_num}", "title": title, "severity": severity or "Info",
-            "cwe": cwe, "files": files, "description": desc,
-        })
-        i += 3
-    return findings
-
-
-def _render_md(repo, sha, findings, annotations):
-    lines = [f"# Cross-Reference: Findings vs Open Issues/PRs",
-             f"", f"Repository: `{repo}`  ", f"Commit: `{sha}`  ",
-             f"Findings cross-referenced against the commit-pinned snapshot of "
-             f"open issues and PRs.", ""]
-    by_id = {a["finding_id"]: a for a in annotations}
-    for fnd in findings:
-        a = by_id.get(fnd["id"], {})
-        lines.append(f"## {fnd['id']}: {fnd['title']}  ({fnd['severity']})")
-        tb = a.get("tracked_by") or []
-        ab = a.get("addressed_by") or []
-        rel = a.get("related") or []
-        if tb:
-            for r in tb:
-                lines.append(f"- **Tracked by open issue** #{r['number']} "
-                             f"({r.get('confidence','?')}): {r.get('title','')} "
-                             f"— {r.get('why','')}")
-        if ab:
-            for r in ab:
-                lines.append(f"- **Possibly addressed by open PR** #{r['number']} "
-                             f"({r.get('confidence','?')} — verify, in flight): "
-                             f"{r.get('title','')} — {r.get('why','')}")
-        if rel:
-            refs = ", ".join(f"#{r['number']}" for r in rel)
-            lines.append(f"- Related (same area, does not cover): {refs}")
-        if not tb and not ab:
-            lines.append(f"- No open issue or PR appears to address this — "
-                         f"candidate for filing.")
-        lines.append("")
-    return "\n".join(lines)
