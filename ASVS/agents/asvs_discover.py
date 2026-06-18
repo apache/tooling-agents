@@ -25,6 +25,73 @@ async def run(input_dict, tools):
         import json
         import re
 
+        def _repair_truncated_json(s):
+            """Best-effort repair of JSON truncated mid-structure (the model
+            hit its output token cap). Walks the string tracking string/escape
+            state and the bracket stack, drops any trailing partial token after
+            the last complete element, and closes open strings/arrays/objects.
+            Returns a repaired string or None if it can't form anything valid.
+            Defined inside run() per the gofannon recompile convention (module-
+            level helpers are not in scope when run() executes)."""
+            if not s:
+                return None
+            stack = []
+            in_str = False
+            escaped = False
+            last_safe = None  # index just after the last completed value/element
+            for i, ch in enumerate(s):
+                if in_str:
+                    if escaped:
+                        escaped = False
+                    elif ch == "\\":
+                        escaped = True
+                    elif ch == '"':
+                        in_str = False
+                        last_safe = i + 1
+                    continue
+                if ch == '"':
+                    in_str = True
+                elif ch in "{[":
+                    stack.append("}" if ch == "{" else "]")
+                elif ch in "}]":
+                    if stack:
+                        stack.pop()
+                    last_safe = i + 1
+                elif ch in ",":
+                    last_safe = i  # cut BEFORE a dangling comma
+                elif ch.strip() == "" or ch.isdigit() or ch in "tfnaluersTFN.-+eE":
+                    if ch in "0123456789}]\"":
+                        last_safe = i + 1
+            # Truncate to the last structurally-safe point, then close opens.
+            if last_safe is None:
+                return None
+            head = s[:last_safe].rstrip().rstrip(",")
+            # Recompute the open-bracket stack for the truncated head, since
+            # last_safe may sit inside nested structure.
+            stack2 = []
+            in_str = False
+            escaped = False
+            for ch in head:
+                if in_str:
+                    if escaped:
+                        escaped = False
+                    elif ch == "\\":
+                        escaped = True
+                    elif ch == '"':
+                        in_str = False
+                    continue
+                if ch == '"':
+                    in_str = True
+                elif ch in "{[":
+                    stack2.append("}" if ch == "{" else "]")
+                elif ch in "}]":
+                    if stack2:
+                        stack2.pop()
+            if in_str:
+                head += '"'
+            head += "".join(reversed(stack2))
+            return head
+
         input_namespace = input_dict.get("inputNamespace", "")
 
         # ASVS level filtering — if set, exclude sections above this
@@ -437,19 +504,65 @@ Return ONLY a JSON array of strings:
             # discover step returns an error envelope and the orchestrator
             # aborts the audit — preferable to silently proceeding with
             # bogus domain assignments.
+            # (A) max_tokens raised from 32000 to 64000. The domain JSON echoes
+            # every file path into per-domain "files" arrays, so output size
+            # scales with repo file count, not domain count. On very large
+            # repos (e.g. hadoop) 32000 truncated the JSON mid-structure and
+            # json.loads failed with a cryptic "Expecting ',' delimiter". 64000
+            # is near Sonnet's practical output ceiling — it covers the large
+            # repos but is NOT unbounded; a big enough repo can still overflow,
+            # which is what (B) below handles gracefully.
             try:
                 result, _ = await call_llm(
                     provider=PROVIDER, model=MODEL,
                     messages=[{"role": "user", "content": DOMAIN_PROMPT}],
-                    parameters={**PARAMS, "max_tokens": 32000},
+                    parameters={**PARAMS, "max_tokens": 64000},
                     timeout=900,
                 )
-                json_match = re.search(r'\{[\s\S]*\}', result)
-                if json_match:
-                    return json.loads(json_match.group())
             except Exception as e:
-                print(f"  Domains FAILED: {e}", flush=True)
-            return None
+                print(f"  Domains FAILED (LLM call): {type(e).__name__}: {e}",
+                      flush=True)
+                return None
+
+            # (B) Truncation-tolerant parse. call_llm returns only (content,
+            # thoughts) — no finish_reason — so truncation can't be detected
+            # from API metadata; it's detected structurally here. Three tiers:
+            #   1. parse the matched {...} as-is (the normal path);
+            #   2. if that fails, attempt to REPAIR likely-truncated JSON by
+            #      closing unterminated strings/arrays/objects, then re-parse;
+            #   3. if repair also fails, emit a PRECISE diagnostic (output size
+            #      + offset) so the failure reads as "truncated/too large",
+            #      not a cryptic delimiter error.
+            json_match = re.search(r'\{[\s\S]*\}', result)
+            if not json_match:
+                print(f"  Domains FAILED: no JSON object found in domain "
+                      f"output ({len(result)} chars)", flush=True)
+                return None
+            raw = json_match.group()
+            try:
+                return json.loads(raw)
+            except json.JSONDecodeError as e:
+                repaired = _repair_truncated_json(raw)
+                if repaired is not None:
+                    try:
+                        parsed = json.loads(repaired)
+                        print(f"  WARNING: domain JSON was truncated/malformed "
+                              f"at ~char {e.pos} of {len(raw)}; recovered "
+                              f"{len(parsed.get('domains', []))} domain(s) via "
+                              f"repair. Some sections/files may be missing — "
+                              f"the orchestrator's chapter-pass fallback will "
+                              f"cover any unassigned sections.", flush=True)
+                        return parsed
+                    except json.JSONDecodeError:
+                        pass
+                # Unrecoverable. Make the cause unambiguous in the log.
+                near = raw[max(0, e.pos - 60):e.pos + 60]
+                print(f"  Domains FAILED: domain JSON unparseable at char "
+                      f"{e.pos}/{len(raw)} ({e.msg}). This is almost certainly "
+                      f"TRUNCATION — the model hit the output token cap while "
+                      f"emitting per-domain file lists for a very large repo. "
+                      f"Context near the break: ...{near}...", flush=True)
+                return None
 
         async def call_for_fp_guidance():
             try:
