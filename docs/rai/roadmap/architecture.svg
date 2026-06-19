@@ -6,9 +6,9 @@
 </defs>
 
 <text font-size="12" fill="#888780" x="40" y="26">Clients</text>
-<rect x="40" y="34" width="292" height="48" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="1"/>
+<rect x="40" y="34" width="292" height="48" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="2.5"/>
 <text font-size="14" font-weight="500" x="186" y="62" text-anchor="middle" fill="#0C447C">200+ Apache projects</text>
-<rect x="348" y="34" width="292" height="48" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="1"/>
+<rect x="348" y="34" width="292" height="48" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="2.5"/>
 <text font-size="14" font-weight="500" x="494" y="52" text-anchor="middle" fill="#0C447C">Foundation</text>
 <text font-size="11" x="494" y="68" text-anchor="middle" fill="#185FA5">committees and operations</text>
 
@@ -18,7 +18,7 @@
 <text font-size="12" fill="#888780" x="40" y="122">Services</text>
 <rect x="40" y="130" width="430" height="172" rx="12" fill="#EFEEFB" stroke="#534AB7" stroke-width="1"/>
 
-<rect x="64" y="158" width="150" height="44" rx="8" fill="#E1F5EE" stroke="#0F6E56" stroke-width="1"/>
+<rect x="64" y="158" width="150" height="44" rx="8" fill="#E1F5EE" stroke="#0F6E56" stroke-width="2.5"/>
 <text font-size="14" font-weight="500" x="139" y="184" text-anchor="middle" fill="#085041">agents</text>
 
 <rect x="64" y="232" width="150" height="44" rx="8" fill="#E1F5EE" stroke="#0F6E56" stroke-width="1"/>
@@ -61,4 +61,6 @@
 <text font-size="12" x="348" y="620" fill="#888780">requests</text>
 <line x1="300" y1="640" x2="340" y2="640" stroke="#6b6a64" stroke-width="1" fill="none" stroke-dasharray="5 4" marker-end="url(#ar)"/>
 <text font-size="12" x="348" y="644" fill="#888780">log consumption</text>
+<rect x="300" y="658" width="34" height="13" rx="3" fill="none" stroke="#6b6a64" stroke-width="2.5"/>
+<text font-size="12" x="348" y="668" fill="#888780">bold border: already in use</text>
 </svg>
