@@ -27,17 +27,17 @@ The platform has four parts, each mapping to a real need: **agents** (Gofannon) 
 
 ## Section 1 — ASF Foundation Needs
 
-Before describing tools, it is worth being precise about the problems they exist to solve. These are Foundation-level needs — they show up across projects, and no single project can solve them alone.
+Before describing tools, it is worth being precise about the problems they exist to solve. These are Foundation-level needs that show up across projects, and no single project can solve them alone.
 
-**Access without chaos.** AI models cost money and require credentials. Left to itself, every project signs up for its own provider accounts, holds its own API keys, and pays its own way — or more commonly, can't, and goes without. There is no shared catalog of what's approved, no view of what's being spent, and no way for the Foundation to extend a donated pool of credits across projects fairly. The need is *sanctioned, metered, shared access*: one place a committer logs into with their Apache identity and uses approved models, with cost attributed to their project.
+**Access without chaos.** AI models cost money and require credentials. Left to itself, every project signs up for its own provider accounts, holds its own API keys, and pays its own way, or more commonly, can't, and goes without. There is no shared catalog of what's approved, no view of what's being spent, and no way for the Foundation to extend a donated pool of credits across projects fairly. The need is *sanctioned, metered, shared access*: one place a committer logs into with their Apache identity and uses approved models, with cost attributed to their project.
 
-**Leverage without headcount.** Most projects don't have someone to build AI tooling. They have domain experts — the people who know the codebase, the release process, the security posture — who could describe exactly what an assistant should do but can't stand up an agent framework to do it. The need is a way for *subject-matter experts to compose tools themselves*, preview them, and put them to work, without committing to a framework or running servers.
+**Leverage without headcount.** Most projects don't have someone to build AI tooling. They have domain experts who know the codebase, the release process, and the security posture, who could describe exactly what an assistant should do but can't stand up an agent framework to do it. The need is a way for *subject-matter experts to compose tools themselves*, preview them, and put them to work, without committing to a framework or running servers.
 
-**Safety at the supply chain.** Apache ships software the world depends on. That makes its CI/CD pipelines, its release workflows, and its source code high-value targets. Projects are swamped, and the volume of low-quality AI-generated contributions and supply-chain attacks is rising. The need is *continuous, automated assessment* — security audits, workflow review, provenance checking — that scales to hundreds of projects without hundreds of security engineers.
+**Safety at the supply chain.** Apache ships software the world depends on. That makes its CI/CD pipelines, its release workflows, and its source code high-value targets. Projects are swamped, and the volume of low-quality AI-generated contributions and supply-chain attacks is rising. The need is *continuous, automated assessment*, including security audits, workflow review, and maintenance assistance, that scales to hundreds of projects.
 
-**Privacy and PII as a first-class concern.** Much of what the Foundation might want AI help with — private mailing lists, security coordination, membership discussions — carries personally identifiable information. Feeding that to a hosted model whose provider may log or retain prompts is materially different from a human reading the same archive. The need is a *data-handling story*: the ability to keep sensitive content on models the Foundation controls, and to make that choice explicitly rather than by accident.
+**Privacy and PII as a first-class concern.** Much of what Members and Committees already use AI for, such as private mailing lists, security coordination, and private committee discussions, carry personally identifiable information. Feeding that to a hosted model whose provider may log or retain prompts is materially different from a human reading the same archive. The need is a *data-handling story*: the ability to keep sensitive content on models the Foundation controls, and to make that choice explicitly rather than by accident.
 
-**Stewardship the Board can defend.** A multi-year, multi-million-dollar AI commitment needs accountable numbers: what was spent, on what, with what result. The need is an *observability and governance layer* that tracks delivery against spend, holds the catalog of what's approved, and keeps the whole thing vendor-neutral so no single provider becomes load-bearing.
+**Foundation and project stewardship the Board can defend.** A multi-year, multi-million-dollar AI commitment needs accountable numbers: what was spent, on what, with what result. The need is an *observability and governance layer* that tracks delivery against spend, holds the catalog of what's approved, and keeps the whole thing vendor-neutral so no single provider becomes load-bearing.
 
 ---
 
@@ -49,21 +49,21 @@ What exists today, in use or in active development. These pipelines have run aga
 
 The pipeline takes any GitHub-hosted codebase, downloads the source, auto-discovers its architecture, runs per-requirement security analysis against **OWASP ASVS v5.0.0** with Claude, triages findings against the project's own security policies to cut false positives, and produces a consolidated report with deduplicated findings and ready-to-file GitHub issues. Critical findings are redacted from public reports and emailed privately to the PMC; a leak-check quarantines anything that would expose a vulnerability before publication.
 
-It has produced full audits for **20 projects** so far — Airflow, Superset, Mina, Mahout, Steve, asfquart, log4net, trusted-releases, and others — several across multiple components and commits, with **capacity to run dozens per day**. It is being piloted broadly and rolled out across all projects.
+It has produced audits resulting in many new pull requests for **20 projects** so far: Airflow, Superset, Spark, Hadoop, Mina, Mahout, Steve, asfquart, log4net, Apache Trusted Releases, and [others](https://github.com/apache/tooling-agents/issues/11), with **capacity to run dozens per day**. It is being piloted broadly and rolled out across all projects.
 
 > **Real output — Apache Superset, ASVS L3**
 > 
-> 26 findings from 345 per-requirement source reports; 12 turned into actionable issues. Top risks included plaintext credentials written to a log file, a bypassable regex SVG sanitizer permitting stored XSS, a missing zip-bomb guard on Parquet uploads, and password change without current-password re-verification. Zero criticals, one high — the kind of grounded, specific result a PMC can act on the same day.
+> 26 findings from 345 per-requirement source reports; 12 turned into actionable issues. Top risks included plaintext credentials written to a log file, a bypassable regex SVG sanitizer permitting stored XSS, a missing zip-bomb guard on Parquet uploads, and password change without current-password re-verification. Zero criticals, one high, the kind of grounded, specific result a PMC can act on the same day.
 
-Today the pipeline is **funded out of AWS Bedrock credits** with hand-managed model access. As llmao matures it will draw model choice and per-project token budgeting from the gateway instead — making it the gateway's first internal customer and removing the last piece of bespoke credential handling.
+Today the pipeline is **funded out of AWS Bedrock credits** through Gofannon. As llmao matures, Gofannon will draw model choice and per-project token budgeting from the gateway instead, making it the gateway's first internal customer and removing the last piece of bespoke credential handling.
 
 ### GitHub Actions Security Review — `Delivered and in review`
 
-This pipeline scans every `.github/` workflow across an entire GitHub organization, caches the YAML, and runs two passes: an LLM classifier that labels each workflow (release, snapshot, CI, docs) and identifies which repos publish what and where, and a static analyzer that pattern-matches **12 security checks** from CRITICAL to INFO — `pull_request_target` checkout of PR head, script injection in `run` blocks, over-broad `GITHUB_TOKEN` permissions, unpinned actions, composite-action injection, and more.
+This pipeline scans every `.github/` workflow across an entire GitHub organization, caches the YAML, and runs two passes: an LLM classifier that labels each workflow (release, snapshot, CI, docs) and identifies which repos publish what and where, and a static analyzer that pattern-matches **12 security checks** from CRITICAL to INFO: `pull_request_target` checkout of PR head, script injection in `run` blocks, over-broad `GITHUB_TOKEN` permissions, unpinned actions, composite-action injection, and more.
 
-> **Real output — the Apache org scan**
+> **Real output — the publishing scan**
 > 
-> 634 repositories assessed; **197 publish packages** to npm, PyPI, Maven Central, Docker Hub, and crates.io. Found 2 publishing repos with high-severity findings, 6 with latent composite-action injection risk, 79 still using long-lived secrets where OIDC trusted publishing is available, 493 referencing actions by mutable tag instead of SHA pin, and 1,193 with no CODEOWNERS gate on workflow changes. Each finding is specific and tied to an action a PMC or Infra can take.
+> 634 repositories assessed; **197 publish packages** to npm, PyPI, Maven Central, Docker Hub, and crates.io. Found 2 publishing repos with high-severity findings, 6 with latent composite-action injection risk, 79 still using long-lived secrets where OIDC trusted publishing is available, and 493 referencing actions by mutable tag instead of SHA pin. Each finding is specific and tied to an action a PMC or Infra can take.
 
 ### GitHub Actions Runner Usage Analysis — `Delivered and in review`
 
@@ -71,11 +71,11 @@ A cost-and-waste companion to the security review: it analyzes runner usage acro
 
 > **Real output — runner analysis**
 > 
-> 4,912 workflows across 1,216 repositories analyzed; 5,220 efficiency issues detected. The heaviest consumers — Beam, Spark, and others with hundreds of workflows and large matrix expansions — are ranked by estimated runner waste so Infra can target the highest-impact fixes first.
+> 4,912 workflows across 1,216 repositories analyzed; 5,220 efficiency issues detected. The heaviest consumers with hundreds of workflows and large matrix expansions are ranked by estimated runner waste so Infra can target the highest-impact fixes first.
 
 ### GitHub Issue Triage Agent (gh-helper) — `Experiment in development`
 
-A Gofannon agent that reads a repository's open issues, builds a structured map of the codebase, and posts per-issue triage comments that **cite real code with line ranges**, propose grounded patches, and flag stale issues for closure. It grounds every citation against the actual source — replacing the model's claimed line numbers with real ones and dropping hallucinated citations entirely — and it reads prior human discussion on the issue so it reflects decisions the team has already made rather than re-proposing them. This is the "read-and-comment" iteration; the next opens PRs.
+A Gofannon agent that reads a repository's open issues, builds a structured map of the codebase, and posts per-issue triage comments that **cite real code with line ranges**, propose grounded patches, and flag stale issues for closure. It grounds every citation against the actual source, replacing the model's claimed line numbers with real ones and dropping hallucinated citations, and it reads prior human discussion on the issue so it reflects decisions the team has already made rather than re-proposing them. This is the "read-and-comment" iteration; the next opens PRs.
 
 ---
 
@@ -86,10 +86,10 @@ Mapping what exists against what the Foundation needs makes the gaps precise and
 | Need | What exists | Gap |
 |---|---|---|
 | **Expert-built tooling** | Gofannon: agents, web UIs, multi-provider. In use for the pipelines below. | Breadth of use cases; a shared library of reusable skills and agent definitions. |
-| **Shared, metered model access** | llmao proof of concept: gateway, per-PMC budgets, catalog, metering, OpenAI-compatible API. | Hardening to production at `llm.apache.org`; real ASF OAuth wiring; migrating the security pipeline onto it. |
-| **Safe tool federation** | Early MCP servers from ComDev and the Incubator (see Section 5). | **MCP management layer.** Federation, registry, and governance over many servers. |
-| **Privacy / PII handling** | Self-hosted and Bedrock options identified; vast.ai PoC underway (Section 4). | A settled data-handling policy and a controlled-model path wired into the gateway. |
-| **Cost & quality stewardship** | Per-project budgets in llmao; run telemetry in the pipelines. | **Advisor layer.** Foundation-wide catalog, metrics, routing, and defensible eval numbers. |
+| **Shared, metered model access** | llmao proof of concept: gateway, per-PMC budgets, catalog, metering, OpenAI-compatible API. | Building toward production at `llm.apache.org`. |
+| **Safe tool federation** | Early MCP servers from ComDev and the Incubator (see Section 7). | **MCP management layer.** Federation, registry, and governance over many servers. |
+| **Privacy / PII handling** | Self-hosted and Bedrock options identified; vast.ai PoC underway (Section 5). | A settled data-handling policy and a controlled-model path wired into the gateway. |
+| **Cost & quality stewardship** | Per-project metering in llmao; run telemetry in the pipelines. | **Advisor layer.** Foundation-wide catalog, metrics, routing, and defensible eval numbers. |
 | **Continuous security assessment** | ASVS audit, GHA review, runner analysis: all delivered. | Rollout to all projects (underway); more specs; eval infrastructure to defend the numbers. |
 
 The **application work is furthest along** (security pipelines delivered, agents in use), the **gateway is a working proof of concept**, and the open layers are **MCP management** and the **advisor**.
@@ -116,7 +116,7 @@ A committer signs in with their Apache identity, picks an approved model, and ma
 
 ### mcp — tool federation · *build-or-adopt decision open*
 
-The layer that lets agents reach real systems — issue trackers, mailing-list archives, release metadata — through the Model Context Protocol, safely and with governance. This is in concept mode, but it is not starting from nothing: ComDev and the Incubator have already shipped working MCP servers (see Section 5). The open question is how to manage many such servers under one governed, discoverable layer: the same build-thin-versus-adopt question llmao already answered for the gateway.
+The layer that lets agents reach real systems like issue trackers, mailing-list archives, release metadata through the Model Context Protocol, safely and with governance. This is in concept mode, but it is not starting from nothing: ComDev and the Incubator have already shipped working MCP servers (see Section 7). The open question is how to manage many such servers under one governed, discoverable layer: the same build-thin-versus-adopt question llmao already answered for the gateway.
 
 ### advisor — governance & intelligence · *in design*
 
@@ -124,7 +124,7 @@ The layer that makes the platform accountable: the catalog of approved models an
 
 ---
 
-## Section 4a — Models and the Privacy Question
+## Section 5 — Models and the Privacy Question
 
 The gateway is deliberately agnostic about where a model runs. That is not just flexibility for its own sake; it is how the Foundation answers the privacy and PII question on its own terms. The `models` layer behind the gateway has three classes, and the difference between them is a data-handling decision as much as a capability one.
 
@@ -136,11 +136,11 @@ The gateway is deliberately agnostic about where a model runs. That is not just 
 
 > **Cost, speed, and quality**
 > 
-> Model choice at Apache scale, especially with the varied workloads and volume of calls needed, is a challenge answered by this Foundational layer. Gofannon out of the box allows agents to make calls to all of these categories of providers, and llmao shares the same agnostic stance toward providers, including ASF-hosted models, enabling the Foundation to guide a balance of the right tool for every job, governing cost and monitoring speed and quality performance.   
+> Model choice at Apache scale, especially with the varied workloads and volume of calls needed, is a challenge answered by this Foundational layer. Gofannon out of the box allows agents to make calls to all of these categories of providers, and llmao shares the same agnostic stance toward providers, including ASF-hosted models, enabling the Foundation to guide a balance of the right tool for every job, governing cost and monitoring speed and quality performance.
 
 ---
 
-## Section 5 — What Projects Can Build: Agent Use Cases
+## Section 6 — What Projects Can Build: Agent Use Cases
 
 The security pipelines are the first agents, not the only ones. Once a project has the workbench and the gateway, the question becomes: what would a maintainer actually want an assistant to do? These are the kinds of questions agents answer well.
 
@@ -166,7 +166,7 @@ The common thread: each is a question a domain expert can *state* precisely but 
 
 ---
 
-## Section 6 — What MCP Federation Unlocks: Tool Server Use Cases
+## Section 7 — What MCP Federation Unlocks: Tool Server Use Cases
 
 If agents are the workers, MCP servers are the governed connections that let an agent reach real systems. A management layer over many such servers is what turns one-off integrations into a catalog any project can draw on. ComDev and the Incubator have already built servers worth federating.
 
@@ -191,7 +191,7 @@ If agents are the workers, MCP servers are the governed connections that let an 
 
 ---
 
-## Section 7 — Future Work
+## Section 8 — Future Work
 
 Where the effort goes next, across the open layers and the projects that grow out of this foundation.
 
@@ -201,7 +201,7 @@ The federation and governance layer over the MCP servers the community is alread
 
 ### Advisor — `In design`
 
-Unify the existing per-project budgets and run telemetry into a Foundation-wide catalog, metrics surface, and policy-driven routing, including the privacy routing described in Section 4a. This is the layer that lets the Board see delivery against spend and lets the platform make the safe model choice automatically.
+Unify the existing per-project budgets and run telemetry into a Foundation-wide catalog, metrics surface, and policy-driven routing, including the privacy routing described in Section 5. This is the layer that lets the Board see delivery against spend and lets the platform make the safe model choice automatically.
 
 ### Touchstone — eval & operational QA — `Potential TLP`
 
@@ -213,7 +213,7 @@ A library of reusable skills and `agents.md` definitions that projects can pick 
 
 ### Continued agent use cases — `Ongoing`
 
-The agents in Section 5 are a backlog, not a wishlist. gh-helper's next iteration opens PRs rather than just commenting. Contribution-quality assessment, dependency triage, sanctioned summarization, and incubator provenance checking each become their own agent on the shared substrate — every one metered through the gateway and measured through the advisor.
+The agents in Section 6 are a backlog, not a wishlist. gh-helper's next iteration opens PRs rather than just commenting. Contribution-quality assessment, dependency triage, sanctioned summarization, and incubator provenance checking each become their own agent on the shared substrate, each one metered through the gateway and measured through the advisor.
 
 > **On TLP work product and contributions**
 > 
