@@ -834,6 +834,113 @@ async def run(input_dict, tools):
             except Exception as e:
                 print(f"[filter] WARN: guidance namespace {gns_name}: {e}")
 
+        # ----------------------------------------------------------------
+        # Link-following (one hop): a policy doc often POINTS to the real
+        # threat model rather than containing it, e.g. SECURITY.md saying
+        # "for the threat model, trust boundaries, and design decisions see
+        # docs/reference/security.md". Filename-based discovery + basename
+        # priority only catch such a target by luck (if it happens to be
+        # named like a canonical policy doc). Here we honor the explicit
+        # human signal: extract relative links from each discovered policy
+        # doc to other in-repo .md/.rst files, fetch them, and add them at
+        # the SAME priority tier as the doc that linked them. A doc that
+        # SECURITY.md (tier 1) designates as the threat model thus inherits
+        # tier 1 — by designation, not by filename.
+        #
+        # Bounded and fail-soft: one hop only, repo-local doc files only,
+        # capped total, dedup against what we already have, skip anchors and
+        # external URLs. Never raises into the pipeline.
+        try:
+            LINK_RE = re.compile(r"\[[^\]]*\]\(([^)]+)\)")
+            DOC_EXTS = (".md", ".rst", ".txt")
+            MAX_FOLLOWED = 12          # cap new docs pulled in via links
+            followed_count = 0
+            # basenames/keys we already hold, to avoid re-adding
+            have_keys = {c[2].lower() for c in all_candidates}
+            have_basenames = {c[2].rsplit("/", 1)[-1].lower() for c in all_candidates}
+
+            def _resolve_rel(base_key, link):
+                # Resolve a relative link against the linking doc's directory.
+                # Strip anchors/query, reject absolute URLs and mailto.
+                link = link.strip().split("#", 1)[0].split("?", 1)[0].strip()
+                if not link:
+                    return None
+                low = link.lower()
+                if low.startswith(("http://", "https://", "mailto:", "//", "ftp:")):
+                    return None
+                if not low.endswith(DOC_EXTS):
+                    return None
+                base_dir = base_key.rsplit("/", 1)[0] if "/" in base_key else ""
+                if link.startswith("/"):
+                    # repo-absolute
+                    parts = link.lstrip("/").split("/")
+                else:
+                    parts = (base_dir.split("/") if base_dir else []) + link.split("/")
+                # normalize . and ..
+                stack = []
+                for p in parts:
+                    if p in ("", "."):
+                        continue
+                    if p == "..":
+                        if stack:
+                            stack.pop()
+                        continue
+                    stack.append(p)
+                return "/".join(stack) if stack else None
+
+            # Snapshot the discovered docs to walk (don't mutate while iterating).
+            seed_docs = list(all_candidates)
+            for prio, label, key, content in seed_docs:
+                if followed_count >= MAX_FOLLOWED:
+                    break
+                # Only follow from genuine policy docs, not from arbitrary
+                # tier-4 matches, to keep the hop meaningful. Tiers 1-3.
+                if prio > 3:
+                    continue
+                for m in LINK_RE.finditer(content or ""):
+                    if followed_count >= MAX_FOLLOWED:
+                        break
+                    target = _resolve_rel(key, m.group(1))
+                    if not target:
+                        continue
+                    tkey = target.lower()
+                    tbase = target.rsplit("/", 1)[-1].lower()
+                    if tkey in have_keys or tbase in have_basenames:
+                        continue
+                    # Try the local source namespace first (already downloaded),
+                    # then fall back to GitHub for repo-root-relative docs.
+                    tcontent = None
+                    raw = source_all.get(target)
+                    if raw is None:
+                        # case-insensitive local lookup
+                        for sk, sv in source_all.items():
+                            if sk.lower() == tkey:
+                                raw = sv
+                                break
+                    if raw is not None:
+                        if isinstance(raw, dict):
+                            tcontent = (raw.get("report") or raw.get("content")
+                                        or raw.get("body") or json.dumps(raw))
+                        else:
+                            tcontent = raw if isinstance(raw, str) else str(raw)
+                    if not tcontent and owner_repo_root:
+                        tcontent = await _fetch_github_file(owner_repo_root, target)
+                    if not tcontent or len(tcontent) < 200:
+                        continue
+                    # Inherit the LINKING doc's priority — the designation
+                    # ("see X for the threat model") is the authority signal.
+                    all_candidates.append(
+                        (prio, f"linked-from[{key}]::{target}", target, tcontent))
+                    have_keys.add(tkey)
+                    have_basenames.add(tbase)
+                    followed_count += 1
+                    print(f"[filter] followed link {key} -> {target} "
+                          f"(inherited priority {prio})")
+            if followed_count:
+                print(f"[filter] link-following added {followed_count} doc(s)")
+        except Exception as e:
+            print(f"[filter] WARN: link-following skipped: {type(e).__name__}: {e}")
+
         # Sort by priority globally; within a tier, prefer shorter docs
         # (more likely to be canonical/concise) and stable filename order
         all_candidates.sort(key=lambda c: (c[0], len(c[3]), c[2].lower()))
