@@ -305,36 +305,58 @@ async def run(input_dict, tools):
             print(f"  WARNING: Could not fetch commit hash ({e}), using 'latest'", flush=True)
             commit_hash = "latest"
 
-        # Snapshot open issues + PRs pinned to this exact commit, so the
-        # post-consolidation cross-reference compares findings against a fixed
-        # point (what was open as of commit_hash) rather than a moving branch.
-        # Best-effort: a failure here must not abort the audit.
-        try:
-            snap_resp = await gofannon_client.call(
-                agent_name="asvs_fetch_issues_prs",
-                input_dict={"inputText": json.dumps({
-                    "repo": repo_owner_name,
-                    "sha": commit_hash,
-                    "token": source_token,
-                })},
-            )
-            _snap = json.loads(snap_resp.get("outputText", "{}"))
-            if "error" in _snap:
-                print(f"  WARNING: issue/PR snapshot failed: {_snap['error']}", flush=True)
-            else:
-                _c = _snap.get("counts", {})
-                _done = "complete" if _snap.get("complete", True) else "INCOMPLETE"
-                print(f"  Issue/PR snapshot ({_done}): {_c.get('issues','?')} issues, "
-                      f"{_c.get('prs','?')} PRs @ {commit_hash}", flush=True)
-        except Exception as e:
-            print(f"  WARNING: issue/PR snapshot call failed ({e}); "
-                  f"cross-reference will be skipped", flush=True)
+        # ---- Output path layout (scans-style) ----------------------------
+        # outputDirectory is the user-supplied base only (e.g. "scans"). The
+        # pipeline builds the rest:
+        #   {base}/{segments-below-org}/{leaf}
+        # where segments-below-org mirrors the repo path under apache/ as
+        # nested directories, and leaf encodes the scan identity:
+        #   {flattened-segments}-{YYYY-MM-DD}-{short_sha}
+        # The audit model is NOT in the path (it lives in metadata.yml). For a
+        # plain repo (no sub-component) the segments are [repo_short_name], so
+        # the leaf doubles the name (e.g. fineract-fineract-DATE-SHA), matching
+        # the org/project/component convention where component == repo name.
+        from datetime import datetime, timezone
+        scan_date_dt = datetime.now(timezone.utc)
+        scan_date_ymd = scan_date_dt.strftime("%Y-%m-%d")
+        short_sha = commit_hash  # already 7-char (or "latest")
 
-        repo_path_segment = repo_short_name
+        # segments below the org reflect the REAL path only. The leaf name is
+        # {project}[-{sub-path-segments}]-{date}-{sha}: it doubles ONLY when a
+        # real source_path_prefix exists (e.g. superset/superset -> nesting
+        # superset/superset, leaf superset-superset-...). A run on all of a
+        # repo (no sub-path) is single (fineract -> fineract-..., NOT
+        # fineract-fineract). Nothing is synthesized.
         if source_path_prefix:
-            repo_path_segment += f"/{source_path_prefix}"
-        output_directory = f"{output_directory.strip('/')}/{repo_path_segment}/{commit_hash}"
+            comp_segs = [p for p in source_path_prefix.split("/") if p]
+            segments_below_org = [repo_short_name] + comp_segs
+        else:
+            segments_below_org = [repo_short_name]
+
+        nesting_path = "/".join(segments_below_org)
+        leaf_stem = "-".join(segments_below_org)
+        leaf_dir = f"{leaf_stem}-{scan_date_ymd}-{short_sha}"
+
+        base_dir = output_directory.strip("/")
+        output_directory = f"{base_dir}/{nesting_path}/{leaf_dir}"
         push_directory = output_directory
+
+        # Captured for metadata.yml (written at end of run). 'repo' reflects
+        # the real path: apache/<repo>, plus the sub-path only if one exists
+        # (e.g. apache/superset for a whole-repo run; apache/superset/superset
+        # or apache/airflow/providers/google when a sub-path is scanned).
+        scan_project = repo_short_name
+        scan_repo_full = repo_owner_name + (f"/{source_path_prefix}" if source_path_prefix else "")
+        scan_meta = {
+            "project": scan_project,
+            "repo": scan_repo_full,
+            "head_sha": commit_hash,
+            "short_sha": short_sha,
+            "scan_date": scan_date_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "asvs_level_input": input_dict.get("asvsLevel") or input_dict.get("asvs_level") or "",
+            "branch": branch or "",
+            "leaf_dir": leaf_dir,
+        }
 
         # Source identifier appended to every report commit message so each
         # commit reads as "<commit subject> [source: owner/repo[/path] @ sha]"
@@ -1355,48 +1377,97 @@ async def run(input_dict, tools):
                     print(f"  Consolidation FAILED: {err_excerpt}", flush=True)
                 else:
                     print(f"  Consolidation done", flush=True)
-                    # Cross-reference findings against the commit-pinned
-                    # open-issue/PR snapshot. Always runs after a successful
-                    # consolidation. Best-effort: never fail the run on it.
+
+                    # ---- Write metadata.yml into the leaf dir -------------
+                    # Mirrors the scans-style manifest: project/repo/sha/date,
+                    # models, asvs level, threat-model URL, findings_total, and
+                    # the supporting files actually present. Best-effort: a
+                    # failure here never fails the run.
                     try:
-                        cmp_resp = await gofannon_client.call(
-                            agent_name="asvs_compare_open_issues_prs",
-                            input_dict={"inputText": json.dumps({
-                                "repo": repo_owner_name,
-                                "sha": commit_hash,
-                                "reports_namespace": filtered_reports_namespace,
-                            })},
+                        # findings_total: parse consolidate's "Total findings: N"
+                        ftotal = ""
+                        import re as _re
+                        m = _re.search(r"Total findings:\s*(\d+)", consolidate_output)
+                        if m:
+                            ftotal = int(m.group(1))
+
+                        # audit models actually used (orchestrator constants).
+                        # ASVS_AUDIT_MODELS is defined near the top of run();
+                        # fall back to a sane default if absent.
+                        try:
+                            models_list = ASVS_AUDIT_MODELS
+                        except NameError:
+                            models_list = ["opus-4.8", "sonnet-4.6", "haiku-4.5"]
+
+                        # threat-model URL: SECURITY.md at the audited sha.
+                        tm_url = (f"https://github.com/{repo_owner_name}/blob/"
+                                  f"{commit_hash}/SECURITY.md")
+
+                        # supporting files: the analysis artifacts that this
+                        # run actually produced. Probe the reports namespace /
+                        # known outputs rather than hard-coding, since e.g.
+                        # issues_cross_reference.md is absent when there are no
+                        # issues/PRs to compare.
+                        candidate_support = [
+                            "_filter_drop_log.md", "_review_queue.md",
+                            "_security_profile.md", "_suggested_audit_guidance.md",
+                            "consolidated.md", "issues.md",
+                            "issues_cross_reference.md",
+                        ]
+                        present_support = []
+                        try:
+                            chk_ns = data_store.use_namespace(filtered_reports_namespace)
+                            present_keys = set(chk_ns.list_keys() or [])
+                        except Exception:
+                            present_keys = set()
+                        for fn in candidate_support:
+                            # consolidated.md/issues.md always produced on a
+                            # successful consolidate; the _*.md come from the
+                            # relevance filter; cross-ref only if it ran.
+                            if fn in ("consolidated.md", "issues.md"):
+                                present_support.append(fn)
+                            elif fn in present_keys or any(k.endswith(fn) for k in present_keys):
+                                present_support.append(fn)
+                        if "cross_reference_done" in dir() and cross_reference_done:
+                            if "issues_cross_reference.md" not in present_support:
+                                present_support.append("issues_cross_reference.md")
+
+                        def _yml_line(k, v):
+                            return f"{k+':':<18} {v}"
+                        meta_lines = [
+                            _yml_line("project", scan_meta["project"]),
+                            _yml_line("repo", scan_meta["repo"]),
+                            _yml_line("head_sha", scan_meta["head_sha"]),
+                            _yml_line("short_sha", scan_meta["short_sha"]),
+                            _yml_line("scan_date", scan_meta["scan_date"]),
+                            _yml_line("audit_models", "[" + ", ".join(models_list) + "]"),
+                            _yml_line("asvs_level", (level or scan_meta["asvs_level_input"] or "L1")),
+                            _yml_line("threat_model", tm_url),
+                            _yml_line("findings_total", ftotal),
+                            _yml_line("supporting_files", "[" + ", ".join(sorted(present_support)) + "]"),
+                            _yml_line("sanity_check", "PENDING"),
+                            _yml_line("sanity_checked_by", "UNSET"),
+                            _yml_line("sanity_check_date", "UNSET"),
+                        ]
+                        meta_yaml = "\n".join(meta_lines) + "\n"
+
+                        push_res = await gofannon_client.call(
+                            agent_name="asvs_push_github",
+                            input_dict={
+                                "inputText": "\n".join([
+                                    f"repo: {push_repo}",
+                                    f"token: {push_token}",
+                                    f"directory: {push_directory}",
+                                    f"filename: metadata.yml",
+                                    f"source: {source_id}",
+                                ]),
+                                "fileContents": meta_yaml,
+                            },
                         )
-                        cmp_out = json.loads(cmp_resp.get("outputText", "{}"))
-                        if "error" in cmp_out:
-                            print(f"  Cross-reference skipped: {cmp_out['error']}", flush=True)
-                        else:
-                            s = cmp_out.get("summary", {})
-                            print(f"  Cross-reference: {s.get('tracked',0)} tracked, "
-                                  f"{s.get('addressed',0)} addressed by open PR, "
-                                  f"{s.get('unaddressed',0)} unaddressed "
-                                  f"(of {s.get('findings',0)})", flush=True)
-                            report_md = cmp_out.get("report_md") or ""
-                            if report_md:
-                                try:
-                                    await gofannon_client.call(
-                                        agent_name="asvs_push_github",
-                                        input_dict={
-                                            "inputText": json.dumps({
-                                                "token": output_token,
-                                                "repo": output_repo,
-                                                "directory": push_directory,
-                                                "fileName": "issues_cross_reference.md",
-                                            }),
-                                            "fileContents": report_md,
-                                            "commitMessage": f"Add issue/PR cross-reference [{source_id}]",
-                                        },
-                                    )
-                                    print(f"  Cross-reference report pushed", flush=True)
-                                except Exception as _pe:
-                                    print(f"  WARNING: could not push cross-reference report: {_pe}", flush=True)
+                        print(f"  metadata.yml written to {push_directory}/", flush=True)
                     except Exception as e:
-                        print(f"  WARNING: cross-reference call failed ({e})", flush=True)
+                        print(f"  WARNING: metadata.yml write failed "
+                              f"({type(e).__name__}: {e}); run otherwise OK", flush=True)
             except Exception as e:
                 # Some exception types stringify to empty (e.g. some httpx errors).
                 # Surface the type name and full traceback so the failure is
