@@ -369,6 +369,35 @@ async def run(input_dict, tools):
             source_id_path += f"/{source_path_prefix}"
         source_id = f"{source_id_path} @ {commit_hash}"
 
+        # ---- Cross-reference: snapshot open issues & PRs (best-effort) ----
+        # Pin a snapshot of the repo's open issues and open PRs (with changed
+        # files) to this exact commit, stored in issues_prs:{repo}@{sha}, so
+        # the post-consolidation cross-reference compares findings against a
+        # fixed point (what was open as of commit_hash) rather than a moving
+        # branch. Keyed on the GitHub repo (repo_owner_name, no sub-path),
+        # which is also what the compare step reads. Best-effort: a failure
+        # here must not abort the audit.
+        try:
+            snap_resp = await gofannon_client.call(
+                agent_name="asvs_fetch_issues_prs",
+                input_dict={"inputText": json.dumps({
+                    "repo": repo_owner_name,
+                    "sha": commit_hash,
+                    "token": source_token,
+                })},
+            )
+            _snap = json.loads(snap_resp.get("outputText", "{}"))
+            if "error" in _snap:
+                print(f"  WARNING: issue/PR snapshot failed: {_snap['error']}", flush=True)
+            else:
+                _c = _snap.get("counts", {})
+                _done = "complete" if _snap.get("complete", True) else "INCOMPLETE"
+                print(f"  Issue/PR snapshot ({_done}): {_c.get('issues','?')} issues, "
+                      f"{_c.get('prs','?')} PRs @ {commit_hash}", flush=True)
+        except Exception as e:
+            print(f"  WARNING: issue/PR snapshot call failed ({e}); "
+                  f"cross-reference will be skipped", flush=True)
+
         # Per-section reports go into CouchDB instead of GitHub. The
         # previous approach committed each per-section report to the
         # private repo, which surfaced one entry on the public
@@ -1378,6 +1407,58 @@ async def run(input_dict, tools):
                     print(f"  Consolidation FAILED: {err_excerpt}", flush=True)
                 else:
                     print(f"  Consolidation done", flush=True)
+
+                    # ---- Cross-reference findings vs open issues/PRs ------
+                    # Reads the commit-pinned snapshot written before
+                    # discovery and the structured findings persisted by
+                    # consolidate; the compare agent RETURNS report_md and
+                    # this orchestrator pushes it as issues_cross_reference.md.
+                    # Always runs after a successful consolidation.
+                    # Best-effort: never fail the run on it. Sets
+                    # cross_reference_done so the metadata writer lists the
+                    # file authoritatively.
+                    cross_reference_done = False
+                    try:
+                        cmp_resp = await gofannon_client.call(
+                            agent_name="asvs_compare_open_issues_prs",
+                            input_dict={"inputText": json.dumps({
+                                "repo": repo_owner_name,
+                                "sha": commit_hash,
+                                "reports_namespace": filtered_reports_namespace,
+                            })},
+                        )
+                        cmp_out = json.loads(cmp_resp.get("outputText", "{}"))
+                        if "error" in cmp_out:
+                            print(f"  Cross-reference skipped: {cmp_out['error']}", flush=True)
+                        else:
+                            s = cmp_out.get("summary", {})
+                            print(f"  Cross-reference: {s.get('tracked',0)} tracked, "
+                                  f"{s.get('addressed',0)} addressed by open PR, "
+                                  f"{s.get('unaddressed',0)} unaddressed "
+                                  f"(of {s.get('findings',0)})", flush=True)
+                            report_md = cmp_out.get("report_md") or ""
+                            if report_md:
+                                try:
+                                    await gofannon_client.call(
+                                        agent_name="asvs_push_github",
+                                        input_dict={
+                                            "inputText": json.dumps({
+                                                "token": output_token,
+                                                "repo": output_repo,
+                                                "directory": push_directory,
+                                                "fileName": "issues_cross_reference.md",
+                                            }),
+                                            "fileContents": report_md,
+                                            "commitMessage": f"Add issue/PR cross-reference [{source_id}]",
+                                        },
+                                    )
+                                    cross_reference_done = True
+                                    print(f"  Cross-reference report pushed", flush=True)
+                                except Exception as _pe:
+                                    print(f"  WARNING: could not push cross-reference report: {_pe}", flush=True)
+                    except Exception as e:
+                        print(f"  WARNING: cross-reference call failed ({e})", flush=True)
+
 
                     # ---- Write metadata.yml into the leaf dir -------------
                     # Mirrors the scans-style manifest: project/repo/sha/date,
