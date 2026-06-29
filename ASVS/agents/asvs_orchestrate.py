@@ -1466,12 +1466,30 @@ async def run(input_dict, tools):
                     # the supporting files actually present. Best-effort: a
                     # failure here never fails the run.
                     try:
-                        # findings_total: parse consolidate's "Total findings: N"
+                        # findings_total: prefer the structured findings
+                        # consolidate persists to consolidated_findings:{ns}
+                        # (authoritative count); fall back to parsing the
+                        # consolidate stdout, matching the phrasings it
+                        # actually emits ("Total consolidated findings",
+                        # "Total extracted findings", or "-> N findings").
                         ftotal = ""
-                        import re as _re
-                        m = _re.search(r"Total findings:\s*(\d+)", consolidate_output)
-                        if m:
-                            ftotal = int(m.group(1))
+                        try:
+                            cf_ns = data_store.use_namespace(
+                                f"consolidated_findings:{filtered_reports_namespace}")
+                            cf_raw = cf_ns.get("findings")
+                            if cf_raw:
+                                _cf = json.loads(cf_raw) if isinstance(cf_raw, str) else cf_raw
+                                if isinstance(_cf, list):
+                                    ftotal = len(_cf)
+                        except Exception:
+                            pass
+                        if ftotal == "":
+                            import re as _re
+                            _m = (_re.search(r"Total consolidated findings[^:]*:\s*(\d+)", consolidate_output)
+                                  or _re.search(r"Total extracted findings:\s*(\d+)", consolidate_output)
+                                  or _re.search(r"(\d+)\s+findings\b", consolidate_output))
+                            if _m:
+                                ftotal = int(_m.group(1))
 
                         # audit models actually used (orchestrator constants).
                         # ASVS_AUDIT_MODELS is defined near the top of run();
@@ -1515,6 +1533,8 @@ async def run(input_dict, tools):
                                 present_support.append("issues_cross_reference.md")
 
                         def _yml_line(k, v):
+                            if v == "" or v is None:
+                                v = "null"
                             return f"{k+':':<18} {v}"
                         meta_lines = [
                             _yml_line("project", scan_meta["project"]),
