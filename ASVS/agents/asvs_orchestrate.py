@@ -311,11 +311,12 @@ async def run(input_dict, tools):
         #   {base}/{segments-below-org}/{leaf}
         # where segments-below-org mirrors the repo path under apache/ as
         # nested directories, and leaf encodes the scan identity:
-        #   {flattened-segments}-{YYYY-MM-DD}-{short_sha}
-        # The audit model is NOT in the path (it lives in metadata.yml). For a
-        # plain repo (no sub-component) the segments are [repo_short_name], so
-        # the leaf doubles the name (e.g. fineract-fineract-DATE-SHA), matching
-        # the org/project/component convention where component == repo name.
+        #   {segments}-{YYYY-MM-DD}-{short_sha}
+        # The audit model is NOT in the path (it lives in metadata.yml). The
+        # segments reflect the REAL path only: a whole-repo run is single
+        # (fineract -> fineract-DATE-SHA), and doubling happens ONLY when a
+        # real sub-path exists (superset/superset -> superset-superset-...).
+        # See the detailed note on the assignment below.
         from datetime import datetime, timezone
         scan_date_dt = datetime.now(timezone.utc)
         scan_date_ymd = scan_date_dt.strftime("%Y-%m-%d")
