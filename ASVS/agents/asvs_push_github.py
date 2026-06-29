@@ -144,7 +144,12 @@ async def run(input_dict, tools):
             else:
                 ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
                 name = f"new_file_{ts}.md"
-            if not name.lower().endswith(".md"):
+            # Default to .md only when the filename has NO extension. A name
+            # that already carries an extension (e.g. metadata.yml,
+            # security.txt) must be left alone — forcing .md here was
+            # producing metadata.yml.md and breaking non-markdown pushes.
+            _base = name.rsplit("/", 1)[-1]
+            if "." not in _base:
                 name = f"{name}.md"
             final_path = f"{dir_clean}/{name}" if dir_clean else name
 
