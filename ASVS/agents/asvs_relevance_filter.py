@@ -670,8 +670,18 @@ async def run(input_dict, tools):
             "agents.md", "agents.rst",
             "*/agents.md", "*/agents.rst",
             "threatmodel.md", "threatmodel.rst", "threat_model.md", "threat_model.rst",
+            "threat-model.md", "threat-model.rst",
+            "threat-modeling.md", "threat-modeling.rst",
             "*/threatmodel.md", "*/threatmodel.rst",
             "*/threat_model.md", "*/threat_model.rst",
+            "*/threat-model.md", "*/threat-model.rst",
+            "*/threat-modeling.md", "*/threat-modeling.rst",
+            # security-policy named variants
+            "security-policy.md", "security-policy.rst",
+            "*/security-policy.md", "*/security-policy.rst",
+            # RFC 9116 well-known security contact/policy file
+            "security.txt", ".well-known/security.txt",
+            "*/.well-known/security.txt",
             # docs/security tree — extensions required to skip
             # __init__.py, helpers, etc. that happen to live alongside
             "docs/security/*.md", "docs/security/*.rst",
@@ -753,11 +763,14 @@ async def run(input_dict, tools):
             if basename in (
                 "agents.md", "agents.rst",
                 "security.md", "security.rst", "security",
-                "threatmodel.md", "threat_model.md",
+                "security.txt", "security-policy.md", "security-policy.rst",
+                "threatmodel.md", "threat_model.md", "threat-model.md",
+                "threat-modeling.md",
             ):
                 return 1
             # Tier 2 — documented security/threat models
-            if "security_model" in full or "threatmodel" in full or "threat_model" in full:
+            if ("security_model" in full or "threatmodel" in full
+                    or "threat_model" in full or "threat-model" in full):
                 return 2
             # Tier 3 — sensitive-data / authn / authz / policies
             if any(t in full for t in (
