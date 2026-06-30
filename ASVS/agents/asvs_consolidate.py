@@ -1069,6 +1069,60 @@ If no duplicates: {"merges": []}"""
         for i, finding in enumerate(all_findings, 1):
             finding["global_id"] = f"FINDING-{i:03d}"
 
+        # ---- Severity calibration check -----------------------------------
+        # Catch the failure mode where the same vulnerability class in the
+        # same code area is rated inconsistently (e.g. one CWE-89 finding in
+        # groovy-sql at Critical sitting next to two CWE-89 findings in the
+        # same subproject at Medium). This does NOT auto-change severities --
+        # divergence is sometimes legitimate (different exploitability) -- it
+        # surfaces the groups for human review so an inflated/deflated label
+        # gets a second look. Deterministic: pure grouping + comparison, no
+        # model judgment. Groups by (CWE, top-level code area) where area is
+        # the first 3 path segments of the primary affected file, which keeps
+        # e.g. subprojects/groovy-sql together without lumping all of src.
+        severity_calibration_flags = []
+        try:
+            def _area_of(finding):
+                af = finding.get("affected_files") or []
+                if not af:
+                    return ""
+                first = af[0]
+                path = first.get("file", "") if isinstance(first, dict) else str(first)
+                return "/".join(path.split("/")[:3])
+
+            groups = {}
+            for f in all_findings:
+                cwe = (f.get("cwe") or "").strip()
+                area = _area_of(f)
+                if not cwe or not area:
+                    continue
+                groups.setdefault((cwe, area), []).append(f)
+
+            for (cwe, area), members in groups.items():
+                sevs = {m.get("severity", "Medium") for m in members}
+                if len(members) >= 2 and len(sevs) >= 2:
+                    ranked = sorted(
+                        members,
+                        key=lambda m: severity_order.get(m.get("severity", "Informational"), 4))
+                    severity_calibration_flags.append({
+                        "cwe": cwe,
+                        "area": area,
+                        "severities": sorted(sevs, key=lambda s: severity_order.get(s, 4)),
+                        "findings": [
+                            {"id": m["global_id"],
+                             "severity": m.get("severity", "Medium"),
+                             "title": m.get("title", "")}
+                            for m in ranked
+                        ],
+                    })
+            if severity_calibration_flags:
+                print(f"  Severity calibration: {len(severity_calibration_flags)} "
+                      f"CWE/area group(s) with divergent severities flagged for review",
+                      flush=True)
+        except Exception as _sc_e:
+            print(f"  WARN: severity calibration check failed "
+                  f"({type(_sc_e).__name__}: {_sc_e}); continuing", flush=True)
+
         # Persist the structured findings list so downstream agents (e.g.
         # asvs_compare_open_issues_prs) can read clean JSON instead of
         # re-parsing the rendered consolidated.md. This is the same data we
@@ -1505,6 +1559,38 @@ For multi-value table cells (Files, Source Reports, etc.): use ", " (comma-space
                 f"Informational findings are recorded here but not opened "
                 f"as GitHub issues; see issues.md for the {n_act} actionable items.*"
             )
+
+        # --- Severity Calibration Review (deterministic) ---
+        # Surfaces same-CWE / same-area findings that received different
+        # severities, so an inflated or deflated label gets a human second
+        # look. Does not change any severity; review-only.
+        if severity_calibration_flags:
+            tail_lines.append("")
+            tail_lines.append("---")
+            tail_lines.append("")
+            tail_lines.append("# Severity Calibration Review")
+            tail_lines.append("")
+            tail_lines.append(
+                "The following groups contain findings of the **same CWE in the "
+                "same code area** that were assigned **different severities**. "
+                "Divergence can be legitimate (genuinely different exploitability), "
+                "but it is also the classic shape of a miscalibrated label — e.g. "
+                "one finding rated Critical by impact reflex while its siblings of "
+                "the same class are Medium. Review each group and confirm the "
+                "spread is justified or align the outliers. *No severities were "
+                "changed automatically.*")
+            tail_lines.append("")
+            for fl in severity_calibration_flags:
+                tail_lines.append(
+                    f"### {fl['cwe']} in `{fl['area']}` — "
+                    f"severities: {', '.join(fl['severities'])}")
+                tail_lines.append("")
+                tail_lines.append("| Finding | Severity | Title |")
+                tail_lines.append("|---------|----------|-------|")
+                for m in fl["findings"]:
+                    title = (m["title"] or "").replace("|", "\\|")
+                    tail_lines.append(f"| {m['id']} | {m['severity']} | {title} |")
+                tail_lines.append("")
 
         tail_result = "\n".join(tail_lines)
 
