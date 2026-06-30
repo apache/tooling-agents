@@ -139,6 +139,29 @@ async def run(input_dict, tools):
 
         print(f"Processing {len(enriched_repos)} repos", flush=True)
 
+        # ── Helper functions (must be inside run() for gofannon) ──
+
+        async def query_registry(channel, package_name, api_def):
+            try:
+                url_template = api_def['url_template']
+                if channel == 'docker_hub':
+                    parts = package_name.split('/')
+                    if len(parts) == 2:
+                        url = url_template.format(namespace=parts[0], repo=parts[1])
+                    else:
+                        url = url_template.format(namespace='library', repo=package_name)
+                elif channel == 'nuget':
+                    url = url_template.format(package_lower=package_name.lower())
+                else:
+                    url = url_template.format(package=package_name)
+                headers = api_def.get('headers', {})
+                resp = await http_client.get(url, headers=headers, timeout=15)
+                if resp.status_code == 200:
+                    return api_def['parse'](resp.json())
+                return None
+            except Exception:
+                return None
+
         # ── Discover package names from cached repo trees ──
         # The prefetch __extras__ or tree data tells us which manifest files exist
 
@@ -208,7 +231,7 @@ async def run(input_dict, tools):
             async with sem:
                 repo_full = repo_data['repo']
                 for candidate in candidates:
-                    result = await query_registry(http_client, channel, candidate, api_def)
+                    result = await query_registry(channel, candidate, api_def)
                     if result:
                         pub_wfs = [wf for wf in repo_data['workflows']
                                   if channel in wf.get('production_channels', []) + wf.get('staging_channels', [])]
@@ -249,12 +272,85 @@ async def run(input_dict, tools):
         print(f"\nResults: {len(verified)} verified, {len(phantom)} phantom, "
               f"{len(orphaned)} orphaned, {len(errors)} errors", flush=True)
 
+        # ── Report generators (inside run() for gofannon) ──
+
+        def gen_verification_report():
+            lines = [f"# Artifact Verification: {github_owner}\n",
+                     f"Cross-references publishing workflows with actual registry contents.\n"]
+            v_by_ch = defaultdict(list)
+            for v in verified:
+                v_by_ch[v['channel']].append(v)
+            lines.append("## Summary\n")
+            lines.append(f"- **{len(verified)}** packages verified in registries")
+            lines.append(f"- **{len(phantom)}** workflows with no artifact found")
+            lines.append(f"- **{len(orphaned)}** orphaned packages\n")
+            lines.append("| Channel | Verified | Phantom |")
+            lines.append("|---------|----------|---------|")
+            all_channels = sorted(set(v['channel'] for v in verified) | set(p['channel'] for p in phantom))
+            for ch in all_channels:
+                nv = len([v for v in verified if v['channel'] == ch])
+                np = len([p for p in phantom if p['channel'] == ch])
+                lines.append(f"| {ch} | {nv} | {np} |")
+            lines.append("")
+            lines.append("## Verified Packages\n")
+            for ch in sorted(v_by_ch.keys()):
+                items = sorted(v_by_ch[ch], key=lambda v: v['repo'])
+                lines.append(f"### {ch} ({len(items)} packages)\n")
+                lines.append("| Repo | Package | Latest Version | Workflow | Last Run |")
+                lines.append("|------|---------|---------------|----------|----------|")
+                for v in items:
+                    version = v['registry'].get('latest_version', '?')
+                    wfs = ', '.join(f"`{w}`" for w in v.get('workflows', []))
+                    lr = v.get('last_run')
+                    lr_str = f"{'✅' if lr.get('status')=='success' else '❌'} {lr.get('created','?')[:10]}" if lr else ""
+                    lines.append(f"| {v['repo']} | `{v['package']}` | {version} | {wfs} | {lr_str} |")
+                lines.append("")
+            if phantom:
+                lines.append("## Phantom Workflows\n")
+                for p in sorted(phantom, key=lambda x: (x['channel'], x['repo'])):
+                    lines.append(f"- **{p['repo']}** `{p['workflow']}` → {p['channel']}: {p.get('note', '')}")
+                lines.append("")
+            return "\n".join(lines)
+
+        def gen_atr_catalog():
+            repos_dict = {}
+            for v in verified:
+                repo = v['repo']
+                if repo not in repos_dict:
+                    repos_dict[repo] = {'repo': repo, 'channels': {}}
+                ch_data = {
+                    'package_name': v['package'],
+                    'latest_version': v['registry'].get('latest_version'),
+                    'workflows': v.get('workflows', []),
+                    'verified': True,
+                    'verified_at': datetime.now(timezone.utc).isoformat(),
+                }
+                for repo_data in enriched_repos:
+                    if repo_data['repo'] == repo:
+                        for wf in repo_data['workflows']:
+                            if wf['file'] in v.get('workflows', []):
+                                ch_data['auth_method'] = 'oidc' if wf.get('has_oidc') else 'secrets'
+                                ch_data['secrets'] = wf.get('secrets', [])
+                                ch_data['triggers'] = wf.get('triggers', [])
+                                ch_data['has_environment'] = wf.get('has_environment', False)
+                                if wf.get('last_run'):
+                                    ch_data['last_workflow_run'] = wf['last_run'].get('created', '')
+                                    ch_data['last_run_status'] = wf['last_run'].get('status', '')
+                                    ch_data['last_run_url'] = wf['last_run'].get('url', '')
+                                break
+                        break
+                repos_dict[repo]['channels'][v['channel']] = ch_data
+            return {
+                'schema_version': '2.0', 'owner': github_owner,
+                'generated_at': datetime.now(timezone.utc).isoformat(),
+                'description': 'Apache publishing catalog — verified packages with workflow provenance',
+                'repos': list(repos_dict.values()),
+            }
+
         # ── Generate reports ──
         files = {}
-        files['artifact-verification.md'] = gen_verification_report(
-            verified, phantom, orphaned, errors, github_owner)
-        files['atr-catalog.json'] = json.dumps(
-            gen_atr_catalog(verified, enriched_repos, github_owner), indent=2)
+        files['artifact-verification.md'] = gen_verification_report()
+        files['atr-catalog.json'] = json.dumps(gen_atr_catalog(), indent=2)
 
         # Store (one bulk write)
         verify_ns = data_store.use_namespace(f"ci-artifact-verify:{github_owner}")
@@ -274,133 +370,3 @@ async def run(input_dict, tools):
 
     finally:
         await http_client.aclose()
-
-
-async def query_registry(http_client, channel, package_name, api_def):
-    """Query a registry API for a package. Returns parsed data or None."""
-    try:
-        url_template = api_def['url_template']
-
-        if channel == 'docker_hub':
-            # Docker Hub uses namespace/repo format
-            parts = package_name.split('/')
-            if len(parts) == 2:
-                url = url_template.format(namespace=parts[0], repo=parts[1])
-            else:
-                url = url_template.format(namespace='library', repo=package_name)
-        elif channel == 'nuget':
-            url = url_template.format(package_lower=package_name.lower())
-        else:
-            url = url_template.format(package=package_name)
-
-        headers = api_def.get('headers', {})
-        resp = await http_client.get(url, headers=headers, timeout=15)
-
-        if resp.status_code == 200:
-            data = resp.json()
-            return api_def['parse'](data)
-        elif resp.status_code == 404:
-            return None
-        else:
-            return None
-    except Exception:
-        return None
-
-
-def gen_verification_report(verified, phantom, orphaned, errors, owner):
-    """Generate the artifact verification report."""
-    lines = [f"# Artifact Verification: {owner}\n"]
-    lines.append(f"Cross-references publishing workflows with actual registry contents.\n")
-
-    # Stats
-    v_by_ch = defaultdict(list)
-    for v in verified:
-        v_by_ch[v['channel']].append(v)
-
-    lines.append("## Summary\n")
-    lines.append(f"- **{len(verified)}** packages verified in registries")
-    lines.append(f"- **{len(phantom)}** workflows with no artifact found (may use non-standard names)")
-    lines.append(f"- **{len(orphaned)}** orphaned packages (in registry, no workflow)\n")
-
-    lines.append("| Channel | Verified | Phantom |")
-    lines.append("|---------|----------|---------|")
-    all_channels = sorted(set(v['channel'] for v in verified) | set(p['channel'] for p in phantom))
-    for ch in all_channels:
-        nv = len([v for v in verified if v['channel'] == ch])
-        np = len([p for p in phantom if p['channel'] == ch])
-        lines.append(f"| {ch} | {nv} | {np} |")
-    lines.append("")
-
-    # Verified packages
-    lines.append("## Verified Packages\n")
-    lines.append("Packages confirmed to exist in their target registry.\n")
-
-    for ch in sorted(v_by_ch.keys()):
-        items = sorted(v_by_ch[ch], key=lambda v: v['repo'])
-        lines.append(f"### {ch} ({len(items)} packages)\n")
-        lines.append("| Repo | Package | Latest Version | Workflow | Last Run |")
-        lines.append("|------|---------|---------------|----------|----------|")
-        for v in items:
-            version = v['registry'].get('latest_version', '?')
-            wfs = ', '.join(f"`{w}`" for w in v.get('workflows', []))
-            lr = v.get('last_run')
-            lr_str = ""
-            if lr:
-                icon = "✅" if lr.get('status') == 'success' else "❌"
-                lr_str = f"{icon} {lr.get('created', '?')[:10]}"
-            lines.append(f"| {v['repo']} | `{v['package']}` | {version} | {wfs} | {lr_str} |")
-        lines.append("")
-
-    # Phantom workflows
-    if phantom:
-        lines.append("## Phantom Workflows\n")
-        lines.append("Workflows that appear to publish but no matching package was found. "
-                     "May use non-standard package names, be disabled, or target internal registries.\n")
-        for p in sorted(phantom, key=lambda x: (x['channel'], x['repo'])):
-            lines.append(f"- **{p['repo']}** `{p['workflow']}` → {p['channel']}: {p.get('note', '')}")
-        lines.append("")
-
-    return "\n".join(lines)
-
-
-def gen_atr_catalog(verified, enriched_repos, owner):
-    """Generate ATR catalog JSON."""
-    repos_dict = {}
-    for v in verified:
-        repo = v['repo']
-        if repo not in repos_dict:
-            repos_dict[repo] = {'repo': repo, 'channels': {}}
-
-        ch_data = {
-            'package_name': v['package'],
-            'latest_version': v['registry'].get('latest_version'),
-            'workflows': v.get('workflows', []),
-            'verified': True,
-            'verified_at': datetime.now(timezone.utc).isoformat(),
-        }
-
-        # Add workflow detail from enriched data
-        for repo_data in enriched_repos:
-            if repo_data['repo'] == repo:
-                for wf in repo_data['workflows']:
-                    if wf['file'] in v.get('workflows', []):
-                        ch_data['auth_method'] = 'oidc' if wf.get('has_oidc') else 'secrets'
-                        ch_data['secrets'] = wf.get('secrets', [])
-                        ch_data['triggers'] = wf.get('triggers', [])
-                        ch_data['has_environment'] = wf.get('has_environment', False)
-                        if wf.get('last_run'):
-                            ch_data['last_workflow_run'] = wf['last_run'].get('created', '')
-                            ch_data['last_run_status'] = wf['last_run'].get('status', '')
-                            ch_data['last_run_url'] = wf['last_run'].get('url', '')
-                        break
-                break
-
-        repos_dict[repo]['channels'][v['channel']] = ch_data
-
-    return {
-        'schema_version': '2.0',
-        'owner': owner,
-        'generated_at': datetime.now(timezone.utc).isoformat(),
-        'description': 'Apache publishing catalog — verified packages with workflow provenance',
-        'repos': list(repos_dict.values()),
-    }
