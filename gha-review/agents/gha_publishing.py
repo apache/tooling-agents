@@ -50,7 +50,7 @@ async def run(input_dict, tools):
               (f" (redacting {redacted_severity})" if redacted_severity else ""), flush=True)
 
         provider = "bedrock"
-        model = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+        model = "us.anthropic.claude-sonnet-4.6"
         configured_params = {"temperature": 0, "reasoning_effort": "disable", "max_tokens": 2048}
 
         classification_cache = data_store.use_namespace(f"ci-classification:{github_owner}")

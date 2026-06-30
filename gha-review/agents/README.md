@@ -140,7 +140,7 @@ The orchestrator's `push_multi_file_output()` parses this, adds a `gha_` prefix 
 
 | Agent | LLM | Provider | Model | Params |
 |-------|-----|----------|-------|--------|
-| gha_publishing | Yes | `bedrock` | `us.anthropic.claude-sonnet-4-5-20250929-v1:0` | `temperature=0, reasoning_effort=disable, max_tokens=2048` |
+| gha_publishing | Yes | `bedrock` | `us.anthropic.claude-sonnet-4.6` | `temperature=0, reasoning_effort=disable, max_tokens=2048` |
 | All others | No | — | — | — |
 
 ### CouchDB Namespaces
