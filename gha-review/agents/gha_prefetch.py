@@ -113,25 +113,39 @@ async def run(input_dict, tools):
         # --- Build cache index ---
         if rescan:
             all_cached_keys = set()
+            prefetch_cache = {}
+            composites_cache = {}
+            extras_cache = {}
             print("  Cache bypassed (rescan=true)", flush=True)
         else:
             all_cached_keys = set(workflow_cache.list_keys())
             print(f"  {len(all_cached_keys)} keys in workflow cache", flush=True)
 
+            # Bulk-read all cache-check keys (3 calls instead of ~7,500)
+            prefetch_meta_keys = [k for k in all_cached_keys if k.startswith("__prefetch__:")]
+            composites_meta_keys = [k for k in all_cached_keys if k.startswith("__composites__:")]
+            extras_meta_keys = [k for k in all_cached_keys if k.startswith("__extras__:")]
+
+            prefetch_cache = workflow_cache.get_many(prefetch_meta_keys) if prefetch_meta_keys else {}
+            composites_cache = workflow_cache.get_many(composites_meta_keys) if composites_meta_keys else {}
+            extras_cache = workflow_cache.get_many(extras_meta_keys) if extras_meta_keys else {}
+            print(f"  Cache index: {len(prefetch_cache)} prefetch, "
+                  f"{len(composites_cache)} composites, {len(extras_cache)} extras", flush=True)
+
         def has_prefetch(repo_name):
             if rescan:
                 return False
-            meta = workflow_cache.get(f"__prefetch__:{repo_name}")
+            meta = prefetch_cache.get(f"__prefetch__:{repo_name}")
             return meta and meta.get("complete")
 
         def has_composites(repo_name):
             if rescan:
                 return False
-            meta = workflow_cache.get(f"__composites__:{repo_name}")
+            meta = composites_cache.get(f"__composites__:{repo_name}")
             return meta and meta.get("complete")
 
         def has_extras(repo_name):
-            return workflow_cache.get(f"__extras__:{repo_name}") is not None
+            return f"__extras__:{repo_name}" in extras_cache
 
         # --- Semaphore for concurrent fetches ---
         api_sem = asyncio.Semaphore(10)
