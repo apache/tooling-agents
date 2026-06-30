@@ -147,11 +147,14 @@ async def run(input_dict, tools):
         phantom = []      # {repo, channel, workflow} (workflow but no artifact)
         errors = []
 
+        # ── Build verification tasks ──
+        import asyncio
+        verify_tasks = []  # (repo_data, channel, api_def, candidates_or_name)
+
         for repo_data in enriched_repos:
             repo_full = repo_data['repo']
             repo_name = repo_full.split('/')[-1]
 
-            # What channels does this repo claim to publish to?
             repo_channels = set()
             for wf in repo_data.get('workflows', []):
                 repo_channels.update(wf.get('production_channels', []))
@@ -163,7 +166,6 @@ async def run(input_dict, tools):
             if not repo_channels:
                 continue
 
-            # ── Try to discover package names from manifests ──
             for channel in sorted(repo_channels):
                 if channel not in REGISTRY_APIS:
                     continue
@@ -171,11 +173,10 @@ async def run(input_dict, tools):
                 api = REGISTRY_APIS[channel]
                 package_name = None
 
-                # Try to read manifest from cached YAML store
                 manifest_specs = MANIFEST_FILES.get(channel, [])
                 for manifest_file, pattern in manifest_specs:
                     if '*' in manifest_file:
-                        continue  # Skip glob patterns for now
+                        continue
                     content = wf_ns.get(f"__manifest__:{repo_name}:{manifest_file}")
                     if content and isinstance(content, str):
                         m = re.search(pattern, content, re.MULTILINE | re.DOTALL)
@@ -183,59 +184,67 @@ async def run(input_dict, tools):
                             package_name = m.group(1) or (m.group(2) if m.lastindex >= 2 else None)
                             break
 
-                # Fallback: common naming conventions
-                if not package_name:
-                    if channel == 'pypi':
-                        # Try apache-{repo} and {repo} patterns
-                        candidates = [f"apache-{repo_name}", repo_name,
-                                     repo_name.replace('-', '_'), f"apache_{repo_name}"]
-                    elif channel == 'npm':
-                        candidates = [f"@apache-{repo_name}/{repo_name}", repo_name,
-                                     f"apache-{repo_name}"]
-                    elif channel == 'crates_io':
-                        candidates = [repo_name, repo_name.replace('-', '_')]
-                    elif channel == 'docker_hub':
-                        candidates = [f"apache/{repo_name}"]
-                    else:
-                        candidates = [repo_name]
+                if package_name:
+                    candidates = [package_name]
+                elif channel == 'pypi':
+                    candidates = [f"apache-{repo_name}", repo_name,
+                                 repo_name.replace('-', '_'), f"apache_{repo_name}"]
+                elif channel == 'npm':
+                    candidates = [f"@apache-{repo_name}/{repo_name}", repo_name,
+                                 f"apache-{repo_name}"]
+                elif channel == 'crates_io':
+                    candidates = [repo_name, repo_name.replace('-', '_')]
+                elif channel == 'docker_hub':
+                    candidates = [f"apache/{repo_name}"]
+                else:
+                    candidates = [repo_name]
 
-                    # Try each candidate against the registry
-                    for candidate in candidates:
-                        result = await query_registry(http_client, channel, candidate, api)
-                        if result:
-                            package_name = candidate
-                            break
+                verify_tasks.append((repo_data, channel, api, candidates))
 
-                if not package_name:
-                    # No package found — could be phantom workflow
-                    pub_wfs = [wf for wf in repo_data['workflows']
-                              if channel in wf.get('production_channels', []) + wf.get('staging_channels', [])]
-                    for wf in pub_wfs:
-                        phantom.append({
+        # ── Run verification concurrently (10-way parallel) ──
+        sem = asyncio.Semaphore(10)
+
+        async def verify_one(repo_data, channel, api_def, candidates):
+            async with sem:
+                repo_full = repo_data['repo']
+                for candidate in candidates:
+                    result = await query_registry(http_client, channel, candidate, api_def)
+                    if result:
+                        pub_wfs = [wf for wf in repo_data['workflows']
+                                  if channel in wf.get('production_channels', []) + wf.get('staging_channels', [])]
+                        return ('verified', {
                             'repo': repo_full,
                             'channel': channel,
-                            'workflow': wf['file'],
-                            'note': 'No package found in registry (may use non-standard name)',
+                            'package': candidate,
+                            'registry': result,
+                            'workflows': [wf['file'] for wf in pub_wfs],
+                            'last_run': pub_wfs[0].get('last_run') if pub_wfs else None,
                         })
-                    continue
-
-                # ── Query registry for verification ──
-                registry_data = await query_registry(http_client, channel, package_name, api)
-
-                if registry_data:
-                    # Find matching workflow
-                    pub_wfs = [wf for wf in repo_data['workflows']
-                              if channel in wf.get('production_channels', []) + wf.get('staging_channels', [])]
-                    verified.append({
+                # No candidate matched — phantom
+                pub_wfs = [wf for wf in repo_data['workflows']
+                          if channel in wf.get('production_channels', []) + wf.get('staging_channels', [])]
+                phantoms = []
+                for wf in pub_wfs:
+                    phantoms.append({
                         'repo': repo_full,
                         'channel': channel,
-                        'package': package_name,
-                        'registry': registry_data,
-                        'workflows': [wf['file'] for wf in pub_wfs],
-                        'last_run': pub_wfs[0].get('last_run') if pub_wfs else None,
+                        'workflow': wf['file'],
+                        'note': 'No package found in registry (may use non-standard name)',
                     })
-                    print(f"  ✅ {repo_full} → {channel}:{package_name} "
-                          f"(v{registry_data.get('latest_version', '?')})", flush=True)
+                return ('phantom', phantoms)
+
+        results = await asyncio.gather(*[
+            verify_one(rd, ch, api, cands)
+            for rd, ch, api, cands in verify_tasks
+        ])
+
+        for result_type, data in results:
+            if result_type == 'verified':
+                verified.append(data)
+                print(f"  \u2705 {data['repo']} \u2192 {data['channel']}:{data['package']} "
+                      f"(v{data['registry'].get('latest_version', '?')})", flush=True)
+            elif result_type == 'phantom':
+                phantom.extend(data)
 
         print(f"\nResults: {len(verified)} verified, {len(phantom)} phantom, "
               f"{len(orphaned)} orphaned, {len(errors)} errors", flush=True)
@@ -247,16 +256,19 @@ async def run(input_dict, tools):
         files['atr-catalog.json'] = json.dumps(
             gen_atr_catalog(verified, enriched_repos, github_owner), indent=2)
 
-        # Store
+        # Store (one bulk write)
         verify_ns = data_store.use_namespace(f"ci-artifact-verify:{github_owner}")
-        verify_ns.set("latest_results", {
-            'generated_at': datetime.now(timezone.utc).isoformat(),
-            'verified': verified,
-            'phantom': phantom,
-            'orphaned': orphaned,
-        })
+        couch_writes = {
+            "latest_results": {
+                'generated_at': datetime.now(timezone.utc).isoformat(),
+                'verified': verified,
+                'phantom': phantom,
+                'orphaned': orphaned,
+            }
+        }
         for fname, content in files.items():
-            verify_ns.set(f"report:{fname}", content)
+            couch_writes[f"report:{fname}"] = content
+        verify_ns.set_many(couch_writes)
 
         return {"outputText": json.dumps({"files": files})}
 

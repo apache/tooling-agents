@@ -180,18 +180,42 @@ async def run(input_dict, tools):
         if read_pat:
             github_headers["Authorization"] = f"Bearer {read_pat}"
 
-        # ── Process each repo ──
+        # ── Bulk-read all CouchDB data (3 round trips instead of ~7,400) ──
+        import asyncio
+
+        # 1. All prefetch metadata
+        all_prefetch = wf_ns.get_many(prefetch_keys) if prefetch_keys else {}
+        print(f"  Bulk-read {len(all_prefetch)} prefetch keys", flush=True)
+
+        # 2. All classification data
+        cls_keys = [f"classification:{r}" for r in repo_names]
+        all_cls = cls_ns.get_many(cls_keys) if cls_keys else {}
+        print(f"  Bulk-read {len(all_cls)} classification keys", flush=True)
+
+        # 3. All workflow YAML — build key list from prefetch metadata
+        yaml_keys = []
+        for repo_name in repo_names:
+            prefetch = all_prefetch.get(f"__prefetch__:{repo_name}")
+            if not prefetch or not isinstance(prefetch, dict):
+                continue
+            for wf_file in prefetch.get("workflow_files", []):
+                yaml_keys.append(f"{repo_name}/{wf_file}")
+        all_yaml = wf_ns.get_many(yaml_keys) if yaml_keys else {}
+        print(f"  Bulk-read {len(all_yaml)} YAML keys", flush=True)
+
+        # ── Process each repo (pure in-memory, no CouchDB calls) ──
         enriched_repos = []
+        repos_needing_runs = []  # (repo_name, repo_wfs) for GitHub API
 
         for repo_name in repo_names:
-            prefetch = wf_ns.get(f"__prefetch__:{repo_name}")
+            prefetch = all_prefetch.get(f"__prefetch__:{repo_name}")
             if not prefetch or not isinstance(prefetch, dict):
                 continue
             wf_files = prefetch.get("workflow_files", [])
             if not wf_files:
                 continue
 
-            cls_data = cls_ns.get(f"classification:{repo_name}")
+            cls_data = all_cls.get(f"classification:{repo_name}")
             wf_cls = {}
             if cls_data and isinstance(cls_data, list):
                 for c in cls_data:
@@ -199,7 +223,7 @@ async def run(input_dict, tools):
 
             repo_wfs = []
             for wf_file in wf_files:
-                yaml_content = wf_ns.get(f"{repo_name}/{wf_file}")
+                yaml_content = all_yaml.get(f"{repo_name}/{wf_file}")
                 if not yaml_content or not isinstance(yaml_content, str):
                     continue
 
@@ -207,7 +231,6 @@ async def run(input_dict, tools):
                 wf_data = parse_workflow(yaml_content, wf_file, repo_name, github_owner)
                 wf_data['category'] = cat
 
-                # Skip if no channels detected and it's not classified as publishing
                 if not wf_data['channels'] and cat in ('unknown', 'ci_check', 'documentation'):
                     continue
 
@@ -223,37 +246,45 @@ async def run(input_dict, tools):
             if channels_filter and not any(c in all_ch for c in channels_filter):
                 continue
 
-            # ── Fetch run history ──
-            if read_pat:
-                try:
-                    url = f"https://api.github.com/repos/{github_owner}/{repo_name}/actions/runs?per_page=30"
-                    resp = await http_client.get(url, headers=github_headers, timeout=15)
-                    if resp.status_code == 200:
-                        runs_by_file = defaultdict(list)
-                        for r in resp.json().get("workflow_runs", []):
-                            fname = r.get("path", "").split("/")[-1]
-                            runs_by_file[fname].append({
-                                'status': r.get('conclusion', r.get('status', '?')),
-                                'trigger': r.get('event', '?'),
-                                'created': r.get('created_at', ''),
-                                'url': r.get('html_url', ''),
-                            })
-                        for wf in repo_wfs:
-                            wf['last_run'] = (runs_by_file.get(wf['file'], [None]) or [None])[0]
-                            wf['recent_runs'] = runs_by_file.get(wf['file'], [])[:5]
-                except Exception as e:
-                    print(f"  API error {repo_name}: {e}", flush=True)
-                    for wf in repo_wfs:
-                        wf['last_run'] = None; wf['recent_runs'] = []
-            else:
-                for wf in repo_wfs:
-                    wf['last_run'] = None; wf['recent_runs'] = []
+            # Initialize run history as empty — filled by concurrent API calls below
+            for wf in repo_wfs:
+                wf['last_run'] = None
+                wf['recent_runs'] = []
 
             enriched_repos.append({
                 'repo': f"{github_owner}/{repo_name}",
                 'channels': sorted(all_ch),
                 'workflows': repo_wfs,
             })
+            repos_needing_runs.append((repo_name, repo_wfs))
+
+        # ── Fetch run history concurrently (10-way parallel) ──
+        if read_pat and repos_needing_runs:
+            sem = asyncio.Semaphore(10)
+
+            async def fetch_runs(repo_name, repo_wfs):
+                async with sem:
+                    try:
+                        url = f"https://api.github.com/repos/{github_owner}/{repo_name}/actions/runs?per_page=30"
+                        resp = await http_client.get(url, headers=github_headers, timeout=15)
+                        if resp.status_code == 200:
+                            runs_by_file = defaultdict(list)
+                            for r in resp.json().get("workflow_runs", []):
+                                fname = r.get("path", "").split("/")[-1]
+                                runs_by_file[fname].append({
+                                    'status': r.get('conclusion', r.get('status', '?')),
+                                    'trigger': r.get('event', '?'),
+                                    'created': r.get('created_at', ''),
+                                    'url': r.get('html_url', ''),
+                                })
+                            for wf in repo_wfs:
+                                wf['last_run'] = (runs_by_file.get(wf['file'], [None]) or [None])[0]
+                                wf['recent_runs'] = runs_by_file.get(wf['file'], [])[:5]
+                    except Exception as e:
+                        print(f"  API error {repo_name}: {e}", flush=True)
+
+            await asyncio.gather(*[fetch_runs(rn, wfs) for rn, wfs in repos_needing_runs])
+            print(f"  Fetched run history for {len(repos_needing_runs)} repos (10-way parallel)", flush=True)
 
         print(f"Enriched {len(enriched_repos)} repos", flush=True)
 
@@ -276,14 +307,15 @@ async def run(input_dict, tools):
             fname = f"channel-{ch_key.replace('_', '-')}.md"
             files[fname] = gen_channel_report(ch_key, display, items, enriched_repos, github_owner)
 
-        # Store in CouchDB
+        # Store in CouchDB (one bulk write)
         detail_ns = data_store.use_namespace(f"ci-publishing-detail:{github_owner}")
-        detail_ns.set("latest_data", {
+        couch_writes = {"latest_data": {
             'generated_at': datetime.now(timezone.utc).isoformat(),
             'repos': enriched_repos,
-        })
+        }}
         for fname, content in files.items():
-            detail_ns.set(f"report:{fname}", content)
+            couch_writes[f"report:{fname}"] = content
+        detail_ns.set_many(couch_writes)
 
         print(f"Generated {len(files)} report files", flush=True)
 

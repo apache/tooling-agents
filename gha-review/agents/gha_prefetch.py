@@ -144,21 +144,19 @@ async def run(input_dict, tools):
                  "errors": 0}
 
         async def fetch_single_yaml(repo_name, wf_name, download_url):
-            """Fetch one YAML file if not already cached."""
+            """Fetch one YAML file if not already cached. Returns (key, content) or None."""
             cache_key = f"{repo_name}/{wf_name}"
             if cache_key in all_cached_keys:
-                return True, True  # success, was_cached
+                return True, True, None, None  # success, was_cached, key, content
 
             async with api_sem:
                 try:
                     resp = await http_client.get(download_url, follow_redirects=True, timeout=30.0)
                     if resp.status_code == 200:
-                        workflow_cache.set(cache_key, resp.text)
-                        all_cached_keys.add(cache_key)
-                        return True, False  # success, newly fetched
+                        return True, False, cache_key, resp.text  # success, newly fetched
                 except Exception:
                     pass
-            return False, False
+            return False, False, None, None
 
         def extract_extras_from_tree(tree):
             """Extract CODEOWNERS and dependabot booleans from tree listing."""
@@ -229,19 +227,25 @@ async def run(input_dict, tools):
                                     tasks.append(fetch_single_yaml(repo_name, wf_name, dl_url))
 
                             results = await asyncio.gather(*tasks, return_exceptions=True)
+                            repo_writes = {}
                             for r in results:
                                 if isinstance(r, Exception):
                                     stats["errors"] += 1
                                 else:
-                                    success, was_cached = r
+                                    success, was_cached, cache_key, content = r
                                     if success:
                                         if was_cached:
                                             stats["wf_yaml_existed"] += 1
                                         else:
                                             stats["wf_yaml_cached"] += 1
+                                            if cache_key and content:
+                                                repo_writes[cache_key] = content
+                                                all_cached_keys.add(cache_key)
 
-                            workflow_cache.set(f"__prefetch__:{repo_name}",
-                                               {"complete": True, "workflows": wf_names})
+                            # Batch-write all YAML for this repo + metadata
+                            repo_writes[f"__prefetch__:{repo_name}"] = {
+                                "complete": True, "workflows": wf_names}
+                            workflow_cache.set_many(repo_writes)
                             stats["wf_fetched"] += 1
 
             # ---- Composites + Extras (share the tree fetch) ----
@@ -266,6 +270,7 @@ async def run(input_dict, tools):
                     stats["ca_skipped"] += 1
                 else:
                     composite_names = []
+                    composite_writes = {}
                     try:
                         action_files = [
                             item["path"] for item in tree
@@ -293,7 +298,7 @@ async def run(input_dict, tools):
                                             dl_resp = await http_client.get(
                                                 dl_url, follow_redirects=True, timeout=10.0)
                                             if dl_resp.status_code == 200:
-                                                workflow_cache.set(cache_key, dl_resp.text)
+                                                composite_writes[cache_key] = dl_resp.text
                                                 all_cached_keys.add(cache_key)
                                                 composite_names.append(short_path)
                                                 stats["ca_total"] += 1
@@ -305,16 +310,26 @@ async def run(input_dict, tools):
                     if composite_names:
                         stats["ca_repos_with"] += 1
 
-                    workflow_cache.set(f"__composites__:{repo_name}", {
+                    composite_writes[f"__composites__:{repo_name}"] = {
                         "complete": True,
                         "actions": composite_names,
-                    })
+                    }
                     stats["ca_fetched"] += 1
 
-                # -- Extras from tree (zero extra API calls) --
-                if ex_cached:
-                    stats["extras_skipped"] += 1
-                else:
+                    # -- Extras from tree (zero extra API calls) --
+                    if ex_cached:
+                        stats["extras_skipped"] += 1
+                    else:
+                        extras = extract_extras_from_tree(tree)
+                        composite_writes[f"__extras__:{repo_name}"] = extras
+                        stats["extras_fetched"] += 1
+
+                    # Batch-write composites + extras for this repo
+                    if composite_writes:
+                        workflow_cache.set_many(composite_writes)
+
+                if ca_cached and not ex_cached:
+                    # Extras only (no composites to write)
                     extras = extract_extras_from_tree(tree)
                     workflow_cache.set(f"__extras__:{repo_name}", extras)
                     stats["extras_fetched"] += 1

@@ -39,6 +39,12 @@ async def run(input_dict, tools):
             return {"outputText": "Error: no cached workflows found in `ci-workflows:" + github_owner + "`. "
                     "Run the Publishing Analyzer agent first."}
 
+        # Bulk-read ALL cached data in one CouchDB call (~5,000 keys).
+        # Individual workflow_ns.get() calls in the scan loop now read
+        # from this in-memory dict instead of hitting CouchDB per file.
+        all_wf_data = workflow_ns.get_many(all_wf_keys) if all_wf_keys else {}
+        print(f"Bulk-read {len(all_wf_data)} cached keys", flush=True)
+
         repos = {}
         for key in all_wf_keys:
             if "/" in key:
@@ -612,6 +618,15 @@ async def run(input_dict, tools):
         # ===== Main scan loop =====
         all_findings = {}
         repos_scanned = 0
+        pending_writes = {}  # accumulated for set_many after loop
+
+        # For redacted mode: bulk-read all cached findings upfront
+        if redacted_severity:
+            sec_keys = security_ns.list_keys()
+            finding_keys = [k for k in sec_keys if k.startswith("findings:")]
+            cached_findings = security_ns.get_many(finding_keys) if finding_keys else {}
+        else:
+            cached_findings = {}
 
         for repo_name, wf_names in sorted(repos.items()):
             repos_scanned += 1
@@ -619,9 +634,9 @@ async def run(input_dict, tools):
             if repos_scanned % 10 == 1:
                 print(f"[{repos_scanned}/{len(repos)}] Scanning {repo_name}...", flush=True)
 
-            # When redacting: read cached findings, filter, don't rescan
+            # When redacting: use bulk-read findings, filter, don't rescan
             if redacted_severity:
-                cached = security_ns.get(f"findings:{repo_name}")
+                cached = cached_findings.get(f"findings:{repo_name}")
                 if cached:
                     filtered = [f for f in cached if not is_severity_redacted(f.get("severity", "INFO"))]
                     if filtered:
@@ -638,7 +653,7 @@ async def run(input_dict, tools):
                 if ".github/actions/" in wf_name:
                     continue
 
-                content = workflow_ns.get(f"{repo_name}/{wf_name}")
+                content = all_wf_data.get(f"{repo_name}/{wf_name}")
                 if not content or not isinstance(content, str):
                     continue
 
@@ -728,7 +743,7 @@ async def run(input_dict, tools):
             # --- Read extra files from prefetch cache ---
 
             # Check 7: CODEOWNERS (from prefetch __extras__)
-            extras = workflow_ns.get(f"__extras__:{repo_name}")
+            extras = all_wf_data.get(f"__extras__:{repo_name}")
             if extras:
                 if not extras.get("has_codeowners"):
                     repo_findings.append({
@@ -753,11 +768,11 @@ async def run(input_dict, tools):
             # Collect (action_name, short_path, action_content) tuples
             composite_items = []
 
-            composites_meta = workflow_ns.get(f"__composites__:{repo_name}")
+            composites_meta = all_wf_data.get(f"__composites__:{repo_name}")
             if composites_meta and composites_meta.get("complete"):
                 cached_actions = composites_meta.get("actions", [])
                 for short_path in cached_actions:
-                    action_content = workflow_ns.get(f"{repo_name}/{short_path}")
+                    action_content = all_wf_data.get(f"{repo_name}/{short_path}")
                     if action_content:
                         action_name = short_path.replace(".github/actions/", "").rsplit("/", 1)[0]
                         composite_items.append((action_name, short_path, action_content))
@@ -850,12 +865,17 @@ async def run(input_dict, tools):
             # Deduplicate all findings for this repo
             repo_findings = deduplicate_findings(repo_findings)
 
-            # Store
-            security_ns.set(f"findings:{repo_name}", repo_findings)
+            # Accumulate for bulk write after loop
+            pending_writes[f"findings:{repo_name}"] = repo_findings
             if repo_findings:
                 all_findings[repo_name] = repo_findings
 
             await asyncio.sleep(0.1)
+
+        # Bulk-write all findings in one CouchDB call
+        if pending_writes:
+            security_ns.set_many(pending_writes)
+            print(f"Bulk-wrote findings for {len(pending_writes)} repos", flush=True)
 
         print(f"\n{'=' * 60}", flush=True)
         print(f"Security scan complete! {repos_scanned} repos", flush=True)
@@ -1005,13 +1025,15 @@ async def run(input_dict, tools):
         full_report = toc + "\n\n---\n\n" + report_body
 
         if not redacted_severity:
-            security_ns.set("latest_report", full_report)
-            security_ns.set("latest_stats", {
-                "repos_scanned": repos_scanned,
-                "repos_with_findings": len(all_findings),
-                "total_findings": total_findings,
-                "severity_counts": severity_counts,
-                "check_counts": check_counts,
+            security_ns.set_many({
+                "latest_report": full_report,
+                "latest_stats": {
+                    "repos_scanned": repos_scanned,
+                    "repos_with_findings": len(all_findings),
+                    "total_findings": total_findings,
+                    "severity_counts": severity_counts,
+                    "check_counts": check_counts,
+                },
             })
 
         return {"outputText": full_report}

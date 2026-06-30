@@ -59,10 +59,13 @@ async def run(input_dict, tools):
         all_cls_keys = classification_ns.list_keys()
         meta_keys = [k for k in all_cls_keys if k.startswith("__meta__:")]
 
+        # Bulk-read all classification keys in one CouchDB call
+        all_cls_data = classification_ns.get_many(all_cls_keys) if all_cls_keys else {}
+
         repo_workflows = {}  # repo -> [workflow classifications]
         for mk in meta_keys:
             repo = mk.replace("__meta__:", "")
-            meta = classification_ns.get(mk)
+            meta = all_cls_data.get(mk)
             if not meta or not meta.get("complete"):
                 continue
             wf_names = meta.get("workflows", [])
@@ -71,7 +74,7 @@ async def run(input_dict, tools):
                 continue
             wfs = []
             for wf_name in wf_names:
-                cls = classification_ns.get(f"{repo}:{wf_name}")
+                cls = all_cls_data.get(f"{repo}:{wf_name}")
                 if cls:
                     wfs.append(cls)
             repo_workflows[repo] = wfs
@@ -82,10 +85,13 @@ async def run(input_dict, tools):
         all_sec_keys = security_ns.list_keys()
         finding_keys = [k for k in all_sec_keys if k.startswith("findings:")]
 
+        # Bulk-read all findings in one CouchDB call
+        all_findings_data = security_ns.get_many(finding_keys) if finding_keys else {}
+
         repo_findings = {}
         for k in finding_keys:
             repo = k.replace("findings:", "")
-            findings = security_ns.get(k)
+            findings = all_findings_data.get(k)
             if findings and isinstance(findings, list):
                 if redacted_severity:
                     findings = [f for f in findings if not is_severity_redacted(f.get("severity", "INFO"))]

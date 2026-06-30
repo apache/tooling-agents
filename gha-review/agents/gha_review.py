@@ -73,6 +73,9 @@ async def run(input_dict, tools):
         all_sec_keys = security_ns.list_keys()
         finding_keys = [k for k in all_sec_keys if k.startswith("findings:")]
 
+        # Bulk-read all findings in one CouchDB call
+        all_findings_data = security_ns.get_many(finding_keys) if finding_keys else {}
+
         repo_security = {}
 
         # Accumulate org-level stats from filtered findings
@@ -82,7 +85,7 @@ async def run(input_dict, tools):
 
         for k in finding_keys:
             repo = k.replace("findings:", "")
-            findings = security_ns.get(k)
+            findings = all_findings_data.get(k)
             if not findings or not isinstance(findings, list):
                 continue
 
