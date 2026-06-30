@@ -88,64 +88,6 @@ STAGING_CHANNELS = {
 DOCS_CHANNELS = {'github_pages'}
 
 
-def parse_workflow(yaml_content, wf_file, repo_name, github_owner):
-    """Extract structured data from raw workflow YAML."""
-    action_refs = []
-    for m in re.finditer(r'uses:\s*([^@\s]+)@([a-f0-9]{40}|[^\s#]+)', yaml_content):
-        action_refs.append({
-            'action': m.group(1).strip(),
-            'version': m.group(2).strip(),
-            'pinned': bool(re.match(r'^[a-f0-9]{40}$', m.group(2).strip())),
-        })
-
-    secrets = sorted(set(re.findall(
-        r'\$\{\{\s*secrets\.([A-Za-z_][A-Za-z0-9_]*)\s*\}\}', yaml_content)))
-
-    triggers = []
-    first_600 = yaml_content[:600]
-    if re.search(r'\bpull_request_target\b', first_600):
-        triggers.append('pull_request_target')
-    elif re.search(r'\bpull_request\b', first_600):
-        triggers.append('pull_request')
-    if re.search(r'\bpush\b', first_600):
-        triggers.append('push')
-    if re.search(r'\bschedule\b', first_600):
-        cron = re.search(r"cron:\s*['\"]([^'\"]+)['\"]", yaml_content[:800])
-        triggers.append(f"schedule ({cron.group(1) if cron else '?'})")
-    if re.search(r'\bworkflow_dispatch\b', first_600):
-        triggers.append('workflow_dispatch')
-    if re.search(r'^\s+release:', first_600, re.MULTILINE):
-        triggers.append('release')
-
-    detected = set()
-    yl = yaml_content.lower()
-    for ch_key, (_, act_pats, cmd_pats, url_pats) in CHANNEL_DETECT.items():
-        for p in act_pats:
-            if p.lower() in yl:
-                detected.add(ch_key); break
-        else:
-            for p in cmd_pats:
-                if p.lower() in yl:
-                    detected.add(ch_key); break
-            else:
-                for p in url_pats:
-                    if p.lower() in yl:
-                        detected.add(ch_key); break
-
-    return {
-        'file': wf_file,
-        'triggers': triggers,
-        'channels': sorted(detected),
-        'production_channels': sorted(detected & PRODUCTION_CHANNELS),
-        'staging_channels': sorted(detected & STAGING_CHANNELS),
-        'action_refs': action_refs,
-        'secrets': secrets,
-        'has_environment': bool(re.search(r'environment:\s*\S+', yaml_content)),
-        'has_oidc': bool(re.search(r'id-token:\s*write', yaml_content)),
-        'github_url': f"https://github.com/{github_owner}/{repo_name}/blob/HEAD/.github/workflows/{wf_file}",
-    }
-
-
 async def run(input_dict, tools):
     mcpc = {url: RemoteMCPClient(remote_url=url) for url in tools.keys()}
     http_client = httpx.AsyncClient()
@@ -158,6 +100,59 @@ async def run(input_dict, tools):
         channels_filter = [c.strip() for c in input_dict.get("channels", "").split(",") if c.strip()]
 
         print(f"Publishing detail enrichment for {github_owner}", flush=True)
+
+        # ── parse_workflow must be inside run() for gofannon ──
+        def parse_workflow(yaml_content, wf_file, repo_name):
+            action_refs = []
+            for m in re.finditer(r'uses:\s*([^@\s]+)@([a-f0-9]{40}|[^\s#]+)', yaml_content):
+                action_refs.append({
+                    'action': m.group(1).strip(),
+                    'version': m.group(2).strip(),
+                    'pinned': bool(re.match(r'^[a-f0-9]{40}$', m.group(2).strip())),
+                })
+            secrets = sorted(set(re.findall(
+                r'\$\{\{\s*secrets\.([A-Za-z_][A-Za-z0-9_]*)\s*\}\}', yaml_content)))
+            triggers = []
+            first_600 = yaml_content[:600]
+            if re.search(r'\bpull_request_target\b', first_600):
+                triggers.append('pull_request_target')
+            elif re.search(r'\bpull_request\b', first_600):
+                triggers.append('pull_request')
+            if re.search(r'\bpush\b', first_600):
+                triggers.append('push')
+            if re.search(r'\bschedule\b', first_600):
+                cron = re.search(r"cron:\s*['\"]([^'\"]+)['\"]", yaml_content[:800])
+                triggers.append(f"schedule ({cron.group(1) if cron else '?'})")
+            if re.search(r'\bworkflow_dispatch\b', first_600):
+                triggers.append('workflow_dispatch')
+            if re.search(r'^\s+release:', first_600, re.MULTILINE):
+                triggers.append('release')
+            detected = set()
+            yl = yaml_content.lower()
+            for ch_key, (_, act_pats, cmd_pats, url_pats) in CHANNEL_DETECT.items():
+                for p in act_pats:
+                    if p.lower() in yl:
+                        detected.add(ch_key); break
+                else:
+                    for p in cmd_pats:
+                        if p.lower() in yl:
+                            detected.add(ch_key); break
+                    else:
+                        for p in url_pats:
+                            if p.lower() in yl:
+                                detected.add(ch_key); break
+            return {
+                'file': wf_file,
+                'triggers': triggers,
+                'channels': sorted(detected),
+                'production_channels': sorted(detected & PRODUCTION_CHANNELS),
+                'staging_channels': sorted(detected & STAGING_CHANNELS),
+                'action_refs': action_refs,
+                'secrets': secrets,
+                'has_environment': bool(re.search(r'environment:\s*\S+', yaml_content)),
+                'has_oidc': bool(re.search(r'id-token:\s*write', yaml_content)),
+                'github_url': f"https://github.com/{github_owner}/{repo_name}/blob/HEAD/.github/workflows/{wf_file}",
+            }
 
         wf_ns = data_store.use_namespace(f"ci-workflows:{github_owner}")
         cls_ns = data_store.use_namespace(f"ci-classification:{github_owner}")
@@ -225,7 +220,7 @@ async def run(input_dict, tools):
                     continue
 
                 cat = wf_cls.get(wf_file, {}).get("category", "unknown")
-                wf_data = parse_workflow(yaml_content, wf_file, repo_name, github_owner)
+                wf_data = parse_workflow(yaml_content, wf_file, repo_name)
                 wf_data['category'] = cat
 
                 if not wf_data['channels'] and cat in ('unknown', 'ci_check', 'documentation'):
