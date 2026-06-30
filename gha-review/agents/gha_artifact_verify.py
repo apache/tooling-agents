@@ -31,94 +31,83 @@ import json
 from collections import defaultdict
 from datetime import datetime, timezone
 
-# ── Package name discovery ──
-# Where to find the package name in each ecosystem's manifest file
-
-MANIFEST_FILES = {
-    'pypi':          [('pyproject.toml', r'(?:^name\s*=\s*["\']([^"\']+)|^\[project\].*?^name\s*=\s*["\']([^"\']+))'),
-                      ('setup.cfg',     r'^name\s*=\s*(.+)'),
-                      ('setup.py',      r"name\s*=\s*['\"]([^'\"]+)")],
-    'npm':           [('package.json',  r'"name"\s*:\s*"([^"]+)"')],
-    'crates_io':     [('Cargo.toml',    r'(?:^\[package\].*?^name\s*=\s*"([^"]+))')],
-    'rubygems':      [('*.gemspec',     r"spec\.name\s*=\s*['\"]([^'\"]+)")],
-    'nuget':         [('*.csproj',      r'<PackageId>([^<]+)')],
-}
-
-# ── Registry API definitions ──
-
-REGISTRY_APIS = {
-    'pypi': {
-        'url_template': 'https://pypi.org/pypi/{package}/json',
-        'parse': lambda data: {
-            'latest_version': data.get('info', {}).get('version'),
-            'versions': list(data.get('releases', {}).keys()),
-            'summary': data.get('info', {}).get('summary', ''),
-            'home_page': data.get('info', {}).get('home_page', ''),
-            'author': data.get('info', {}).get('author', ''),
-        } if data else None,
-    },
-    'test_pypi': {
-        'url_template': 'https://test.pypi.org/pypi/{package}/json',
-        'parse': lambda data: {
-            'latest_version': data.get('info', {}).get('version'),
-            'versions': list(data.get('releases', {}).keys()),
-        } if data else None,
-    },
-    'npm': {
-        'url_template': 'https://registry.npmjs.org/{package}',
-        'parse': lambda data: {
-            'latest_version': data.get('dist-tags', {}).get('latest'),
-            'versions': list(data.get('versions', {}).keys()),
-            'description': data.get('description', ''),
-        } if data else None,
-    },
-    'crates_io': {
-        'url_template': 'https://crates.io/api/v1/crates/{package}',
-        'headers': {'User-Agent': 'apache-ci-scan/1.0'},
-        'parse': lambda data: {
-            'latest_version': data.get('crate', {}).get('newest_version'),
-            'versions': [v['num'] for v in data.get('versions', [])],
-            'downloads': data.get('crate', {}).get('downloads'),
-            'description': data.get('crate', {}).get('description', ''),
-        } if data and 'crate' in data else None,
-    },
-    'rubygems': {
-        'url_template': 'https://rubygems.org/api/v1/versions/{package}.json',
-        'parse': lambda data: {
-            'latest_version': data[0].get('number') if data and isinstance(data, list) else None,
-            'versions': [v['number'] for v in data] if isinstance(data, list) else [],
-        } if data else None,
-    },
-    'nuget': {
-        'url_template': 'https://api.nuget.org/v3/registration5-gz-semver2/{package_lower}/index.json',
-        'parse': lambda data: {
-            'latest_version': data.get('items', [{}])[-1].get('upper') if data.get('items') else None,
-            'page_count': len(data.get('items', [])),
-        } if data else None,
-    },
-    'docker_hub': {
-        'url_template': 'https://hub.docker.com/v2/repositories/{namespace}/{repo}/tags?page_size=10',
-        'parse': lambda data: {
-            'latest_tag': data['results'][0]['name'] if data.get('results') else None,
-            'tag_count': data.get('count', 0),
-            'tags': [r['name'] for r in data.get('results', [])[:10]],
-            'last_updated': data['results'][0].get('last_updated') if data.get('results') else None,
-        } if data else None,
-    },
-}
-
-# ── Common Docker Hub image name patterns for ASF projects ──
-DOCKER_NAME_PATTERNS = [
-    '{repo}',                    # apache/spark
-    'apache/{repo}',             # apache/spark on Docker Hub
-    'apache-{repo}',             # apache-airflow
-]
-
 
 async def run(input_dict, tools):
     mcpc = {url: RemoteMCPClient(remote_url=url) for url in tools.keys()}
     http_client = httpx.AsyncClient(timeout=20)
     try:
+        # ── Constants (must be inside run() for gofannon) ──
+
+        MANIFEST_FILES = {
+            'pypi':          [('pyproject.toml', r'(?:^name\s*=\s*["\']([^"\']+)|^\[project\].*?^name\s*=\s*["\']([^"\']+))'),
+                              ('setup.cfg',     r'^name\s*=\s*(.+)'),
+                              ('setup.py',      r"name\s*=\s*['\"]([^'\"]+)")],
+            'npm':           [('package.json',  r'"name"\s*:\s*"([^"]+)"')],
+            'crates_io':     [('Cargo.toml',    r'(?:^\[package\].*?^name\s*=\s*"([^"]+))')],
+            'rubygems':      [('*.gemspec',     r"spec\.name\s*=\s*['\"]([^'\"]+)")],
+            'nuget':         [('*.csproj',      r'<PackageId>([^<]+)')],
+        }
+
+        REGISTRY_APIS = {
+            'pypi': {
+                'url_template': 'https://pypi.org/pypi/{package}/json',
+                'parse': lambda data: {
+                    'latest_version': data.get('info', {}).get('version'),
+                    'versions': list(data.get('releases', {}).keys()),
+                    'summary': data.get('info', {}).get('summary', ''),
+                    'home_page': data.get('info', {}).get('home_page', ''),
+                    'author': data.get('info', {}).get('author', ''),
+                } if data else None,
+            },
+            'test_pypi': {
+                'url_template': 'https://test.pypi.org/pypi/{package}/json',
+                'parse': lambda data: {
+                    'latest_version': data.get('info', {}).get('version'),
+                    'versions': list(data.get('releases', {}).keys()),
+                } if data else None,
+            },
+            'npm': {
+                'url_template': 'https://registry.npmjs.org/{package}',
+                'parse': lambda data: {
+                    'latest_version': data.get('dist-tags', {}).get('latest'),
+                    'versions': list(data.get('versions', {}).keys()),
+                    'description': data.get('description', ''),
+                } if data else None,
+            },
+            'crates_io': {
+                'url_template': 'https://crates.io/api/v1/crates/{package}',
+                'headers': {'User-Agent': 'apache-ci-scan/1.0'},
+                'parse': lambda data: {
+                    'latest_version': data.get('crate', {}).get('newest_version'),
+                    'versions': [v['num'] for v in data.get('versions', [])],
+                    'downloads': data.get('crate', {}).get('downloads'),
+                    'description': data.get('crate', {}).get('description', ''),
+                } if data and 'crate' in data else None,
+            },
+            'rubygems': {
+                'url_template': 'https://rubygems.org/api/v1/versions/{package}.json',
+                'parse': lambda data: {
+                    'latest_version': data[0].get('number') if data and isinstance(data, list) else None,
+                    'versions': [v['number'] for v in data] if isinstance(data, list) else [],
+                } if data else None,
+            },
+            'nuget': {
+                'url_template': 'https://api.nuget.org/v3/registration5-gz-semver2/{package_lower}/index.json',
+                'parse': lambda data: {
+                    'latest_version': data.get('items', [{}])[-1].get('upper') if data.get('items') else None,
+                    'page_count': len(data.get('items', [])),
+                } if data else None,
+            },
+            'docker_hub': {
+                'url_template': 'https://hub.docker.com/v2/repositories/{namespace}/{repo}/tags?page_size=10',
+                'parse': lambda data: {
+                    'latest_tag': data['results'][0]['name'] if data.get('results') else None,
+                    'tag_count': data.get('count', 0),
+                    'tags': [r['name'] for r in data.get('results', [])[:10]],
+                    'last_updated': data['results'][0].get('last_updated') if data.get('results') else None,
+                } if data else None,
+            },
+        }
         github_owner = input_dict.get("github_owner", "apache")
         channels_filter = [c.strip() for c in input_dict.get("channels", "").split(",") if c.strip()]
         repos_filter = [r.strip() for r in input_dict.get("repos", "").split(",") if r.strip()]

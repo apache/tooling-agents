@@ -24,75 +24,75 @@ import json
 from collections import defaultdict
 from datetime import datetime, timezone
 
-# ── Channel definitions (module-level constants survive gofannon reload) ──
-
-CHANNEL_DETECT = {
-    'pypi':             ('PyPI',                ['pypa/gh-action-pypi-publish'],
-                         ['twine upload','python -m twine'], ['pypi.org','upload.pypi.org']),
-    'test_pypi':        ('TestPyPI',            [], [], ['test.pypi.org']),
-    'npm':              ('npm',                 [], ['npm publish'], ['registry.npmjs.org']),
-    'maven_central':    ('Maven Central',       [],
-                         ['mvn deploy','mvn -B deploy','./gradlew publish'],
-                         ['repo1.maven.org','oss.sonatype.org/service/local/staging',
-                          'repository.apache.org/service/local/staging']),
-    'maven_snapshots':  ('Maven Snapshots',     [], [],
-                         ['oss.sonatype.org/content/repositories/snapshots',
-                          'repository.apache.org/content/repositories/snapshots']),
-    'docker_hub':       ('Docker Hub',          ['docker/build-push-action','docker/login-action'],
-                         ['docker push'], ['docker.io/']),
-    'ghcr':             ('ghcr.io',             [], [], ['ghcr.io/']),
-    'crates_io':        ('crates.io',           ['rust-lang/crates-io-auth-action'],
-                         ['cargo publish'], ['crates.io']),
-    'nuget':            ('NuGet',               ['NuGet/login'],
-                         ['dotnet nuget push'], ['api.nuget.org']),
-    'github_releases':  ('GitHub Releases',
-                         ['softprops/action-gh-release','actions/create-release',
-                          'goreleaser/goreleaser-action','marvinpinto/action-automatic-releases'],
-                         [], []),
-    'apache_dist_release': ('Apache dist (release)', [], [],
-                            ['dist.apache.org/repos/dist/release']),
-    'apache_dist_dev':  ('Apache dist (dev)',    [], [],
-                         ['dist.apache.org/repos/dist/dev']),
-    'nightlies':        ('Apache Nightlies',    [], [], ['nightlies.apache.org']),
-    'helm':             ('Helm',                ['helm/chart-releaser-action'],
-                         ['helm push','helm package'], []),
-    'rubygems':         ('RubyGems',            ['rubygems/release-gem'],
-                         ['gem push'], ['rubygems.org']),
-    'conda':            ('Conda',               [], ['conda upload','conda_upload'],
-                         ['anaconda.org']),
-    'vscode_marketplace': ('VS Code Marketplace', ['HaaLeo/publish-vscode-extension'],
-                           ['vsce publish'], []),
-    'github_pages':     ('GitHub Pages',
-                         ['actions/deploy-pages','peaceiris/actions-gh-pages',
-                          'JamesIves/github-pages-deploy-action'], [], []),
-    'github_packages':  ('GitHub Packages',     [], [], ['.pkg.github.com']),
-    'atr':              ('Apache Trusted Releases',
-                         ['apache/tooling-actions/upload-to-atr',
-                          'apache/tooling-actions/release-on-atr'], [], []),
-    'jfrog':            ('JFrog Artifactory',   [], [], ['jfrog.io/artifactory']),
-    'puppet_forge':     ('Puppet Forge',        ['voxpupuli/gha-puppet'],
-                         ['puppet module build'], ['forge.puppet.com']),
-}
-
-PRODUCTION_CHANNELS = {
-    'pypi','npm','maven_central','docker_hub','crates_io','nuget',
-    'github_releases','apache_dist_release','helm','rubygems',
-    'vscode_marketplace','puppet_forge',
-}
-
-STAGING_CHANNELS = {
-    'test_pypi','maven_snapshots','apache_dist_dev','nightlies',
-    'ghcr','github_packages','github_pages',
-}
-
-DOCS_CHANNELS = {'github_pages'}
-
 
 async def run(input_dict, tools):
     mcpc = {url: RemoteMCPClient(remote_url=url) for url in tools.keys()}
     http_client = httpx.AsyncClient()
     try:
         import asyncio
+
+        # ── Constants (must be inside run() for gofannon) ──
+
+        CHANNEL_DETECT = {
+            'pypi':             ('PyPI',                ['pypa/gh-action-pypi-publish'],
+                                 ['twine upload','python -m twine'], ['pypi.org','upload.pypi.org']),
+            'test_pypi':        ('TestPyPI',            [], [], ['test.pypi.org']),
+            'npm':              ('npm',                 [], ['npm publish'], ['registry.npmjs.org']),
+            'maven_central':    ('Maven Central',       [],
+                                 ['mvn deploy','mvn -B deploy','./gradlew publish'],
+                                 ['repo1.maven.org','oss.sonatype.org/service/local/staging',
+                                  'repository.apache.org/service/local/staging']),
+            'maven_snapshots':  ('Maven Snapshots',     [], [],
+                                 ['oss.sonatype.org/content/repositories/snapshots',
+                                  'repository.apache.org/content/repositories/snapshots']),
+            'docker_hub':       ('Docker Hub',          ['docker/build-push-action','docker/login-action'],
+                                 ['docker push'], ['docker.io/']),
+            'ghcr':             ('ghcr.io',             [], [], ['ghcr.io/']),
+            'crates_io':        ('crates.io',           ['rust-lang/crates-io-auth-action'],
+                                 ['cargo publish'], ['crates.io']),
+            'nuget':            ('NuGet',               ['NuGet/login'],
+                                 ['dotnet nuget push'], ['api.nuget.org']),
+            'github_releases':  ('GitHub Releases',
+                                 ['softprops/action-gh-release','actions/create-release',
+                                  'goreleaser/goreleaser-action','marvinpinto/action-automatic-releases'],
+                                 [], []),
+            'apache_dist_release': ('Apache dist (release)', [], [],
+                                    ['dist.apache.org/repos/dist/release']),
+            'apache_dist_dev':  ('Apache dist (dev)',    [], [],
+                                 ['dist.apache.org/repos/dist/dev']),
+            'nightlies':        ('Apache Nightlies',    [], [], ['nightlies.apache.org']),
+            'helm':             ('Helm',                ['helm/chart-releaser-action'],
+                                 ['helm push','helm package'], []),
+            'rubygems':         ('RubyGems',            ['rubygems/release-gem'],
+                                 ['gem push'], ['rubygems.org']),
+            'conda':            ('Conda',               [], ['conda upload','conda_upload'],
+                                 ['anaconda.org']),
+            'vscode_marketplace': ('VS Code Marketplace', ['HaaLeo/publish-vscode-extension'],
+                                   ['vsce publish'], []),
+            'github_pages':     ('GitHub Pages',
+                                 ['actions/deploy-pages','peaceiris/actions-gh-pages',
+                                  'JamesIves/github-pages-deploy-action'], [], []),
+            'github_packages':  ('GitHub Packages',     [], [], ['.pkg.github.com']),
+            'atr':              ('Apache Trusted Releases',
+                                 ['apache/tooling-actions/upload-to-atr',
+                                  'apache/tooling-actions/release-on-atr'], [], []),
+            'jfrog':            ('JFrog Artifactory',   [], [], ['jfrog.io/artifactory']),
+            'puppet_forge':     ('Puppet Forge',        ['voxpupuli/gha-puppet'],
+                                 ['puppet module build'], ['forge.puppet.com']),
+        }
+
+        PRODUCTION_CHANNELS = {
+            'pypi','npm','maven_central','docker_hub','crates_io','nuget',
+            'github_releases','apache_dist_release','helm','rubygems',
+            'vscode_marketplace','puppet_forge',
+        }
+
+        STAGING_CHANNELS = {
+            'test_pypi','maven_snapshots','apache_dist_dev','nightlies',
+            'ghcr','github_packages','github_pages',
+        }
+
+        DOCS_CHANNELS = {'github_pages'}
 
         github_owner = input_dict.get("github_owner", "apache")
         read_pat = input_dict.get("read_pat", "")
