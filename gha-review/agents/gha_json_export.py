@@ -1,3 +1,13 @@
+"""
+gha_json_export
+
+Machine-readable structured export of all publishing and security data.
+Schema documented in README.md.
+
+Inputs: github_owner, redacted_severity (optional)
+Reads:  ci-report:{github_owner}, ci-security:{github_owner}, ci-classification:{github_owner}
+Writes: ci-combined:{github_owner}
+"""
 from agent_factory.remote_mcp_client import RemoteMCPClient
 from services.llm_service import call_llm
 import httpx

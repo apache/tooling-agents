@@ -1,3 +1,13 @@
+"""
+gha_publishing
+
+LLM-classifies each workflow as release, snapshot, CI, or documentation.
+Identifies publishing ecosystems, auth methods, and trusted publishing opportunities.
+
+Inputs: github_owner, redacted_severity (optional)
+Reads:  ci-workflows:{github_owner}
+Writes: ci-classification:{github_owner}, ci-report:{github_owner}
+"""
 from agent_factory.remote_mcp_client import RemoteMCPClient
 from services.llm_service import call_llm
 import httpx

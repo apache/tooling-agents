@@ -1,3 +1,13 @@
+"""
+gha_review
+
+Combined risk assessment merging publishing classifications with security findings.
+Generates per-repo breakdown with attack scenarios.
+
+Inputs: github_owner, redacted_severity (optional)
+Reads:  ci-report:{github_owner}, ci-security:{github_owner}
+Writes: ci-combined:{github_owner}
+"""
 from agent_factory.remote_mcp_client import RemoteMCPClient
 from services.llm_service import call_llm
 import httpx

@@ -1,3 +1,13 @@
+"""
+gha_prefetch
+
+Caches workflow YAML, composite actions, and repo metadata from the GitHub API.
+All downstream agents read from this cache — no other agent hits the GitHub API
+(except gha_publishing_detail for run history).
+
+Inputs: github_owner, read_pat, repos (optional), rescan (optional)
+Writes: ci-workflows:{github_owner} namespace in CouchDB
+"""
 from agent_factory.remote_mcp_client import RemoteMCPClient
 from services.llm_service import call_llm
 import httpx

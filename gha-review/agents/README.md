@@ -1,23 +1,25 @@
-# gofannon CI Registry Analyzer Agents
+# GHA Review Agents
 
-[Gofannon](https://github.com/The-AI-Alliance/gofannon) agents that scan a GitHub organization's Actions workflows to identify which repos publish packages to registries and what security risks exist in those pipelines.
+[Gofannon](https://github.com/The-AI-Alliance/gofannon) agents that scan a GitHub organization's Actions workflows to identify which repos publish packages to registries, verify what's actually published, and flag security risks in those pipelines.
 
 Reports are documented separately — see the README bundled with each report run.
 
-## Project structure
+## Project Structure
 
 ```
-├── orchestrator.py            Runs full pipeline, splits private/public output
-├── pre-fetch.py               Caches workflow YAML + composite actions from GitHub
-├── publishing.py              LLM-classifies workflows (release, snapshot, CI, docs)
-├── security.py                Pattern-matching security checks on cached YAML
-├── review.py                  Combined risk assessment report (markdown)
-├── brief.py                   One-page executive action plan (markdown)
-├── json-export.py             Machine-readable structured export (JSON)
+├── gha_orchestrator.py        Runs full pipeline, pushes reports to GitHub
+├── gha_prefetch.py            Caches workflow YAML + composite actions from GitHub
+├── gha_publishing.py          LLM-classifies workflows (release, snapshot, CI, docs)
+├── gha_security.py            Pattern-matching security checks on cached YAML
+├── gha_publishing_detail.py   Enriched YAML parsing + GitHub API run history
+├── gha_artifact_verify.py     Registry API queries + ATR catalog generation
+├── gha_review.py              Combined risk assessment report (markdown)
+├── gha_brief.py               One-page executive action plan (markdown)
+├── gha_json_export.py         Machine-readable structured export (JSON)
 ├── README.md                  ← you are here
 └── tests/
     ├── README.md              Test suite docs
-    ├── security_checks.py     Extracted check functions (keep in sync with security.py)
+    ├── security_checks.py     Extracted check functions (keep in sync with gha_security.py)
     ├── test_security_checks.py
     └── fixtures/
         ├── synthetic/         Minimal YAML snippets for each check pattern
@@ -26,179 +28,202 @@ Reports are documented separately — see the README bundled with each report ru
 
 ## Architecture
 
-Seven agents share data via CouchDB namespaces:
+Nine agents share data via CouchDB namespaces. All agents use flat string key-value `input_dict` pairs (no `inputText` wrapping). Only `gha_publishing` uses the LLM.
 
 ```
-Orchestrator    Runs all of the agents below, pushes private + public reports to GitHub
-       |
-Pre-fetch ──→   ci-workflows:{github_owner}   (YAML cache + composites + extras)
+gha_orchestrator ── runs all agents below, pushes reports to GitHub
        │
-Publishing ──→  ci-classification:{github_owner}   (LLM classifications)
-       │        ci-report:{github_owner}           (report + stats)
+gha_prefetch ────▸  ci-workflows:{owner}             (YAML cache + composites + extras)
        │
-Security ──→    ci-security:{github_owner}         (findings + stats)
+gha_publishing ──▸  ci-classification:{owner}         (LLM classifications)
+       │             ci-report:{owner}                 (report + stats)
        │
-Review ──→      ci-combined:{github_owner}         (combined report)
+gha_security ────▸  ci-security:{owner}               (findings + stats)
        │
-Brief ──→       ci-combined:{github_owner}         (executive brief)
+gha_publishing_detail ▸  ci-publishing-detail:{owner}  (enriched data + per-channel reports)
        │
-JSON Export ──→ ci-combined:{github_owner}         (JSON export)
+gha_artifact_verify ──▸  ci-artifact-verify:{owner}   (registry verification + ATR catalog)
+       │
+gha_review ──────▸  ci-combined:{owner}               (combined report)
+       │
+gha_brief ───────▸  ci-combined:{owner}               (executive brief)
+       │
+gha_json_export ─▸  ci-combined:{owner}               (JSON export)
 ```
 
-**Run order:** Pre-fetch → Publishing → Security → then any of: Review, Brief, JSON Export
+**Dependency order:** gha_prefetch → gha_publishing + gha_security → gha_publishing_detail → gha_artifact_verify → gha_review + gha_brief + gha_json_export
 
-Only Pre-fetch hits the GitHub API. All other agents are pure CouchDB readers.
+Only gha_prefetch and gha_publishing_detail call the GitHub API. Only gha_artifact_verify calls external registry APIs. Only gha_publishing uses the LLM.
 
-## How to run
+## How to Run
 
-All agents run inside gofannon. Input fields are all type `"string"`.
+All agents run inside gofannon. Input fields are all type `"string"`. Agent names in gofannon match filenames without `.py`: `gha_prefetch`, `gha_publishing`, etc.
 
 ### Orchestrator (recommended)
 
-The orchestrator runs the full pipeline and pushes reports to private and public GitHub repos:
+The orchestrator runs the full pipeline and pushes reports to a GitHub repo:
 
 ```
-Orchestrator    github_owner: apache
-                read_pat: ghp_...
-                write_private_repo: apache/tooling-agents-private
-                write_private_directory: repos/apache/github-review
-                write_private_pat: ghp_...
-                write_public_repo: apache/tooling-agents
-                write_public_directory: repos/apache/github-review
-                write_public_pat: ghp_...
-                redacted_severity: CRITICAL
-                skip_prefetch: false
+gha_orchestrator    github_owner: apache
+                    read_pat: ghp_...
+                    write_repo: apache/tooling-agents-private
+                    write_directory: gha-review
+                    write_pat: ghp_...
+                    skip_prefetch: false
 ```
 
-This runs three phases automatically:
+This runs two phases:
 
 ```
-Phase 1: Prefetch (hits GitHub API, caches all workflow YAML)
+Phase 1: Prefetch (caches workflow YAML from GitHub API)
          Skipped when skip_prefetch is true.
-Phase 2: Private reports (5 agents, no redaction, pushed immediately)
-Phase 3: Public reports (same 5 agents with redacted_severity, pushed immediately)
+
+Phase 2: Analysis + Reports (8 agents in dependency order)
+         ▸ gha_publishing             → gha_publishing.md
+         ▸ gha_security               → gha_security.md
+         ▸ gha_publishing_detail      → gha_publishing_detail.md
+                                        gha_publishing_risks.md
+                                        gha_channel_*.md (per channel)
+         ▸ gha_artifact_verify        → gha_artifact_verification.md
+                                        gha_atr_catalog.json
+         ▸ gha_review                 → gha_review.md
+         ▸ gha_brief                  → gha_brief.md
+         ▸ gha_json_export            → gha_json_export.json
 ```
 
-Each report file is pushed to its target GitHub repo immediately after generation — you can watch progress in the repo as the orchestrator runs.
+Each file is pushed to the target repo immediately after generation.
 
 ### Manual run
 
 ```
-1. Pre-fetch     github_owner: apache    read_pat: ghp_...
-2. Publishing    github_owner: apache
-3. Security      github_owner: apache
-4. Review        github_owner: apache
-5. Brief         github_owner: apache
-6. JSON Export   github_owner: apache
+1. gha_prefetch              github_owner: apache    read_pat: ghp_...
+2. gha_publishing            github_owner: apache
+3. gha_security              github_owner: apache
+4. gha_publishing_detail     github_owner: apache    read_pat: ghp_...
+5. gha_artifact_verify       github_owner: apache
+6. gha_review                github_owner: apache
+7. gha_brief                 github_owner: apache
+8. gha_json_export           github_owner: apache
 ```
 
-Pre-fetch takes ~30-60 min for ~2,500 repos. Publishing takes hours (LLM calls). Security takes ~30-60 min. Steps 4-6 take seconds each.
+Prefetch takes ~30–60 min for ~2,500 repos. Publishing takes hours (LLM calls). Security takes ~30–60 min. Publishing detail takes ~10–15 min (GitHub API for run history). Artifact verify takes ~5 min (registry API queries). Steps 6–8 take seconds each.
 
-### Manual private + public split
+## Agent Reference
 
+### Input Schemas
+
+| Agent | Required Inputs | Optional Inputs |
+|-------|----------------|-----------------|
+| gha_prefetch | `github_owner`, `read_pat` | `rescan` |
+| gha_publishing | `github_owner` | `redacted_severity` |
+| gha_security | `github_owner` | `redacted_severity` |
+| gha_publishing_detail | `github_owner`, `read_pat` | `repos`, `channels` |
+| gha_artifact_verify | `github_owner` | `repos`, `channels` |
+| gha_review | `github_owner` | `redacted_severity` |
+| gha_brief | `github_owner` | `redacted_severity` |
+| gha_json_export | `github_owner` | `redacted_severity` |
+| gha_orchestrator | `github_owner`, `read_pat`, `write_repo`, `write_directory`, `write_pat` | `skip_prefetch` |
+
+### Output Conventions
+
+Most agents return `outputText` as a single markdown string. Two agents return multi-file JSON:
+
+**gha_publishing_detail** and **gha_artifact_verify** return:
+
+```json
+{"files": {"publishing-detail.md": "...", "channel-pypi.md": "...", ...}}
 ```
-# Phase 1: Prefetch (once)
-1. Pre-fetch     github_owner: apache    read_pat: ghp_...
 
-# Phase 2: Private reports (full)
-2. Publishing    github_owner: apache
-3. Security      github_owner: apache
-4. Review        github_owner: apache
-5. Brief         github_owner: apache
-6. JSON Export   github_owner: apache
+The orchestrator's `push_multi_file_output()` parses this, adds a `gha_` prefix with underscore normalization to each filename, and pushes each file individually.
 
-# Phase 3: Public reports (redacted)
-7. Publishing    github_owner: apache    redacted_severity: CRITICAL
-8. Security      github_owner: apache    redacted_severity: CRITICAL
-9. Review        github_owner: apache    redacted_severity: CRITICAL
-10. Brief        github_owner: apache    redacted_severity: CRITICAL
-11. JSON Export  github_owner: apache    redacted_severity: CRITICAL
+### LLM Usage
+
+| Agent | LLM | Provider | Model | Params |
+|-------|-----|----------|-------|--------|
+| gha_publishing | Yes | `bedrock` | `us.anthropic.claude-sonnet-4-5-20250929-v1:0` | `temperature=0, reasoning_effort=disable, max_tokens=2048` |
+| All others | No | — | — | — |
+
+### CouchDB Namespaces
+
+| Namespace | Writer | Readers |
+|-----------|--------|---------|
+| `ci-workflows:{owner}` | gha_prefetch | gha_publishing, gha_security, gha_publishing_detail, gha_artifact_verify |
+| `ci-classification:{owner}` | gha_publishing | gha_publishing_detail, gha_json_export |
+| `ci-report:{owner}` | gha_publishing | gha_review, gha_brief, gha_json_export |
+| `ci-security:{owner}` | gha_security | gha_review, gha_brief, gha_json_export |
+| `ci-publishing-detail:{owner}` | gha_publishing_detail | gha_artifact_verify |
+| `ci-artifact-verify:{owner}` | gha_artifact_verify | — |
+| `ci-combined:{owner}` | gha_review, gha_brief, gha_json_export | — |
+
+### Framework Globals
+
+Available to all agents without import:
+
+| Global | Purpose |
+|--------|---------|
+| `data_store` | CouchDB access: `data_store.use_namespace(name)` → `.get()`, `.set()`, `.list_keys()` |
+| `gofannon_client` | Call other agents: `gofannon_client.call(agent_name=, input_dict=)` |
+| `count_tokens(text, provider, model)` | Token counting for context management |
+| `get_context_window(provider, model)` | Get model's context window size |
+
+### Push Utility
+
+The orchestrator pushes files via `add_markdown_file_to_github_directory`, which uses a **different calling convention** from the analysis agents:
+
+```python
+gofannon_client.call(
+    agent_name="add_markdown_file_to_github_directory",
+    input_dict={
+        "inputText": json.dumps({"repo": "...", "token": "...", "filePath": "..."}),
+        "commitMessage": "...",
+        "fileContents": "...",
+    }
+)
 ```
 
-### Input schemas
-
-| Agent | Inputs | Purpose |
-|-------|--------|---------|
-| Pre-fetch | `github_owner`, `read_pat`, `rescan` | Cache workflow YAML from GitHub |
-| Publishing | `github_owner`, `redacted_severity` | LLM-classify workflows |
-| Security | `github_owner`, `redacted_severity` | Pattern-match security checks |
-| Review | `github_owner`, `redacted_severity` | Combined risk assessment |
-| Brief | `github_owner`, `redacted_severity` | Executive action plan |
-| JSON Export | `github_owner`, `redacted_severity` | Machine-readable export |
-| Orchestrator | `github_owner`, `read_pat`, `write_private_repo`, `write_private_directory`, `write_private_pat`, `write_public_repo`, `write_public_directory`, `write_public_pat`, `redacted_severity`, `skip_prefetch` | Full pipeline |
-
-All orchestrator inputs except `skip_prefetch` are required. `redacted_severity` defaults to `CRITICAL` on the orchestrator; defaults to empty (no filtering) on individual agents. `skip_prefetch` defaults to `false`.
-
-### redacted_severity
-
-`redacted_severity` is a **threshold** — it removes findings at that severity **and above**. Examples:
-
-- `redacted_severity: CRITICAL` → removes CRITICAL only (public gets HIGH + MEDIUM + LOW + INFO)
-- `redacted_severity: HIGH` → removes HIGH and CRITICAL (public gets MEDIUM + LOW + INFO)
-- `redacted_severity: MEDIUM` → removes MEDIUM, HIGH, and CRITICAL
-- Empty (default) → all findings included
-
-Every agent uses the same `is_severity_redacted(sev)` function that compares against `SEV_ORDER = ["INFO", "LOW", "MEDIUM", "HIGH", "CRITICAL"]`. Agents filter before counting and rendering — all numbers, sections, and cross-references are consistent by construction.
-
-What gets filtered per agent:
-
-- **Publishing**: filters security_notes at or above threshold, strips vulnerability sentences from LLM summaries, skips affected Security sections and TOC entries
-- **Security**: reads cached findings, filters by threshold, re-renders report without overwriting CouchDB
-- **Review**: omits findings at or above threshold from all sections. Recomputes org-level stats from filtered per-repo data (does not trust `latest_stats` from CouchDB, which contains unredacted counts)
-- **Brief**: omits findings at or above threshold. Recomputes `total_findings` and `check_counts` from filtered data
-- **JSON Export**: filters findings and security_notes by threshold. Recomputes top-level `security` summary from filtered per-repo data
-
-When `redacted_severity` is set, all agents skip CouchDB writes to preserve the full Phase 2 data.
-
-### rescan (prefetch only)
+## rescan (prefetch only)
 
 When `rescan: true`, prefetch ignores all cache keys and re-fetches everything from GitHub. When `false` (default), it skips repos that already have `__prefetch__`, `__composites__`, and `__extras__` cache keys — a fully cached repo costs zero API calls.
 
 The orchestrator does not pass `rescan` to prefetch, so it always uses cache-skip mode. Run prefetch manually with `rescan: true` when you need a full refresh.
 
+## redacted_severity
+
+`redacted_severity` is accepted by gha_publishing, gha_security, gha_review, gha_brief, and gha_json_export. The orchestrator does not pass it — all reports are full/unredacted. It exists for manual runs where you want filtered output.
+
+It works as a **threshold** — it removes findings at that severity **and above**:
+
+- `redacted_severity: CRITICAL` → removes CRITICAL only
+- `redacted_severity: HIGH` → removes HIGH and CRITICAL
+- Empty (default) → all findings included
+
+Every agent uses the same `is_severity_redacted(sev)` function that compares against `SEV_ORDER = ["INFO", "LOW", "MEDIUM", "HIGH", "CRITICAL"]`. When `redacted_severity` is set, agents skip CouchDB writes to preserve full data.
+
 ## Caching
 
 All data persists in CouchDB across runs.
 
-- **Pre-fetch** writes `__prefetch__:{repo}`, `__composites__:{repo}`, and `__extras__:{repo}` meta keys plus individual YAML content. Skips repos already cached unless `rescan: true`.
-- **Publishing** writes `__meta__:{repo}` plus per-workflow classification keys. Skips workflows already classified (100% cache hit rate on Phase 3 redacted runs).
-- **Security** writes `findings:{repo}` per repo. When `redacted_severity` is set, reads cached findings and filters — does not rescan or overwrite.
+- **gha_prefetch** writes `__prefetch__:{repo}`, `__composites__:{repo}`, and `__extras__:{repo}` meta keys plus individual YAML content. Skips repos already cached unless `rescan: true`.
+- **gha_publishing** writes `__meta__:{repo}` plus per-workflow classification keys. Skips workflows already classified.
+- **gha_security** writes `findings:{repo}` per repo.
 
-The `__extras__:{repo}` key stores two booleans — `has_codeowners` and `has_dependency_updates` — extracted from the repo's file tree during prefetch (zero extra API calls, reuses the tree response already fetched for composite action discovery). The Security agent reads these to generate `missing_codeowners` and `missing_dependency_updates` findings without calling the GitHub API.
-
-When `redacted_severity` is set, no agent overwrites CouchDB data. Phase 3 reads the full data written by Phase 2 and filters in memory.
+The `__extras__:{repo}` key stores two booleans — `has_codeowners` and `has_dependency_updates` — extracted from the repo's file tree during prefetch (zero extra API calls, reuses the tree response). The security agent reads these for `missing_codeowners` and `missing_dependency_updates` findings.
 
 ### Useful CouchDB queries
 
 ```bash
 # Count docs by namespace
-for ns in ci-workflows ci-classification ci-report ci-security ci-combined; do
+for ns in ci-workflows ci-classification ci-report ci-security \
+          ci-publishing-detail ci-artifact-verify ci-combined; do
   count=$(curl -s "http://admin:password@localhost:5984/agent_data_store/_find" \
     -H "Content-Type: application/json" \
     -d "{\"selector\":{\"namespace\":\"${ns}:apache\"},\"fields\":[\"key\"],\"limit\":99999}" \
     | python3 -c "import sys,json; print(len(json.load(sys.stdin).get('docs',[])))")
   echo "$ns: $count docs"
 done
-
-# Find workflows that failed LLM classification (gaps)
-curl -s "http://admin:password@localhost:5984/agent_data_store/_find" \
-  -H "Content-Type: application/json" \
-  -d '{"selector":{"namespace":"ci-classification:apache"},"fields":["key","value"],"limit":99999}' \
-| python3 -c "
-import sys, json
-docs = json.load(sys.stdin)['docs']
-metas = {}; classifications = set()
-for d in docs:
-    k = d['key']
-    if k.startswith('__meta__:'): metas[k.replace('__meta__:','')] = d.get('value',{}).get('workflows',[])
-    else: classifications.add(k)
-gaps = [f'{repo}/{wf}' for repo,wfs in sorted(metas.items()) for wf in wfs if f'{repo}:{wf}' not in classifications]
-print(f'Missing: {len(gaps)}')
-for g in gaps: print(f'  {g}')
-"
 ```
 
-## ASF policy integration
+## ASF Policy Integration
 
 The security checks incorporate guidance from three ASF sources:
 
@@ -212,12 +237,12 @@ Two material policy integrations:
 
 **Mandatory dependency management.** ASF policy says "All repositories using GitHub Actions **must** have automatic dependency management." `missing_dependency_updates` is therefore LOW severity (policy violation), not just informational.
 
-## Security checks reference
+## Security Checks Reference
 
-The Security agent runs 12 checks. When adding a new check, also update `ATTACK_SCENARIOS` in `review.py` and `check_definitions` in `json-export.py`.
+The security agent runs 12 checks. When adding a new check, also update `ATTACK_SCENARIOS` in `gha_review.py` and `check_definitions` in `gha_json_export.py`.
 
 | Check | Severity | What It Detects |
-|-------|----------|-----------------|
+|-------|----------|-----------------| 
 | `prt_checkout` | CRITICAL–INFO | `pull_request_target` + checkout of PR head. Severity uses a 2×2 matrix (see below). |
 | `self_hosted_runner` | HIGH–INFO | Self-hosted runners exposed to PR triggers. Severity uses same 2×2 matrix as prt_checkout. |
 | `unpinned_actions` | MEDIUM | Third-party actions (outside `actions/*`, `github/*`, `apache/*`) referenced by mutable tags instead of SHA pins |
@@ -266,7 +291,7 @@ When `pull_request_target` checks out PR head code, severity depends on two fact
 
 ### self_hosted_runner severity matrix
 
-Same 2×2 as prt_checkout but with HIGH ceiling instead of CRITICAL (runner compromise is serious but doesn't directly grant access to base repo secrets like prt_checkout does):
+Same 2×2 as prt_checkout but with HIGH ceiling instead of CRITICAL:
 
 |                        | Broad permissions | Limited permissions |
 |------------------------|-------------------|---------------------|
@@ -274,8 +299,6 @@ Same 2×2 as prt_checkout but with HIGH ceiling instead of CRITICAL (runner comp
 | **Maintainer-gated** (labeled, assigned) | **MEDIUM** | **LOW** |
 
 No PR trigger → INFO (runners used for scheduled/manual workflows only).
-
-Uses the same `extract_permissions()` and generalized `extract_trigger_event_types()` functions as prt_checkout.
 
 ### run_block_injection trigger awareness
 
@@ -292,21 +315,21 @@ Two org sets serve different purposes:
 - **`ASF_EXEMPT_ORGS`** = `{"actions", "github", "apache"}` — per ASF policy, actions in these namespaces need not be SHA-pinned. Used by `unpinned_actions` and `composite_action_unpinned`.
 - **`TRUSTED_ORGS`** — broader set including docker, gradle, pypa, codecov, etc. Used only for the informational `third_party_actions` check (which flags actions outside this set for awareness, not as a policy violation).
 
-## Adding a new check
+## Adding a New Check
 
-When you add a check to `security.py`:
+When you add a check to `gha_security.py`:
 
 1. **Add the check function** — return `(severity, detail, line_num)` tuples. Use `enumerate(content.split("\n"), 1)` to track 1-indexed line numbers.
 2. **Call it in the main scan loop** — capture the `line` field: `"line": result[2] if len(result) > 2 else None`
-3. **Update `review.py`**: add entry to `ATTACK_SCENARIOS` dict with label, severity, description, attack, and example
-4. **Update `json-export.py`**: add entry to `check_definitions` dict
+3. **Update `gha_review.py`**: add entry to `ATTACK_SCENARIOS` dict with label, severity, description, attack, and example
+4. **Update `gha_json_export.py`**: add entry to `check_definitions` dict
 5. **Update `tests/security_checks.py`**: add the function (note: test module still uses 2-tuples for backward compatibility)
 6. **Update `tests/test_security_checks.py`**: add handler in `run_check()`, create fixtures, add test cases
 7. **Run tests**: `python3 tests/test_security_checks.py`
 
-## Test suite
+## Test Suite
 
-Run before deploying any Security agent changes:
+Run before deploying any security agent changes:
 
 ```bash
 python3 tests/test_security_checks.py
@@ -318,9 +341,10 @@ See `tests/README.md` for details on adding tests and fixtures.
 
 ## Limitations
 
-- **LLM classification accuracy**: Publishing uses Sonnet to classify workflows. The `confidence` field in the JSON indicates certainty.
-- **Static analysis only**: Security pattern-matches on YAML text. Does not resolve reusable workflow inputs, evaluate conditional expressions, or trace data flow across jobs.
+- **LLM classification accuracy**: gha_publishing uses Sonnet to classify workflows. The `confidence` field in the JSON indicates certainty.
+- **Static analysis only**: gha_security pattern-matches on YAML text. Does not resolve reusable workflow inputs, evaluate conditional expressions, or trace data flow across jobs.
 - **Composite action nesting**: Only top-level `.github/actions/*/action.yml` are checked — composites calling other composites are not recursively analyzed.
 - **No runtime verification**: Does not verify whether secrets are configured, branch protection rules exist, or GITHUB_TOKEN permissions are effective given org-level settings.
 - **Org-level security models**: Some projects (e.g., Apache Beam) scope publishing secrets to manual/scheduled workflows only. The scanner cannot detect these policies and may overstate risk.
 - **Conditional gates not evaluated**: Workflows with access control checks (e.g., `github.event.pull_request.user.login == 'renovate[bot]'`) are flagged based on the dangerous pattern even if the gate prevents exploitation. These appear as mitigated findings in the report.
+- **Package name discovery**: gha_artifact_verify uses naming conventions and manifest files to guess package names. Repos with non-standard names may show as "phantom workflows" — the package exists but the name doesn't match.

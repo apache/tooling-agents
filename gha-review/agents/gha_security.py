@@ -1,3 +1,13 @@
+"""
+gha_security
+
+Pattern-matches 12 security checks against cached workflow YAML.
+No LLM calls — pure regex and structural analysis.
+
+Inputs: github_owner, redacted_severity (optional)
+Reads:  ci-workflows:{github_owner}
+Writes: ci-security:{github_owner}
+"""
 from agent_factory.remote_mcp_client import RemoteMCPClient
 from services.llm_service import call_llm
 import httpx
