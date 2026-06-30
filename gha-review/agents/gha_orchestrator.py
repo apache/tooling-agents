@@ -99,7 +99,7 @@ async def run(input_dict, tools):
             try:
                 filepath = f"{write_directory}/{filename}" if write_directory else filename
                 result = await gofannon_client.call(
-                    agent_name="add_markdown_file_to_github_directory",
+                    agent_name="asvs_push_github",
                     input_dict={
                         "inputText": json.dumps({
                             "repo": write_repo,
