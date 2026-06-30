@@ -10,7 +10,7 @@ Inputs:
   write_repo        — repo to push reports to (e.g. "apache/tooling-agents-private")
   write_directory   — directory within repo (e.g. "gha-review")
   write_pat         — PAT with write access to write_repo
-  skip_prefetch     — "true" to skip Phase 1 and use cached data (default "false")
+  fresh             — "true" to clear all cached data and start from scratch (default "false")
 
 Outputs (pushed to write_repo/write_directory/):
   gha_brief.md                — executive action plan
@@ -56,7 +56,7 @@ async def run(input_dict, tools):
         write_repo = input_dict.get("write_repo", "").strip()
         write_directory = input_dict.get("write_directory", "").strip()
         write_pat = input_dict.get("write_pat", "").strip()
-        skip_prefetch = str(input_dict.get("skip_prefetch", "false")).lower().strip() in ("true", "1", "yes")
+        fresh = str(input_dict.get("fresh", "false")).lower().strip() in ("true", "1", "yes")
 
         for name, val in [("github_owner", github_owner), ("read_pat", read_pat),
                           ("write_repo", write_repo), ("write_directory", write_directory),
@@ -66,6 +66,32 @@ async def run(input_dict, tools):
 
         pushed = []   # (filename, status)
         errors = []
+
+        # ── Fresh: clear all cached data ──
+        if fresh:
+            NAMESPACES = [
+                f"ci-workflows:{github_owner}",
+                f"ci-classification:{github_owner}",
+                f"ci-report:{github_owner}",
+                f"ci-security:{github_owner}",
+                f"ci-publishing-detail:{github_owner}",
+                f"ci-artifact-verify:{github_owner}",
+                f"ci-combined:{github_owner}",
+            ]
+            print(f"\n{'='*60}", flush=True)
+            print(f"Fresh run: clearing all cached data", flush=True)
+            print(f"{'='*60}\n", flush=True)
+            total_cleared = 0
+            for ns_name in NAMESPACES:
+                try:
+                    ns = data_store.use_namespace(ns_name)
+                    cleared = ns.clear()
+                    if cleared:
+                        total_cleared += cleared
+                        print(f"  Cleared {cleared} keys from {ns_name}", flush=True)
+                except Exception as e:
+                    print(f"  Could not clear {ns_name}: {e}", flush=True)
+            print(f"  Total: {total_cleared} keys cleared\n", flush=True)
 
         # ── Helpers ──
 
@@ -130,27 +156,21 @@ async def run(input_dict, tools):
         # Phase 1: Prefetch
         # ══════════════════════════════════════════════════
 
+        print(f"\n{'='*60}", flush=True)
+        print(f"Phase 1: Prefetch — {github_owner}", flush=True)
+        print(f"{'='*60}\n", flush=True)
+
         prefetch_stats = {}
+        prefetch_output = await run_agent("gha_prefetch",
+            github_owner=github_owner,
+            read_pat=read_pat)
 
-        if skip_prefetch:
-            print(f"\n{'='*60}", flush=True)
-            print(f"Phase 1: SKIPPED (using cache)", flush=True)
-            print(f"{'='*60}\n", flush=True)
-        else:
-            print(f"\n{'='*60}", flush=True)
-            print(f"Phase 1: Prefetch — {github_owner}", flush=True)
-            print(f"{'='*60}\n", flush=True)
-
-            prefetch_output = await run_agent("gha_prefetch",
-                github_owner=github_owner,
-                read_pat=read_pat)
-
-            if prefetch_output is None:
-                return {"outputText": "Error: Prefetch failed.\n\n" + "\n".join(errors)}
-            try:
-                prefetch_stats = json.loads(prefetch_output)
-            except Exception:
-                pass
+        if prefetch_output is None:
+            return {"outputText": "Error: Prefetch failed.\n\n" + "\n".join(errors)}
+        try:
+            prefetch_stats = json.loads(prefetch_output)
+        except Exception:
+            pass
 
         # ══════════════════════════════════════════════════
         # Phase 2: Analysis + Reports
