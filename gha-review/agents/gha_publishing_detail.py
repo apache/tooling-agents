@@ -19,10 +19,6 @@ Inputs:
 from agent_factory.remote_mcp_client import RemoteMCPClient
 from services.llm_service import call_llm
 import httpx
-import re
-import json
-from collections import defaultdict
-from datetime import datetime, timezone
 
 
 async def run(input_dict, tools):
@@ -30,6 +26,10 @@ async def run(input_dict, tools):
     http_client = httpx.AsyncClient()
     try:
         import asyncio
+        import re
+        import json
+        from collections import defaultdict
+        from datetime import datetime, timezone
 
         # ── Constants (must be inside run() for gofannon) ──
 

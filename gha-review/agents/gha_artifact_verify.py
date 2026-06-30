@@ -26,16 +26,17 @@ Writes to:
 from agent_factory.remote_mcp_client import RemoteMCPClient
 from services.llm_service import call_llm
 import httpx
-import re
-import json
-from collections import defaultdict
-from datetime import datetime, timezone
 
 
 async def run(input_dict, tools):
     mcpc = {url: RemoteMCPClient(remote_url=url) for url in tools.keys()}
     http_client = httpx.AsyncClient(timeout=20)
     try:
+        import asyncio
+        import re
+        import json
+        from collections import defaultdict
+        from datetime import datetime, timezone
         # ── Constants (must be inside run() for gofannon) ──
 
         MANIFEST_FILES = {
