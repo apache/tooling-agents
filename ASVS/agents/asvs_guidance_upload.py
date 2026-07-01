@@ -139,7 +139,7 @@ async def run(input_dict, tools):
         return {
             "outputText": (
                 f"Stored {namespace} → {key} ({size} chars). "
-                f"To use during airflow's audit, pass "
+                f"To use during an audit, pass "
                 f"supplementalData: {namespace} to the orchestrator."
             )
         }
